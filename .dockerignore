@@ -1,0 +1,9 @@
+target
+dev
+out
+e2e
+docs
+luci
+web/node_modules
+web/dist
+.git

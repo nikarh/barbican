@@ -2,8 +2,9 @@ name: Publish
 
 # Builds, signs and uploads the release files when a release is published, and for the `latest` pre-release when the
 # Latest workflow calls it: static (musl) agents with .deb and Arch Linux packages for x86_64 and aarch64; the edge
-# agent for OpenWrt (x86_64, aarch64, armv7) as archives and .apk/.ipk packages with luci-app-barbican; and the ipset
-# edge agent for Asuswrt-Merlin (armv7).
+# agent for OpenWrt (x86_64, aarch64, armv7) as archives and .apk/.ipk packages with luci-app-barbican; the ipset
+# edge agent for Asuswrt-Merlin (armv7); and the UI's container image (ghcr.io/nikarh/barbican, amd64 and arm64:
+# `X.Y.Z`, `X.Y` and `latest` for releases, `main` and `sha-<commit>` for the `latest` pre-release).
 on:
   release:
     types: [published]
@@ -65,7 +66,7 @@ jobs:
           bin=target/${{ matrix.arch }}-unknown-linux-musl/release/barbican
           mkdir -p out barbican
           cp "$bin" out/barbican-${{ matrix.arch }}-linux-musl
-          cp "$bin" dist/barbican.service dist/config.toml README.md LICENSE-MIT LICENSE-APACHE barbican/
+          cp "$bin" dist/barbican.service dist/barbican.sysusers dist/barbican.tmpfiles dist/config.toml README.md LICENSE-MIT LICENSE-APACHE barbican/
           tar -czf out/barbican-${{ matrix.arch }}-linux-musl.tar.gz barbican
           scripts/package.sh ${{ matrix.arch }} "$bin" out
         env:
@@ -75,6 +76,86 @@ jobs:
           name: dist-agent-${{ matrix.arch }}
           path: out/*
           if-no-files-found: error
+
+  image:
+    name: Image
+    needs: agent
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/nikarh/barbican
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: dist-agent-*
+          merge-multiple: true
+          path: agents
+      - name: Lay out the files of each platform
+        run: |
+          set -euo pipefail
+          install -D -m 0755 agents/barbican-x86_64-linux-musl ci-rootfs/amd64/barbican
+          install -D -m 0755 agents/barbican-aarch64-linux-musl ci-rootfs/arm64/barbican
+      - name: Build the image (amd64, to check it)
+        run: |
+          docker build -f Dockerfile.ci -t barbican:ci \
+            --label "org.opencontainers.image.version=$(ci-rootfs/amd64/barbican --version | cut -d' ' -f2)" \
+            --label "org.opencontainers.image.revision=$(git rev-parse HEAD)" .
+      - name: Check it runs read-only, without capabilities, as nobody, in front of an agent
+        run: |
+          set -euo pipefail
+          # An agent on the runner that only decides (dry run), its UI on a socket of the runner's group.
+          mkdir -p ci/run ci/data
+          chmod 0755 ci/run
+          printf '[database]\npath = "%s"\n[ui]\nsocket = "%s"\n[geoip]\ncountry = "%s"\ndownload = false\n' \
+            "$PWD/ci/data/barbican.db" "$PWD/ci/run/ui.sock" "$PWD/ci/data/none.mmdb" > ci/config.toml
+          ci-rootfs/amd64/barbican --dry-run --config ci/config.toml > ci/agent.log 2>&1 &
+          for _ in $(seq 20); do [[ -S ci/run/ui.sock ]] && break; sleep 0.5; done
+          docker run -d --name barbican-ui --read-only --cap-drop=ALL --security-opt no-new-privileges \
+            --group-add "$(id -g)" -v "$PWD/ci/run:/run/barbican-ui:ro" -p 127.0.0.1:8080:8080 barbican:ci
+          ok=
+          for _ in $(seq 20); do
+            if docker exec barbican-ui /barbican healthcheck; then ok=1 && break; fi
+            sleep 0.5
+          done
+          ws() {
+            curl -s -o /dev/null -w '%{http_code}' -m 3 "$@" -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+              -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+              http://127.0.0.1:8080/api/ws || true
+          }
+          if [[ -z $ok ]] || [[ $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/) != 200 ]] \
+            || [[ $(ws) != 101 ]] || [[ $(ws -H 'Origin: https://elsewhere.example') != 403 ]]; then
+            docker logs barbican-ui
+            cat ci/agent.log
+            exit 1
+          fi
+      - name: Push the image (amd64 and arm64)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ $TAG == latest ]]; then
+            tags=(main "sha-$(git rev-parse HEAD)")
+          else
+            version=${TAG#v}
+            tags=("$version" "${version%.*}" latest)
+          fi
+          docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin <<<"$GH_TOKEN"
+          docker buildx create --use --driver docker-container > /dev/null
+          docker buildx build -f Dockerfile.ci --platform linux/amd64,linux/arm64 --push \
+            --label "org.opencontainers.image.version=$(ci-rootfs/amd64/barbican --version | cut -d' ' -f2)" \
+            --label "org.opencontainers.image.revision=$(git rev-parse HEAD)" \
+            "${tags[@]/#/--tag=$IMAGE:}" .
+          {
+            echo "Pushed \`$IMAGE\`: ${tags[*]}"
+            echo
+            echo "Digest: \`$(docker buildx imagetools inspect "$IMAGE:${tags[0]}" --format '{{.Manifest.Digest}}')\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   edge:
     name: Edge agent
