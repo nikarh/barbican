@@ -1,0 +1,60 @@
+[Unit]
+Description=barbican: bans addresses that abuse services, from their logs
+Documentation=https://github.com/nikarh/barbican
+# The blocks are put back in place, and barbican reports itself ready, before the network is configured
+# (network-pre.target) and before Docker starts: nothing reaches a service unfiltered at boot.
+DefaultDependencies=no
+After=local-fs.target systemd-journald.socket
+Before=network-pre.target docker.service shutdown.target
+Wants=network-pre.target
+Conflicts=shutdown.target
+# A failed barbican leaves its blocks in place (and the kernel lifts them on time). Keep trying.
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+NotifyAccess=main
+# Settings are in /etc/barbican/config.toml: change them there, then restart.
+ExecStart=/usr/bin/barbican
+Restart=on-failure
+RestartSec=2s
+
+# Its own user, made up by systemd, with one capability: changing the firewall (nftables).
+DynamicUser=yes
+StateDirectory=barbican
+StateDirectoryMode=0700
+ConfigurationDirectory=barbican
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+# Reading the journal (journald sources).
+SupplementaryGroups=systemd-journal
+# Docker sources read the Docker API's socket. Membership of the docker group gives root on the host, so prefer
+# a read-only socket proxy that only allows container inspection and logs (see the README), and point
+# docker.socket in the configuration at it; it then needs read access to that socket only.
+# SupplementaryGroups=systemd-journal docker
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

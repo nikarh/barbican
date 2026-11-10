@@ -68,6 +68,11 @@ impl Geo {
     }
 
     #[must_use]
+    pub fn has_asns(&self) -> bool {
+        self.asn.is_some()
+    }
+
+    #[must_use]
     pub fn lookup(&self, ip: IpAddr) -> Info {
         let mut info = Info::default();
         if let Some(reader) = &self.country

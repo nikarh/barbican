@@ -162,6 +162,7 @@ impl<'a> Event<'a> {
         }
     }
 
+    #[cfg(test)]
     #[must_use]
     pub fn what(&self) -> String {
         let mut out = String::new();

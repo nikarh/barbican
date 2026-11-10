@@ -126,14 +126,14 @@ pub fn parse_list(body: &str) -> (Vec<Net>, usize) {
 #[derive(Debug, Clone, Default)]
 pub struct Loaded {
     pub nets: Vec<Net>,
-    pub set: NetSet,
+    pub set: std::sync::Arc<NetSet>,
 }
 
 impl Loaded {
     #[must_use]
     pub fn from_data(data: &str) -> Self {
         let (nets, _) = parse_list(data);
-        let set = NetSet::new(&nets);
+        let set = std::sync::Arc::new(NetSet::new(&nets));
         Self { nets, set }
     }
 }
