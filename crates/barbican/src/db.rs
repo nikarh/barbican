@@ -106,20 +106,21 @@ impl Db {
         Ok(Self { pool })
     }
 
-    /// An in-memory database, for tests.
-    #[cfg(test)]
-    pub async fn memory() -> Self {
-        let options = SqliteConnectOptions::from_str("sqlite::memory:")
-            .unwrap()
-            .foreign_keys(true);
+    /// An in-memory database, for tests and `barbican replay`.
+    pub async fn memory_db() -> Result<Self, Error> {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")?.foreign_keys(true);
         // One connection: each connection to :memory: is a database of its own.
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect_with(options)
-            .await
-            .unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
-        Self { pool }
+            .await?;
+        sqlx::migrate!().run(&pool).await?;
+        Ok(Self { pool })
+    }
+
+    #[cfg(test)]
+    pub async fn memory() -> Self {
+        Self::memory_db().await.unwrap()
     }
 }
 
@@ -147,6 +148,24 @@ pub async fn ip_seen(
     .fetch_one(&mut *conn)
     .await?;
     Ok(row.id)
+}
+
+/// Counts more hits of an address, seen up to `last_seen`.
+pub async fn ip_hits(
+    conn: &mut SqliteConnection,
+    id: i64,
+    hits: i64,
+    last_seen: i64,
+) -> Result<(), Error> {
+    sqlx::query!(
+        "UPDATE ip SET hits = hits + ?, last_seen = max(last_seen, ?) WHERE id = ?",
+        hits,
+        last_seen,
+        id
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
 }
 
 pub async fn asn_name(conn: &mut SqliteConnection, number: i64, name: &str) -> Result<(), Error> {

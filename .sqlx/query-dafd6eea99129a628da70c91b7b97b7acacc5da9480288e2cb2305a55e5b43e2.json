@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT coalesce(sum(count), 0) FROM event",
+  "describe": {
+    "columns": [
+      {
+        "name": "coalesce(sum(count), 0)",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "dafd6eea99129a628da70c91b7b97b7acacc5da9480288e2cb2305a55e5b43e2"
+}

@@ -27,12 +27,105 @@ pub struct Trusted {
     pub until: i64,
 }
 
+/// The active bans, with single-address bans indexed by address: every hit asks whether its address is banned.
+#[derive(Debug, Default)]
+pub struct Bans {
+    rows: Vec<BanRow>,
+    /// Index into `rows` of each single-address ban (the latest one, if several).
+    hosts: HashMap<IpAddr, usize>,
+    /// Indexes into `rows` of prefix bans.
+    nets: Vec<usize>,
+}
+
+impl Bans {
+    #[must_use]
+    pub fn new(rows: Vec<BanRow>) -> Self {
+        let mut bans = Self {
+            rows,
+            ..Self::default()
+        };
+        bans.index();
+        bans
+    }
+
+    fn index(&mut self) {
+        self.hosts.clear();
+        self.nets.clear();
+        for (i, row) in self.rows.iter().enumerate() {
+            if row.net.is_host() {
+                self.hosts.insert(row.net.addr(), i);
+            } else {
+                self.nets.push(i);
+            }
+        }
+    }
+
+    pub fn push(&mut self, row: BanRow) {
+        let i = self.rows.len();
+        if row.net.is_host() {
+            self.hosts.insert(row.net.addr(), i);
+        } else {
+            self.nets.push(i);
+        }
+        self.rows.push(row);
+    }
+
+    /// Keeps the bans `keep` says to keep.
+    pub fn retain(&mut self, keep: impl FnMut(&BanRow) -> bool) {
+        let before = self.rows.len();
+        self.rows.retain(keep);
+        if self.rows.len() != before {
+            self.index();
+        }
+    }
+
+    /// The ban in force at `now` that covers the address.
+    #[must_use]
+    pub fn of(&self, ip: IpAddr, now: i64) -> Option<&BanRow> {
+        let active = |b: &&BanRow| b.until.is_none_or(|u| u > now);
+        let ip = barbican_common::net::canonical(ip);
+        self.hosts
+            .get(&ip)
+            .and_then(|i| self.rows.get(*i))
+            .filter(active)
+            .or_else(|| {
+                self.nets
+                    .iter()
+                    .filter_map(|i| self.rows.get(*i))
+                    .filter(active)
+                    .find(|b| b.net.contains_ip(ip))
+            })
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, BanRow> {
+        self.rows.iter()
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+}
+
+impl<'a> IntoIterator for &'a Bans {
+    type Item = &'a BanRow;
+    type IntoIter = std::slice::Iter<'a, BanRow>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.rows.iter()
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct State {
     /// In the order they are tried (the compiled ones are the app's rule set).
     pub rules: Vec<Rule>,
     pub policy: Policy,
-    pub bans: Vec<BanRow>,
+    pub bans: Bans,
     pub entries: Vec<EntryRow>,
     pub trust: HashMap<IpAddr, Trusted>,
     pub feeds: Vec<Feed>,
@@ -73,9 +166,7 @@ impl State {
     /// The active ban that covers the address, if any.
     #[must_use]
     pub fn ban_of(&self, ip: IpAddr, now: i64) -> Option<&BanRow> {
-        self.bans
-            .iter()
-            .find(|b| b.until.is_none_or(|u| u > now) && b.net.contains_ip(ip))
+        self.bans.of(ip, now)
     }
 
     /// Whether the address is on the deny list.
@@ -227,10 +318,10 @@ mod tests {
     fn lookups() {
         let mut state = State {
             exempt: vec![n("10.0.0.0/8")],
-            bans: vec![
+            bans: Bans::new(vec![
                 ban(1, "203.0.113.0/24", Some(100)),
                 ban(2, "198.51.100.1", None),
-            ],
+            ]),
             entries: vec![
                 entry("192.0.2.0/24", true, None),
                 entry("192.0.2.128/25", false, Some(50)),

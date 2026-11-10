@@ -578,3 +578,20 @@ pub enum Live {
         id: i64,
     },
 }
+
+/// A ban as the UI shows it.
+#[must_use]
+pub fn ban(row: &crate::db::BanRow, ip: Option<std::net::IpAddr>, country: Option<String>) -> Ban {
+    Ban {
+        id: row.id,
+        net: row.net.to_string(),
+        ip: ip.map(|ip| ip.to_string()),
+        rule: row.rule,
+        reason: row.reason.clone(),
+        country,
+        created: row.created,
+        until: row.until,
+        lifted: row.lifted,
+        lifted_by: row.lifted_by.clone(),
+    }
+}

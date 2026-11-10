@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE ip SET hits = hits + ?, last_seen = max(last_seen, ?) WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "728a0b35e49860fbe8939c3d344b8dbf9807dc946399adc5f91d41c651748ff1"
+}
