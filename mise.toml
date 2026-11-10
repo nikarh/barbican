@@ -1,0 +1,96 @@
+# Development tools and tasks. Rust itself comes from rust-toolchain.toml.
+[tools]
+node = "26.13.0"
+git-cliff = "2.14.2"
+cargo-deny = "0.20.2"
+"cargo:sqlx-cli" = { version = "0.9.0", default-features = "false", features = "sqlite" }
+
+[env]
+BARBICAN_DEV_DIR = "{{config_root}}/dev"
+
+[tasks."web:install"]
+description = "Install frontend dependencies"
+dir = "web"
+run = "npm ci --no-audit --no-fund"
+sources = ["package.json", "package-lock.json"]
+outputs = ["node_modules/.package-lock.json"]
+
+[tasks.dev]
+description = "Run the agent (with dev/config.toml, no firewall changes) and the Vite dev server at http://localhost:5173"
+depends = ["web:install"]
+run = "scripts/dev.sh"
+
+[tasks.fmt]
+description = "Format Rust and frontend code"
+depends = ["web:install"]
+run = ["cargo fmt --all", "npm --prefix web run format"]
+
+[tasks.lint]
+description = "rustfmt check, clippy, oxfmt check, oxlint and the TypeScript type check"
+depends = ["web:install"]
+run = [
+  "cargo fmt --all --check",
+  "cargo clippy --locked --workspace --all-targets",
+  "npm --prefix web run format:check",
+  "npm --prefix web run lint",
+  "npm --prefix web run typecheck",
+]
+
+[tasks.test]
+description = "Run the Rust tests (which also regenerate the frontend API types)"
+run = "cargo test --locked --workspace"
+
+[tasks.bindings]
+description = "Regenerate web/src/api/generated from the Rust API types"
+run = "cargo test --locked -p barbican export_bindings"
+
+[tasks.deny]
+description = "Audit dependencies: advisories, licenses, duplicates, sources"
+run = "cargo deny check"
+
+[tasks.ci]
+description = "What CI's check job runs: lint, tests, and that generated files and action pins are up to date"
+depends = ["lint", "test"]
+run = [
+  "git diff --exit-code -- web/src/api/generated .sqlx",
+  "scripts/check-actions.sh",
+]
+
+[tasks.check]
+description = "Everything CI checks"
+depends = ["ci", "deny"]
+
+[tasks."web:build"]
+description = "Build the frontend into web/dist (embedded by the next cargo build)"
+depends = ["web:install"]
+dir = "web"
+run = "npm run build"
+
+[tasks.build]
+description = "Release build of the agent (with the frontend embedded) and of the edge agent"
+depends = ["web:build"]
+run = "cargo build --locked --release -p barbican -p barbican-edge"
+
+[tasks."build:edge"]
+description = "Small static builds of the edge agent for routers: mise run build:edge [target...]"
+run = "scripts/build-edge.sh"
+
+[tasks.e2e]
+description = "End-to-end tests in throwaway VMs (never on this machine's firewall): mise run e2e [scenario...]"
+run = "e2e/run.sh"
+
+[tasks."db:prepare"]
+description = "Refresh .sqlx/ after changing a query or migration"
+run = """
+set -euo pipefail
+mkdir -p dev
+rm -f dev/prepare.db
+export DATABASE_URL="sqlite://dev/prepare.db?mode=rwc" SQLX_OFFLINE=false
+sqlx migrate run --source crates/barbican/migrations
+# Run the mise-installed cargo-sqlx directly: `cargo sqlx` may find another one in $CARGO_HOME/bin first.
+CARGO="$(command -v cargo)" cargo-sqlx sqlx prepare --workspace -- --all-targets
+"""
+
+[tasks.changelog]
+description = "Regenerate CHANGELOG.md from the commits"
+run = "git cliff --offline -o CHANGELOG.md"

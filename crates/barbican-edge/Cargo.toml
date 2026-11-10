@@ -1,0 +1,23 @@
+[package]
+name = "barbican-edge"
+description = "Applies the bans of barbican agents on a router (OpenWrt) with nftables."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+[dependencies]
+barbican-common = { version = "0.1.0", path = "../barbican-common" }
+pico-args = "0.5.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+ureq = { version = "3.5.1", default-features = false }
+
+[lints]
+workspace = true

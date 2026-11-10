@@ -1,0 +1,50 @@
+[graph]
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-unknown-linux-musl",
+  "aarch64-unknown-linux-musl",
+  "armv7-unknown-linux-musleabihf",
+]
+all-features = false
+no-default-features = false
+
+[output]
+feature-depth = 1
+
+[advisories]
+version = 2
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+
+ignore = [
+  # sqlx 0.9 requires libsqlite3-sys < 0.38, which bundles an affected SQLite. Exploiting it needs a database and
+  # -wal file pair crafted by someone else; barbican only opens its own database, in its own state directory.
+  { id = "RUSTSEC-2026-0459", reason = "only own database files are opened; waiting for sqlx to allow libsqlite3-sys 0.39" },
+]
+
+[licenses]
+version = 2
+confidence-threshold = 0.93
+allow = ["MIT", "Apache-2.0", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib"]
+
+[bans]
+multiple-versions = "deny"
+# The ecosystem is moving from syn 2 to 3; both are build-time only (derive macros).
+skip = [
+  { crate = "syn@2.0.119", reason = "tracing-attributes and sqlx-macros still use syn 2 (build time only)" },
+  { crate = "base64@0.22.1", reason = "axum and sqlx-core haven't moved to 0.23 like hyper-util" },
+  { crate = "hashbrown@0.16.1", reason = "sqlx-core (via hashlink) is behind indexmap" },
+  { crate = "getrandom@0.2.17", reason = "ring still uses getrandom 0.2" },
+]
+# Lint level for when a crate version requirement is `*`
+wildcards = "deny"
+highlight = "simplest-path"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
