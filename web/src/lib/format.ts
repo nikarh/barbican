@@ -174,6 +174,26 @@ export function count(n: number): string {
   return n.toLocaleString()
 }
 
+const compactFormat = new Intl.NumberFormat(undefined, {
+  notation: 'compact',
+  maximumFractionDigits: 1,
+})
+
+/** "343M", "1.2K", "12": a big number, roughly. */
+export function compact(n: number): string {
+  return compactFormat.format(n)
+}
+
+/** "8.0%", "0.04%", "<0.01%": a share, with as many digits as it takes to not round to nothing. */
+export function share(part: number, whole: number): string {
+  if (whole <= 0 || part <= 0) return '0%'
+  const pct = (part / whole) * 100
+  if (pct < 0.01) return '<0.01%'
+  if (pct < 1) return `${pct.toFixed(2)}%`
+  if (pct < 10) return `${pct.toFixed(1)}%`
+  return `${pct.toFixed(0)}%`
+}
+
 export const KIND_LABELS = {
   http: 'HTTP',
   auth_failure: 'Failed login',

@@ -20,7 +20,17 @@ active: boolean, query?: string, offset: number, limit?: number, };
 /**
  * Every method the server implements, with its parameters.
  */
-export type Call = { "method": "meta.get" } | { "method": "overview.get" } | { "method": "ips.list", "params": IpsParams } | { "method": "ip.get", "params": IpParams } | { "method": "events.list", "params": EventsParams } | { "method": "bans.list", "params": BansParams } | { "method": "ban.create", "params": BanCreateParams } | { "method": "ban.lift", "params": IdParams } | { "method": "entries.list" } | { "method": "entry.save", "params": EntrySaveParams } | { "method": "entry.delete", "params": IdParams } | { "method": "trust.remove", "params": IpParams } | { "method": "rules.list" } | { "method": "rules.defaults" } | { "method": "rule.save", "params": Rule } | { "method": "rule.delete", "params": IdParams } | { "method": "rules.order", "params": OrderParams } | { "method": "policy.get" } | { "method": "policy.update", "params": Policy } | { "method": "feeds.list" } | { "method": "feeds.presets" } | { "method": "feed.save", "params": FeedDef } | { "method": "feed.delete", "params": IdParams } | { "method": "feed.refresh", "params": IdParams } | { "method": "live.subscribe" } | { "method": "unsubscribe", "params": UnsubscribeParams };
+export type Call = { "method": "meta.get" } | { "method": "overview.get" } | { "method": "ips.list", "params": IpsParams } | { "method": "ip.get", "params": IpParams } | { "method": "events.list", "params": EventsParams } | { "method": "bans.list", "params": BansParams } | { "method": "ban.create", "params": BanCreateParams } | { "method": "ban.lift", "params": IdParams } | { "method": "entries.list" } | { "method": "entry.save", "params": EntrySaveParams } | { "method": "entry.delete", "params": IdParams } | { "method": "trust.remove", "params": IpParams } | { "method": "rules.list" } | { "method": "rules.defaults" } | { "method": "rule.save", "params": Rule } | { "method": "rule.delete", "params": IdParams } | { "method": "rules.order", "params": OrderParams } | { "method": "policy.get" } | { "method": "policy.update", "params": Policy } | { "method": "countries.coverage", "params": CoverageParams } | { "method": "feeds.list" } | { "method": "feeds.presets" } | { "method": "feed.save", "params": FeedDef } | { "method": "feed.delete", "params": IdParams } | { "method": "feed.refresh", "params": IdParams } | { "method": "live.subscribe" } | { "method": "unsubscribe", "params": UnsubscribeParams };
+
+export type CoverageParams = { 
+/**
+ * ISO codes.
+ */
+countries: Array<string>, 
+/**
+ * AF, AN, AS, EU, NA, OC, SA.
+ */
+continents: Array<string>, };
 
 export type EntrySaveParams = { net: string, 
 /**
@@ -67,7 +77,7 @@ export type OrderParams = { ids: Array<number>, };
 /**
  * One call from the client: a method and its parameters.
  */
-export type Request = { id: string, } & ({ "method": "meta.get" } | { "method": "overview.get" } | { "method": "ips.list", "params": IpsParams } | { "method": "ip.get", "params": IpParams } | { "method": "events.list", "params": EventsParams } | { "method": "bans.list", "params": BansParams } | { "method": "ban.create", "params": BanCreateParams } | { "method": "ban.lift", "params": IdParams } | { "method": "entries.list" } | { "method": "entry.save", "params": EntrySaveParams } | { "method": "entry.delete", "params": IdParams } | { "method": "trust.remove", "params": IpParams } | { "method": "rules.list" } | { "method": "rules.defaults" } | { "method": "rule.save", "params": Rule } | { "method": "rule.delete", "params": IdParams } | { "method": "rules.order", "params": OrderParams } | { "method": "policy.get" } | { "method": "policy.update", "params": Policy } | { "method": "feeds.list" } | { "method": "feeds.presets" } | { "method": "feed.save", "params": FeedDef } | { "method": "feed.delete", "params": IdParams } | { "method": "feed.refresh", "params": IdParams } | { "method": "live.subscribe" } | { "method": "unsubscribe", "params": UnsubscribeParams });
+export type Request = { id: string, } & ({ "method": "meta.get" } | { "method": "overview.get" } | { "method": "ips.list", "params": IpsParams } | { "method": "ip.get", "params": IpParams } | { "method": "events.list", "params": EventsParams } | { "method": "bans.list", "params": BansParams } | { "method": "ban.create", "params": BanCreateParams } | { "method": "ban.lift", "params": IdParams } | { "method": "entries.list" } | { "method": "entry.save", "params": EntrySaveParams } | { "method": "entry.delete", "params": IdParams } | { "method": "trust.remove", "params": IpParams } | { "method": "rules.list" } | { "method": "rules.defaults" } | { "method": "rule.save", "params": Rule } | { "method": "rule.delete", "params": IdParams } | { "method": "rules.order", "params": OrderParams } | { "method": "policy.get" } | { "method": "policy.update", "params": Policy } | { "method": "countries.coverage", "params": CoverageParams } | { "method": "feeds.list" } | { "method": "feeds.presets" } | { "method": "feed.save", "params": FeedDef } | { "method": "feed.delete", "params": IdParams } | { "method": "feed.refresh", "params": IdParams } | { "method": "live.subscribe" } | { "method": "unsubscribe", "params": UnsubscribeParams });
 
 export type RpcError = { code: ErrorCode, message: string, };
 

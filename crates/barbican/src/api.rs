@@ -93,6 +93,10 @@ pub enum Call {
     /// Result: [`Policy`], as saved.
     #[serde(rename = "policy.update")]
     PolicyUpdate(Policy),
+    /// Result: [`BlockCoverage`]: how much blocking these countries and continents takes. Nothing is saved; the
+    /// first call after the agent started (or loaded a new country database) takes a moment longer.
+    #[serde(rename = "countries.coverage")]
+    CountriesCoverage(CoverageParams),
     /// Result: `Feed[]`.
     #[serde(rename = "feeds.list")]
     FeedsList,
@@ -179,6 +183,15 @@ pub struct UnsubscribeParams {
 pub struct OrderParams {
     #[cfg_attr(test, ts(type = "Array<number>"))]
     pub ids: Vec<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "rpc.ts"))]
+pub struct CoverageParams {
+    /// ISO codes.
+    pub countries: Vec<String>,
+    /// AF, AN, AS, EU, NA, OC, SA.
+    pub continents: Vec<String>,
 }
 
 /// A slice of a long list.
@@ -636,4 +649,55 @@ pub enum ProxyProblemKind {
     /// Connected, but no HTTP answer.
     NoAnswer,
     Other,
+}
+
+/// How much a set of prefixes covers.
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct Extent {
+    /// Prefixes, after merging adjacent and contained ones: the entries the firewall holds.
+    #[cfg_attr(test, ts(type = "number"))]
+    pub prefixes: u64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub v4_addresses: u64,
+    /// IPv6 space, in /48 networks (one site's usual allocation).
+    #[cfg_attr(test, ts(type = "number"))]
+    pub v6_networks: u64,
+}
+
+impl From<crate::geo::Extent> for Extent {
+    fn from(e: crate::geo::Extent) -> Self {
+        Self {
+            prefixes: e.prefixes,
+            v4_addresses: e.v4_addresses,
+            v6_networks: e.v6_networks,
+        }
+    }
+}
+
+/// A blocked country or continent, and how much of the address space it is.
+#[derive(Debug, Serialize, Clone)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct PlaceExtent {
+    pub code: String,
+    /// Of a country: the continent the database places it on.
+    pub continent: Option<String>,
+    pub extent: Extent,
+}
+
+/// How much blocking some countries and continents takes, by the country database.
+#[derive(Debug, Serialize, Clone)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct BlockCoverage {
+    /// `false`: there is no country database, and the rest is empty.
+    pub available: bool,
+    pub countries: Vec<PlaceExtent>,
+    pub continents: Vec<PlaceExtent>,
+    /// All of them together, overlaps counted once: what is blocked.
+    pub total: Extent,
+    /// Everything the database places in a country: the share the total is of.
+    pub known: Extent,
 }

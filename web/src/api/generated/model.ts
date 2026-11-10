@@ -32,6 +32,23 @@ until: number | null, lifted: number | null, liftedBy: string | null, };
 export type BanLength = { "type": "default" } | { "type": "secs", secs: number, } | { "type": "forever" };
 
 /**
+ * How much blocking some countries and continents takes, by the country database.
+ */
+export type BlockCoverage = { 
+/**
+ * `false`: there is no country database, and the rest is empty.
+ */
+available: boolean, countries: Array<PlaceExtent>, continents: Array<PlaceExtent>, 
+/**
+ * All of them together, overlaps counted once: what is blocked.
+ */
+total: Extent, 
+/**
+ * Everything the database places in a country: the share the total is of.
+ */
+known: Extent, };
+
+/**
  * What an event must look like for a rule to count it. Unset conditions match anything; regular expressions match
  * anywhere in the text unless anchored, and one starting with `!` matches what the rest doesn't match.
  */
@@ -95,6 +112,19 @@ export type EventRow = {
  * The hour (unix time of its start).
  */
 hour: number, ip: string, country: string | null, kind: Kind, what: string, source: string, rule: number, count: number, };
+
+/**
+ * How much a set of prefixes covers.
+ */
+export type Extent = { 
+/**
+ * Prefixes, after merging adjacent and contained ones: the entries the firewall holds.
+ */
+prefixes: number, v4Addresses: number, 
+/**
+ * IPv6 space, in /48 networks (one site's usual allocation).
+ */
+v6Networks: number, };
 
 export type Feed = { def: FeedDef, fetched: number | null, 
 /**
@@ -205,6 +235,15 @@ export type Page<T> = { rows: Array<T>,
  * How many rows match in all.
  */
 total: number, };
+
+/**
+ * A blocked country or continent, and how much of the address space it is.
+ */
+export type PlaceExtent = { code: string, 
+/**
+ * Of a country: the continent the database places it on.
+ */
+continent: string | null, extent: Extent, };
 
 export type Policy = { 
 /**

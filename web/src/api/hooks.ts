@@ -1,5 +1,5 @@
 import { notifications } from '@mantine/notifications'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import type { Live } from './generated/model'
@@ -35,6 +35,17 @@ export function useRules() {
 
 export function usePolicy() {
   return useQuery({ queryKey: ['policy'], queryFn: () => rpc.call('policy.get') })
+}
+
+/** How much blocking these countries and continents takes. While a new selection is counted, the previous
+ * one's counts stay. */
+export function useCoverage(countries: string[], continents: string[]) {
+  return useQuery({
+    queryKey: ['coverage', countries, continents],
+    queryFn: () => rpc.call('countries.coverage', { countries, continents }),
+    placeholderData: keepPreviousData,
+    staleTime: 10 * 60_000,
+  })
 }
 
 export function useFeeds() {
