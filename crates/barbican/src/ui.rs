@@ -9,9 +9,9 @@ use serde_json::Value;
 use sqlx::{QueryBuilder, Row, Sqlite};
 
 use crate::api::{
-    Activity, BanCreateParams, BansParams, Call, Count, DayStat, Entry, EntrySaveParams, ErrorCode,
-    EventRow, EventsParams, Feed, IpDetail, IpFilter, IpRow, IpSort, IpsParams, Live, Meta,
-    Overview, Page, RpcError, TrustInfo,
+    Activity, BanCreateParams, BansParams, BlockCoverage, Call, Count, CoverageParams, DayStat,
+    Entry, EntrySaveParams, ErrorCode, EventRow, EventsParams, Feed, IpDetail, IpFilter, IpRow,
+    IpSort, IpsParams, Live, Meta, Overview, Page, PlaceExtent, RpcError, TrustInfo,
 };
 use crate::app::{App, now};
 use crate::db::{self, BanRow, EntryRow};
@@ -91,6 +91,7 @@ pub async fn call(app: &Arc<App>, call: Call) -> Result<Value, RpcError> {
                 .unwrap_or_default(),
         ),
         Call::PolicyUpdate(policy) => json(policy_update(app, policy).await?),
+        Call::CountriesCoverage(p) => json(coverage(app, p).await?),
         Call::FeedsList => json(feeds(app)),
         Call::FeedsPresets => json(crate::feeds::presets()),
         Call::FeedSave(def) => json(feed_save(app, def).await?),
@@ -903,6 +904,48 @@ async fn policy_update(app: &Arc<App>, mut policy: Policy) -> Result<Policy, Rpc
         app.countries_wake.notify_one();
     }
     Ok(policy)
+}
+
+async fn coverage(app: &App, p: CoverageParams) -> Result<BlockCoverage, RpcError> {
+    if p.countries.len() + p.continents.len() > 300 {
+        return Err(bad("too many countries and continents"));
+    }
+    let geo = app.geo();
+    let coverage = tokio::task::spawn_blocking(move || geo.coverage(&p.countries, &p.continents))
+        .await
+        .map_err(internal)?;
+    let Some(c) = coverage else {
+        return Ok(BlockCoverage {
+            available: false,
+            countries: Vec::new(),
+            continents: Vec::new(),
+            total: crate::api::Extent::default(),
+            known: crate::api::Extent::default(),
+        });
+    };
+    Ok(BlockCoverage {
+        available: true,
+        countries: c
+            .countries
+            .into_iter()
+            .map(|(code, continent, extent)| PlaceExtent {
+                code,
+                continent,
+                extent: extent.into(),
+            })
+            .collect(),
+        continents: c
+            .continents
+            .into_iter()
+            .map(|(code, extent)| PlaceExtent {
+                code,
+                continent: None,
+                extent: extent.into(),
+            })
+            .collect(),
+        total: c.total.into(),
+        known: c.known.into(),
+    })
 }
 
 fn feed(f: &StateFeed) -> Feed {

@@ -6,6 +6,7 @@
 import { diagnose, type Problem } from './diagnose'
 import type {
   Ban,
+  BlockCoverage,
   Entry,
   EventRow,
   Feed,
@@ -47,6 +48,7 @@ interface Results {
   'rules.order': null
   'policy.get': Policy
   'policy.update': Policy
+  'countries.coverage': BlockCoverage
   'feeds.list': Feed[]
   'feeds.presets': FeedDef[]
   'feed.save': Feed

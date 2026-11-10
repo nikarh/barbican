@@ -13,16 +13,34 @@ import {
   Tabs,
   Text,
   TextInput,
+  Tooltip,
 } from '@mantine/core'
 import { IconPlus, IconRefresh, IconTrash, IconWorld } from '@tabler/icons-react'
 import { useState, type ReactNode } from 'react'
 
-import { useAction, useEntries, useFeedPresets, useFeeds, useMeta, usePolicy } from '../api/hooks'
-import type { FeedDef, Policy } from '../api/generated/model'
+import {
+  useAction,
+  useCoverage,
+  useEntries,
+  useFeedPresets,
+  useFeeds,
+  useMeta,
+  usePolicy,
+} from '../api/hooks'
+import type { BlockCoverage, Extent, FeedDef, Policy } from '../api/generated/model'
 import { AddPicker, EditableList } from '../components/EditableList'
 import { COUNTRY_SELECT } from '../components/countrySelect'
 import { CountryLabel, LengthInput, LengthSelect, Panel } from '../components/ui'
-import { ago, CONTINENTS, count, COUNTRIES, countryName, remaining } from '../lib/format'
+import {
+  ago,
+  compact,
+  CONTINENTS,
+  count,
+  COUNTRIES,
+  countryName,
+  remaining,
+  share,
+} from '../lib/format'
 import { navigate } from '../lib/router'
 import { useNow } from '../lib/useNow'
 
@@ -309,12 +327,120 @@ function PlaceLabel({ place, sub }: { place: Place; sub?: ReactNode }) {
   )
 }
 
-function BlockedPanel({ p, set }: { p: Policy; set: (patch: Partial<Policy>) => void }) {
+const V6_HINT = 'IPv6 space counted in /48 networks, the usual allocation of one site'
+
+/** "1,234 prefixes · 343M IPv4 addresses (9.2%) · 12K IPv6 /48s" */
+function ExtentLine({ extent, known }: { extent: Extent; known: Extent }) {
+  return (
+    <span className="num">
+      {count(extent.prefixes)} {extent.prefixes === 1 ? 'prefix' : 'prefixes'} ·{' '}
+      {compact(extent.v4Addresses)} IPv4 addresses ({share(extent.v4Addresses, known.v4Addresses)})
+      {extent.v6Networks > 0 && (
+        <>
+          {' · '}
+          <Tooltip label={V6_HINT} openDelay={300}>
+            <span style={{ textDecoration: 'underline dotted', textUnderlineOffset: 3 }}>
+              {compact(extent.v6Networks)} IPv6 /48s
+            </span>
+          </Tooltip>
+        </>
+      )}
+    </span>
+  )
+}
+
+/** What a blocked country or continent amounts to, under its name. */
+function PlaceExtentLine({
+  place,
+  coverage,
+}: {
+  place: Place
+  coverage: BlockCoverage | undefined
+}) {
+  if (coverage?.available === false) return null
+  const list = place.kind === 'country' ? coverage?.countries : coverage?.continents
+  const found = list?.find((x) => x.code === place.code)
+  if (coverage === undefined || found === undefined) return <span>Counting…</span>
+  const within =
+    found.continent !== null && coverage.continents.some((c) => c.code === found.continent)
+      ? found.continent
+      : null
+  return (
+    <>
+      {within !== null && (
+        <span style={{ color: 'var(--ink-faint)' }}>
+          In {CONTINENT_NAMES.get(within) ?? within}, blocked already ·{' '}
+        </span>
+      )}
+      <ExtentLine extent={found.extent} known={coverage.known} />
+    </>
+  )
+}
+
+/** All of the blocked countries and continents together. */
+function CoverageTotal({
+  coverage,
+  stale,
+  unsaved,
+}: {
+  coverage: BlockCoverage
+  stale: boolean
+  unsaved: boolean
+}) {
+  const t = coverage.total
+  return (
+    <div style={{ opacity: stale ? 0.55 : 1, transition: 'opacity 150ms' }}>
+      <Group gap={8} wrap="wrap" align="baseline">
+        <Text fz={13} fw={620} c="var(--ink)">
+          Blocked in all
+        </Text>
+        {unsaved && (
+          <Badge color="yellow" size="sm">
+            Not saved yet
+          </Badge>
+        )}
+      </Group>
+      <Text fz={13} c="var(--ink-dim)" className="num" mt={2}>
+        <b style={{ color: 'var(--ink)', fontWeight: 620 }}>{count(t.prefixes)}</b>{' '}
+        {t.prefixes === 1 ? 'prefix' : 'prefixes'} in the firewall ·{' '}
+        <b style={{ color: 'var(--ink)', fontWeight: 620 }}>{compact(t.v4Addresses)}</b> IPv4
+        addresses ({share(t.v4Addresses, coverage.known.v4Addresses)} of all the country database
+        locates)
+        {t.v6Networks > 0 && (
+          <>
+            {' · '}
+            <b style={{ color: 'var(--ink)', fontWeight: 620 }}>{compact(t.v6Networks)}</b>{' '}
+            <Tooltip label={V6_HINT} openDelay={300}>
+              <span style={{ textDecoration: 'underline dotted', textUnderlineOffset: 3 }}>
+                IPv6 /48s
+              </span>
+            </Tooltip>
+          </>
+        )}
+      </Text>
+    </div>
+  )
+}
+
+function BlockedPanel({
+  p,
+  saved,
+  set,
+}: {
+  p: Policy
+  /** The policy as saved, to say whether the counts are of what is in force. */
+  saved: Policy
+  set: (patch: Partial<Policy>) => void
+}) {
   const meta = useMeta()
+  const coverage = useCoverage(p.blockedCountries, p.blockedContinents)
   const places: Place[] = [
     ...p.blockedContinents.map((code) => ({ kind: 'continent' as const, code })),
     ...p.blockedCountries.map((code) => ({ kind: 'country' as const, code })),
   ]
+  const unsaved =
+    JSON.stringify([p.blockedCountries, p.blockedContinents]) !==
+    JSON.stringify([saved.blockedCountries, saved.blockedContinents])
   const options = [
     {
       group: 'Continents',
@@ -345,10 +471,17 @@ function BlockedPanel({ p, set }: { p: Policy; set: (patch: Partial<Policy>) => 
             There is no country database: no address has a country, and none of these is blocked.
           </Alert>
         )}
+        {coverage.error && (
+          <Alert color="red" variant="light">
+            Couldn’t count what these block: {coverage.error.message}
+          </Alert>
+        )}
         <EditableList
           items={places}
           itemKey={(x) => `${x.kind}:${x.code}`}
-          label={(x) => <PlaceLabel place={x} />}
+          label={(x) => (
+            <PlaceLabel place={x} sub={<PlaceExtentLine place={x} coverage={coverage.data} />} />
+          )}
           onRemove={(i) => {
             const place = places[i]
             if (place !== undefined) remove(place)
@@ -368,6 +501,17 @@ function BlockedPanel({ p, set }: { p: Policy; set: (patch: Partial<Policy>) => 
               }}
             />
           }
+          {...(places.length > 0 && coverage.data?.available === true
+            ? {
+                footer: (
+                  <CoverageTotal
+                    coverage={coverage.data}
+                    stale={coverage.isPlaceholderData}
+                    unsaved={unsaved}
+                  />
+                ),
+              }
+            : {})}
         />
       </Stack>
     </Panel>
@@ -384,7 +528,7 @@ function PolicyForm({ policy }: { policy: Policy }) {
   return (
     <Stack gap="md">
       <LengthsPanel p={p} set={set} />
-      <BlockedPanel p={p} set={set} />
+      <BlockedPanel p={p} saved={policy} set={set} />
 
       <Panel title="Other">
         <Group align="flex-end" wrap="wrap">

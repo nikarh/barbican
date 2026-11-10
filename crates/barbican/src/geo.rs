@@ -5,9 +5,10 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 
-use barbican_common::net::{Net, aggregate};
+use barbican_common::net::{Family, Net, aggregate};
 use maxminddb::{Reader, WithinOptions, geoip2};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -22,6 +23,67 @@ pub struct Info {
 pub struct Geo {
     country: Option<Reader<Vec<u8>>>,
     asn: Option<Reader<Vec<u8>>>,
+    /// The country database's networks by country, read the first time [`Geo::coverage`] is asked.
+    regions: OnceLock<Regions>,
+}
+
+/// How much a set of prefixes covers.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Extent {
+    /// Prefixes, after merging adjacent and contained ones: what a firewall set holds.
+    pub prefixes: u64,
+    /// IPv4 addresses.
+    pub v4_addresses: u64,
+    /// IPv6 space in /48 networks (the usual size of one site's allocation), rounded down.
+    pub v6_networks: u64,
+}
+
+impl Extent {
+    /// Of merged prefixes.
+    fn of(nets: &[Net]) -> Self {
+        let mut extent = Self {
+            prefixes: nets.len() as u64,
+            ..Self::default()
+        };
+        let mut v6: u128 = 0;
+        for net in nets {
+            let len = u32::from(net.prefix_len());
+            match net.family() {
+                Family::V4 => extent.v4_addresses += 1u64 << (32 - len.min(32)),
+                Family::V6 => {
+                    v6 = v6.saturating_add(1u128.checked_shl(128 - len).unwrap_or(u128::MAX));
+                }
+            }
+        }
+        extent.v6_networks = u64::try_from(v6 >> 80).unwrap_or(u64::MAX);
+        extent
+    }
+}
+
+/// The networks of one country (and continent) of the database, merged.
+#[derive(Debug)]
+struct Region {
+    country: Option<String>,
+    continent: Option<String>,
+    nets: Vec<Net>,
+}
+
+#[derive(Debug, Default)]
+struct Regions {
+    regions: Vec<Region>,
+    /// Everything the database places in a country or continent.
+    known: Extent,
+}
+
+/// How much blocking some countries and continents takes, each on its own and together.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Coverage {
+    /// The countries asked for, with the continent the database places them on.
+    pub countries: Vec<(String, Option<String>, Extent)>,
+    pub continents: Vec<(String, Extent)>,
+    /// All of them together, overlaps counted once: what [`Geo::networks_of`] blocks.
+    pub total: Extent,
+    pub known: Extent,
 }
 
 impl std::fmt::Debug for Geo {
@@ -29,6 +91,7 @@ impl std::fmt::Debug for Geo {
         f.debug_struct("Geo")
             .field("country", &self.country.is_some())
             .field("asn", &self.asn.is_some())
+            .field("regions", &self.regions.get().is_some())
             .finish()
     }
 }
@@ -59,6 +122,7 @@ impl Geo {
         Ok(Self {
             country: country.map(open).transpose()?.flatten(),
             asn: asn.map(open).transpose()?.flatten(),
+            regions: OnceLock::new(),
         })
     }
 
@@ -128,14 +192,111 @@ impl Geo {
                 let net = Net::prefix(network.ip(), network.prefix());
                 // IPv4 also appears inside IPv6 databases as ::ffff:0:0/96 and ::/96; the IPv4 networks are listed
                 // on their own.
-                if net.family() == barbican_common::net::Family::V6 && is_ipv4_alias(&network.ip())
-                {
+                if net.family() == Family::V6 && is_ipv4_alias(&network.ip()) {
                     continue;
                 }
                 nets.push(net);
             }
         }
         aggregate(&nets)
+    }
+
+    /// How much blocking these countries and continents takes (each, and all together), or `None` without a country
+    /// database. The first call reads the whole database (seconds); the next ones only merge prefixes.
+    #[must_use]
+    pub fn coverage(&self, countries: &[String], continents: &[String]) -> Option<Coverage> {
+        let reader = self.country.as_ref()?;
+        let regions = self.regions.get_or_init(|| read_regions(reader));
+        let extent = |take: &dyn Fn(&Region) -> bool| {
+            let nets: Vec<Net> = regions
+                .regions
+                .iter()
+                .filter(|r| take(r))
+                .flat_map(|r| r.nets.iter().copied())
+                .collect();
+            Extent::of(&aggregate(&nets))
+        };
+        let is = |value: Option<&String>, code: &str| {
+            value.is_some_and(|v| v.eq_ignore_ascii_case(code))
+        };
+        Some(Coverage {
+            countries: countries
+                .iter()
+                .map(|code| {
+                    let continent = regions
+                        .regions
+                        .iter()
+                        .find(|r| is(r.country.as_ref(), code))
+                        .and_then(|r| r.continent.clone());
+                    (
+                        code.clone(),
+                        continent,
+                        extent(&|r| is(r.country.as_ref(), code)),
+                    )
+                })
+                .collect(),
+            continents: continents
+                .iter()
+                .map(|code| (code.clone(), extent(&|r| is(r.continent.as_ref(), code))))
+                .collect(),
+            total: extent(&|r| {
+                countries.iter().any(|c| is(r.country.as_ref(), c))
+                    || continents.iter().any(|c| is(r.continent.as_ref(), c))
+            }),
+            known: regions.known,
+        })
+    }
+}
+
+/// Every network of the country database, grouped by country and continent (as [`Geo::networks_of`] reads them).
+fn read_regions(reader: &Reader<Vec<u8>>) -> Regions {
+    // A country and a continent.
+    type Place = (Option<String>, Option<String>);
+    let mut records: HashMap<usize, Option<Place>> = HashMap::new();
+    let mut grouped: HashMap<Place, Vec<Net>> = HashMap::new();
+    let Ok(within) = reader.networks(WithinOptions::default()) else {
+        return Regions::default();
+    };
+    for item in within.flatten() {
+        let Some(offset) = item.offset() else {
+            continue;
+        };
+        let place = records.entry(offset).or_insert_with(|| {
+            item.decode::<geoip2::Country>()
+                .ok()
+                .flatten()
+                .map(|r| {
+                    (
+                        r.country.iso_code.map(str::to_owned),
+                        r.continent.code.map(str::to_owned),
+                    )
+                })
+                .filter(|(country, continent)| country.is_some() || continent.is_some())
+        });
+        let (Some(place), Ok(network)) = (place, item.network()) else {
+            continue;
+        };
+        let net = Net::prefix(network.ip(), network.prefix());
+        if net.family() == Family::V6 && is_ipv4_alias(&network.ip()) {
+            continue;
+        }
+        grouped.entry(place.clone()).or_default().push(net);
+    }
+    let regions: Vec<Region> = grouped
+        .into_iter()
+        .map(|((country, continent), nets)| Region {
+            country,
+            continent,
+            nets: aggregate(&nets),
+        })
+        .collect();
+    let all: Vec<Net> = regions
+        .iter()
+        .flat_map(|r| r.nets.iter().copied())
+        .collect();
+    Regions {
+        known: Extent::of(&aggregate(&all)),
+        regions,
     }
 }
 
@@ -264,6 +425,82 @@ mod tests {
         let geo = Geo::open(Some(Path::new("/nonexistent/a.mmdb")), None).unwrap();
         assert_eq!(geo.lookup("192.0.2.1".parse().unwrap()), Info::default());
         assert_eq!(geo.networks_of(&["CN".to_owned()], &[]), Vec::<Net>::new());
+    }
+
+    #[test]
+    fn extents() {
+        let nets: Vec<Net> = [
+            "192.0.2.0/24",
+            "198.51.100.7",
+            "2001:db8::/32",
+            "2001:db8:1::/64",
+        ]
+        .iter()
+        .map(|s| s.parse().unwrap())
+        .collect();
+        assert_eq!(
+            Extent::of(&nets),
+            Extent {
+                prefixes: 4,
+                v4_addresses: 257,
+                v6_networks: 65_536,
+            }
+        );
+        assert_eq!(
+            Extent::of(&["2001::/16".parse().unwrap()]).v6_networks,
+            1 << 32
+        );
+        assert_eq!(
+            Extent::of(&["0.0.0.0/0".parse().unwrap()]).v4_addresses,
+            1 << 32
+        );
+        assert_eq!(geo_without().coverage(&["CN".to_owned()], &[]), None);
+    }
+
+    fn geo_without() -> Geo {
+        Geo::open(Some(Path::new("/nonexistent/a.mmdb")), None).unwrap()
+    }
+
+    /// With a real country database: `BARBICAN_TEST_GEO=<dir with dbip-country-lite.mmdb>`.
+    #[test]
+    fn coverage_with_a_database() {
+        let Ok(dir) = std::env::var("BARBICAN_TEST_GEO") else {
+            return;
+        };
+        let geo = Geo::open(
+            Some(&PathBuf::from(dir).join("dbip-country-lite.mmdb")),
+            None,
+        )
+        .unwrap();
+        let countries = ["CN".to_owned(), "DE".to_owned()];
+        let continents = ["SA".to_owned()];
+        let start = std::time::Instant::now();
+        let first = geo.coverage(&countries, &continents).unwrap();
+        let read = start.elapsed();
+        let start = std::time::Instant::now();
+        let again = geo.coverage(&countries, &continents).unwrap();
+        let cached = start.elapsed();
+        assert_eq!(first, again);
+        assert_eq!(
+            first.total.prefixes,
+            geo.networks_of(&countries, &continents).len() as u64
+        );
+        let (_, continent, cn) = &first.countries[0];
+        assert_eq!(continent.as_deref(), Some("AS"));
+        // China has more than 300 million IPv4 addresses, the whole space 2^32.
+        assert!(cn.v4_addresses > 300_000_000, "{cn:?}");
+        assert!(first.known.v4_addresses > 3_000_000_000 && first.known.v4_addresses < 1 << 32);
+        let sum: u64 = first
+            .countries
+            .iter()
+            .map(|c| c.2.v4_addresses)
+            .sum::<u64>()
+            + first.continents[0].1.v4_addresses;
+        assert_eq!(first.total.v4_addresses, sum);
+        assert!(
+            cached < Duration::from_secs(1),
+            "read {read:?}, then {cached:?}"
+        );
     }
 
     /// With real databases: `BARBICAN_TEST_GEO=<dir with dbip-country-lite.mmdb and dbip-asn-lite.mmdb>`.
