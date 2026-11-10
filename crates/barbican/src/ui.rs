@@ -865,6 +865,11 @@ async fn policy_update(app: &Arc<App>, mut policy: Policy) -> Result<Policy, Rpc
             )));
         }
     }
+    if policy.asn_lengths.iter().any(|l| l.asn == 0)
+        || policy.list_lengths.iter().any(|l| l.list.trim().is_empty())
+    {
+        return Err(bad("an ASN length needs a number, a list length a list"));
+    }
     for l in &mut policy.country_lengths {
         if !code(&mut l.country) {
             return Err(bad(format!("{:?} is not a country code", l.country)));

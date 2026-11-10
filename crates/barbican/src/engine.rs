@@ -19,7 +19,7 @@ use crate::app::{App, now};
 use crate::db::{self, BanRow};
 use crate::geo::Info;
 use crate::parse::Parser;
-use crate::rules::{Action, Rule, RuleSet};
+use crate::rules::{Action, Rule, RuleSet, Who};
 use crate::signal::{Event, Hit, Kind};
 use crate::state::Trusted;
 
@@ -354,9 +354,13 @@ impl Engine {
         };
         let previous = u32::try_from(db::bans_of(tx, ip_id).await?).unwrap_or(u32::MAX);
         let Some(length) = self.app.state.read().ok().map(|state| {
-            state
-                .policy
-                .length(rule.ban, info.country.as_deref(), previous)
+            let listed = state.listed(hit.ip);
+            let who = Who {
+                country: info.country.as_deref(),
+                asn: info.asn,
+                listed: &listed,
+            };
+            state.policy.length(rule.ban, &who, previous)
         }) else {
             return Ok(());
         };
