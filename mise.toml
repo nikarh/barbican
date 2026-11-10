@@ -3,12 +3,12 @@
 node = "26.13.0"
 git-cliff = "2.14.2"
 cargo-deny = "0.20.2"
-"cargo:sqlx-cli" = { version = "0.9.0", default-features = "false", features = "sqlite" }
 # Static (musl) builds for any Linux and for routers, C code (the bundled SQLite) included.
 zig = "0.17.1"
 # Packages (.deb, Arch Linux) of the agent.
 nfpm = "2.48.0"
-"cargo:cargo-zigbuild" = "0.24.1"
+# Its release binary: `cargo:` would compile it wherever it is missing.
+"github:rust-cross/cargo-zigbuild" = "0.24.1"
 
 [env]
 BARBICAN_DEV_DIR = "{{config_root}}/dev"
@@ -86,6 +86,8 @@ run = "e2e/run.sh"
 
 [tasks."db:prepare"]
 description = "Refresh .sqlx/ after changing a query or migration"
+# Only here: it has no release binaries, and compiling it takes a minute wherever mise installs it.
+tools = { "cargo:sqlx-cli" = { version = "0.9.0", default-features = "false", features = "sqlite" } }
 run = """
 set -euo pipefail
 mkdir -p dev
