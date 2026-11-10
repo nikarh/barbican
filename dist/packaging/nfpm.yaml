@@ -1,0 +1,51 @@
+# nfpm config of the agent's .deb and Arch Linux packages, built by scripts/package.sh from a release binary
+# (static, so no library dependencies). That script sets the variables and stages the files in target/package.
+name: barbican
+arch: ${BARBICAN_ARCH}
+version: ${BARBICAN_PKG_VERSION}
+# Taken as is: scripts/package.sh makes it a valid deb or Arch version.
+version_schema: none
+release: 1
+section: net
+priority: optional
+maintainer: Nikolay Arhipov <nikarh@users.noreply.github.com>
+description: Bans addresses that abuse services, from their logs, with nftables; with a web UI, country blocks and blocklists
+homepage: https://github.com/nikarh/barbican
+license: MIT OR Apache-2.0
+
+overrides:
+  deb:
+    depends:
+      - nftables
+    scripts:
+      postinstall: dist/packaging/deb/postinst
+      preremove: dist/packaging/deb/prerm
+      postremove: dist/packaging/deb/postrm
+  archlinux:
+    depends:
+      - nftables
+    scripts:
+      postinstall: dist/packaging/arch/post_install.sh
+      preremove: dist/packaging/arch/pre_remove.sh
+      postremove: dist/packaging/arch/post_remove.sh
+
+contents:
+  - src: target/package/barbican
+    dst: /usr/bin/barbican
+    file_info:
+      mode: 0755
+  - src: dist/barbican.service
+    dst: /usr/lib/systemd/system/barbican.service
+    file_info:
+      mode: 0644
+  - src: dist/config.toml
+    dst: /etc/barbican/config.toml
+    type: config|noreplace
+    file_info:
+      mode: 0644
+  - src: README.md
+    dst: /usr/share/doc/barbican/README.md
+  - src: LICENSE-MIT
+    dst: /usr/share/licenses/barbican/LICENSE-MIT
+  - src: LICENSE-APACHE
+    dst: /usr/share/licenses/barbican/LICENSE-APACHE

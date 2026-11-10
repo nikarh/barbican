@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 mod uci;
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+const VERSION: &str = env!("BARBICAN_VERSION");
 const DEFAULT_CONFIG: &str = "/etc/config/barbican";
 /// How long an upstream holds a poll; the request times out a little later.
 const WAIT: u64 = 55;
