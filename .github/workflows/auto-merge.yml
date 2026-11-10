@@ -39,6 +39,7 @@ jobs:
             dependency audit
             end-to-end
             dependency review
+            packages
         run: |
           set -euo pipefail
 
