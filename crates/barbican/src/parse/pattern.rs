@@ -52,6 +52,7 @@ impl Pattern {
                 status: status.and_then(|s| s.parse().ok()).unwrap_or(0),
                 host,
                 routed: None,
+                router: None,
                 user_agent: agent,
             }),
             RegexKind::AuthFailure => Event::AuthFailure { user },
