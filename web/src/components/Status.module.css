@@ -1,0 +1,77 @@
+/* Label and value pairs. */
+.facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 14px;
+  margin: 10px 0 0;
+  font-size: 13px;
+}
+
+.facts dt {
+  color: var(--ink-faint);
+}
+
+.facts dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.faint {
+  color: var(--ink-faint);
+}
+
+/* Two panels side by side when there is room. */
+.pair {
+  display: grid;
+  gap: var(--mantine-spacing-md);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 62em) {
+  .pair {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
+/* A line of a status list: a dot, a label, what it is, and when. */
+.line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.dot {
+  flex: none;
+  align-self: center;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--status-bad);
+}
+
+.dot[data-ok='true'] {
+  background: var(--status-good);
+}
+
+.label {
+  flex: none;
+  width: 74px;
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+
+.value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.when {
+  margin-left: auto;
+  flex: none;
+  color: var(--ink-faint);
+  font-size: 12px;
+}

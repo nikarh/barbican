@@ -30,6 +30,7 @@ import {
 import type { BlockCoverage, Extent, FeedDef, Policy } from '../api/generated/model'
 import { AddPicker, EditableList } from '../components/EditableList'
 import { COUNTRY_SELECT } from '../components/countrySelect'
+import { GeoDatabases } from '../components/Geo'
 import { CountryLabel, LengthInput, LengthSelect, Panel } from '../components/ui'
 import {
   ago,
@@ -906,7 +907,7 @@ function FeedsTab() {
   )
 }
 
-const TABS = ['policy', 'lists', 'feeds', 'about'] as const
+const TABS = ['policy', 'lists', 'feeds', 'geoip', 'about'] as const
 type Tab = (typeof TABS)[number]
 
 export function SettingsScreen({ tab }: { tab: string | null }) {
@@ -924,6 +925,7 @@ export function SettingsScreen({ tab }: { tab: string | null }) {
         <Tabs.Tab value="policy">Lengths and countries</Tabs.Tab>
         <Tabs.Tab value="lists">Allow and deny</Tabs.Tab>
         <Tabs.Tab value="feeds">Blocklists</Tabs.Tab>
+        <Tabs.Tab value="geoip">Geolocation</Tabs.Tab>
         <Tabs.Tab value="about">About</Tabs.Tab>
       </Tabs.List>
       <Tabs.Panel value="policy">
@@ -934,6 +936,9 @@ export function SettingsScreen({ tab }: { tab: string | null }) {
       </Tabs.Panel>
       <Tabs.Panel value="feeds">
         <FeedsTab />
+      </Tabs.Panel>
+      <Tabs.Panel value="geoip">
+        <GeoDatabases />
       </Tabs.Panel>
       <Tabs.Panel value="about">
         <Stack gap={6} fz={14}>

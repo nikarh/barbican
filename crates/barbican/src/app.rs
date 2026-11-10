@@ -48,10 +48,21 @@ pub struct App {
     pub unsaved_cursors: Mutex<BTreeMap<String, Arc<Mutex<Option<String>>>>>,
     pub edges: Mutex<BTreeMap<String, EdgeStatus>>,
     pub firewall: Mutex<FirewallStatus>,
+    pub geo_updates: Mutex<GeoUpdates>,
     pub http: reqwest::Client,
     pub dry_run: bool,
     /// The edge API's certificate fingerprint, once it listens.
     pub edge_fingerprint: std::sync::OnceLock<String>,
+}
+
+/// How the downloads of the geolocation databases went.
+#[derive(Debug, Default, Clone)]
+pub struct GeoUpdates {
+    /// When the agent last looked for databases due a download.
+    pub checked: Option<i64>,
+    /// Why the last download of the country database failed, while it keeps failing.
+    pub country_error: Option<String>,
+    pub asn_error: Option<String>,
 }
 
 /// The HTTP client for downloads (geolocation databases, blocklists), with rustls on ring.
@@ -101,6 +112,7 @@ impl App {
                 enabled,
                 ..FirewallStatus::default()
             }),
+            geo_updates: Mutex::new(GeoUpdates::default()),
             http,
             dry_run,
             edge_fingerprint: std::sync::OnceLock::new(),

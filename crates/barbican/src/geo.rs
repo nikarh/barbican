@@ -86,6 +86,30 @@ pub struct Coverage {
     pub known: Extent,
 }
 
+/// What a database says about itself (its metadata).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DbInfo {
+    /// Its type, e.g. `DBIP-Country-Lite` or `GeoLite2-ASN`.
+    pub kind: String,
+    /// Its English description.
+    pub description: Option<String>,
+    /// When it was built (unix time).
+    pub built: i64,
+}
+
+fn info(reader: &Reader<Vec<u8>>) -> DbInfo {
+    let m = reader.metadata();
+    DbInfo {
+        kind: m.database_type.clone(),
+        description: m
+            .description
+            .get("en")
+            .or_else(|| m.description.values().next())
+            .cloned(),
+        built: i64::try_from(m.build_epoch).unwrap_or(i64::MAX),
+    }
+}
+
 impl std::fmt::Debug for Geo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Geo")
@@ -134,6 +158,18 @@ impl Geo {
     #[must_use]
     pub fn has_asns(&self) -> bool {
         self.asn.is_some()
+    }
+
+    /// The country database in use.
+    #[must_use]
+    pub fn country_info(&self) -> Option<DbInfo> {
+        self.country.as_ref().map(info)
+    }
+
+    /// The ASN database in use.
+    #[must_use]
+    pub fn asn_info(&self) -> Option<DbInfo> {
+        self.asn.as_ref().map(info)
     }
 
     #[must_use]
@@ -330,14 +366,28 @@ fn year_month(unix: u64) -> (i64, u32) {
     (year, u32::try_from(month).unwrap_or(1))
 }
 
-/// Whether a database file is missing or older than a month.
+/// How old a downloaded database gets before the next download: DB-IP publishes a new one every month.
+pub const MAX_AGE: Duration = Duration::from_hours(31 * 24);
+
+/// How often the agent looks for databases due a download.
+pub const CHECK_EVERY: Duration = Duration::from_hours(24);
+
+/// When a database file was last written (unix time), if it exists.
+#[must_use]
+pub fn written(path: &Path) -> Option<i64> {
+    let t = std::fs::metadata(path).and_then(|m| m.modified()).ok()?;
+    let secs = t.duration_since(SystemTime::UNIX_EPOCH).ok()?.as_secs();
+    i64::try_from(secs).ok()
+}
+
+/// Whether a database file is missing or older than [`MAX_AGE`].
 #[must_use]
 pub fn stale(path: &Path) -> bool {
     std::fs::metadata(path)
         .and_then(|m| m.modified())
         .ok()
         .and_then(|t| SystemTime::now().duration_since(t).ok())
-        .is_none_or(|age| age > Duration::from_hours(31 * 24))
+        .is_none_or(|age| age > MAX_AGE)
 }
 
 /// Downloads DB-IP's Lite database (`country` or `asn`) of this month (or the previous one, early in a month) to
@@ -424,6 +474,8 @@ mod tests {
     fn without_databases() {
         let geo = Geo::open(Some(Path::new("/nonexistent/a.mmdb")), None).unwrap();
         assert_eq!(geo.lookup("192.0.2.1".parse().unwrap()), Info::default());
+        assert_eq!(geo.country_info(), None);
+        assert_eq!(written(Path::new("/nonexistent/a.mmdb")), None);
         assert_eq!(geo.networks_of(&["CN".to_owned()], &[]), Vec::<Net>::new());
     }
 
@@ -517,6 +569,10 @@ mod tests {
         .unwrap();
         let info = geo.lookup("1.1.1.1".parse().unwrap());
         assert!(info.asn == Some(13335), "{info:?}");
+        let country = geo.country_info().unwrap();
+        assert!(country.kind.contains("Country"), "{country:?}");
+        assert!(country.built > 1_600_000_000, "{country:?}");
+        assert!(geo.asn_info().unwrap().kind.contains("ASN"));
         let start = std::time::Instant::now();
         let nets = geo.networks_of(&["CN".to_owned()], &["SA".to_owned()]);
         let v4 = nets

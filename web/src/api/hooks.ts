@@ -48,6 +48,14 @@ export function useCoverage(countries: string[], continents: string[]) {
   })
 }
 
+export function useGeoStatus() {
+  return useQuery({
+    queryKey: ['geoip'],
+    queryFn: () => rpc.call('geoip.status'),
+    refetchInterval: 60_000,
+  })
+}
+
 export function useFeeds() {
   return useQuery({
     queryKey: ['feeds'],

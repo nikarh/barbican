@@ -156,6 +156,27 @@ export function remaining(until: number | null, now: number = Date.now()): strin
   return `${approx(seconds)} left`
 }
 
+/** "in 3d", "now": how long until a time. */
+export function fromNow(unix: number, now: number = Date.now()): string {
+  const seconds = unix - now / 1000
+  if (seconds < 45) return 'now'
+  return `in ${approx(seconds)}`
+}
+
+/** "1 Nov 2026". */
+export function date(unix: number): string {
+  return new Date(unix * 1000).toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  })
+}
+
+/** "Nov 2026". */
+export function month(unix: number): string {
+  return new Date(unix * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'short' })
+}
+
 export function dateTime(unix: number): string {
   return new Date(unix * 1000).toLocaleString(undefined, {
     year: 'numeric',
