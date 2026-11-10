@@ -130,7 +130,8 @@ pub fn open_geo(config: &Config) -> geo::Geo {
     }
 }
 
-/// Downloads stale geolocation databases (once a day it checks), then recomputes what depends on them.
+/// Downloads stale geolocation databases (it checks once a day, from the start), then recomputes what depends on
+/// them.
 async fn geo_updates(app: Arc<App>) {
     if !app.config.geoip.download {
         return;
@@ -145,13 +146,25 @@ async fn geo_updates(app: Arc<App>) {
             if !geo::stale(path) {
                 continue;
             }
-            match geo::download(&app.http, kind, path).await {
+            let result = geo::download(&app.http, kind, path).await;
+            match &result {
                 Ok(()) => {
                     tracing::info!(path = %path.display(), "Geolocation database downloaded");
                     changed = true;
                 }
                 Err(e) => tracing::warn!(error = %e, "Downloading a geolocation database failed"),
             }
+            if let Ok(mut updates) = app.geo_updates.lock() {
+                let error = result.err().map(|e| e.to_string());
+                if kind == "country" {
+                    updates.country_error = error;
+                } else {
+                    updates.asn_error = error;
+                }
+            }
+        }
+        if let Ok(mut updates) = app.geo_updates.lock() {
+            updates.checked = Some(now());
         }
         if changed {
             let geo = open_geo(&app.config);
@@ -160,7 +173,7 @@ async fn geo_updates(app: Arc<App>) {
             }
             firewall::refresh_countries(&app).await;
         }
-        tokio::time::sleep(Duration::from_hours(24)).await;
+        tokio::time::sleep(geo::CHECK_EVERY).await;
     }
 }
 

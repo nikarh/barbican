@@ -1,8 +1,9 @@
 import { Alert, Anchor, Group, SimpleGrid, Stack, Table, Text } from '@mantine/core'
 
-import { useLive, useOverview } from '../api/hooks'
+import { useGeoStatus, useLive, useOverview } from '../api/hooks'
 import type { Live } from '../api/generated/model'
 import { Bars } from '../components/Bars'
+import { GeoSummary } from '../components/Geo'
 import { Country, Panel, Stat } from '../components/ui'
 import { ago, count, KIND_LABELS, remaining } from '../lib/format'
 import { href, ipHref } from '../lib/router'
@@ -57,6 +58,7 @@ function LiveFeed() {
 
 export function OverviewScreen() {
   const overview = useOverview()
+  const geo = useGeoStatus()
   const now = useNow(30_000)
   if (overview.error) return <Alert color="red">{overview.error.message}</Alert>
   const o = overview.data
@@ -160,6 +162,17 @@ export function OverviewScreen() {
                 <span className="num">{count(fw.listed)}</span>
               </Group>
             </Stack>
+          </Panel>
+
+          <Panel
+            title="Data"
+            right={
+              <Anchor href={href('settings', { tab: 'geoip' })} fz={13}>
+                Details
+              </Anchor>
+            }
+          >
+            <Stack gap={6}>{geo.data && <GeoSummary geo={geo.data} now={now} />}</Stack>
           </Panel>
 
           <Panel title="Sources">

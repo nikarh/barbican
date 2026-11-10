@@ -164,6 +164,55 @@ blocks: number,
  */
 listed: number, droppedBlocked: number, droppedListed: number, };
 
+export type GeoDatabase = { 
+/**
+ * Where it is read from; `null`: not configured.
+ */
+path: string | null, 
+/**
+ * What the database in use says about itself; `null`: none is in use (missing, or unreadable).
+ */
+kind: string | null, description: string | null, 
+/**
+ * When it was built.
+ */
+built: number | null, 
+/**
+ * When its file was written: downloaded, or put there.
+ */
+written: number | null, 
+/**
+ * With downloads on: when it is due again (a missing one is due now). The download happens at the first
+ * daily check from then.
+ */
+due: number | null, 
+/**
+ * Why the last download failed, while it keeps failing.
+ */
+error: string | null, };
+
+/**
+ * The geolocation databases, and how they are kept up to date.
+ */
+export type GeoStatus = { 
+/**
+ * `geoip.download`: DB-IP's free databases are downloaded when missing, and when a month old.
+ */
+download: boolean, 
+/**
+ * When the agent last looked for databases due a download; `null` before the first time (or without
+ * downloads). It looks once a day, from its start.
+ */
+checked: number | null, 
+/**
+ * When it looks next.
+ */
+nextCheck: number | null, 
+/**
+ * How old a database gets before it is downloaded again, in seconds.
+ */
+maxAge: number, country: GeoDatabase, asn: GeoDatabase, };
+
 export type IpDetail = { ip: string, country: string | null, continent: string | null, asn: number | null, asName: string | null, 
 /**
  * `null`: never seen doing anything a rule matched.

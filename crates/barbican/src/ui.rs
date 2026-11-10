@@ -11,8 +11,8 @@ use sqlx::{QueryBuilder, Row, Sqlite};
 use crate::api::{
     Activity, ActivitySort, BanCreateParams, BansParams, BlockCoverage, Call, Count,
     CoverageParams, DayStat, Entry, EntrySaveParams, ErrorCode, EventRow, EventsParams, Feed,
-    IpActivityParams, IpDetail, IpFilter, IpRow, IpSort, IpsParams, Live, Meta, Overview, Page,
-    PlaceExtent, RpcError, TrustInfo,
+    GeoDatabase, GeoStatus, IpActivityParams, IpDetail, IpFilter, IpRow, IpSort, IpsParams, Live,
+    Meta, Overview, Page, PlaceExtent, RpcError, TrustInfo,
 };
 use crate::app::{App, now};
 use crate::db::{self, BanRow, EntryRow};
@@ -94,6 +94,7 @@ pub async fn call(app: &Arc<App>, call: Call) -> Result<Value, RpcError> {
         ),
         Call::PolicyUpdate(policy) => json(policy_update(app, policy).await?),
         Call::CountriesCoverage(p) => json(coverage(app, p).await?),
+        Call::GeoipStatus => json(geo_status(app)),
         Call::FeedsList => json(feeds(app)),
         Call::FeedsPresets => json(crate::feeds::presets()),
         Call::FeedSave(def) => json(feed_save(app, def).await?),
@@ -1005,6 +1006,46 @@ async fn coverage(app: &App, p: CoverageParams) -> Result<BlockCoverage, RpcErro
         total: c.total.into(),
         known: c.known.into(),
     })
+}
+
+fn geo_status(app: &App) -> GeoStatus {
+    let geo = app.geo();
+    let updates = app
+        .geo_updates
+        .lock()
+        .map(|u| u.clone())
+        .unwrap_or_default();
+    let download = app.config.geoip.download;
+    let max_age = i64::try_from(crate::geo::MAX_AGE.as_secs()).unwrap_or(i64::MAX);
+    let database = |path: Option<&std::path::Path>, info: Option<crate::geo::DbInfo>, error| {
+        let written = path.and_then(crate::geo::written);
+        GeoDatabase {
+            path: path.map(|p| p.display().to_string()),
+            kind: info.as_ref().map(|i| i.kind.clone()),
+            description: info.as_ref().and_then(|i| i.description.clone()),
+            built: info.map(|i| i.built),
+            written,
+            due: (download && path.is_some()).then(|| written.map_or_else(now, |w| w + max_age)),
+            error,
+        }
+    };
+    let check = i64::try_from(crate::geo::CHECK_EVERY.as_secs()).unwrap_or(i64::MAX);
+    GeoStatus {
+        download,
+        checked: updates.checked,
+        next_check: updates.checked.filter(|_| download).map(|c| c + check),
+        max_age,
+        country: database(
+            app.config.geoip.country.as_deref(),
+            geo.country_info(),
+            updates.country_error,
+        ),
+        asn: database(
+            app.config.geoip.asn.as_deref(),
+            geo.asn_info(),
+            updates.asn_error,
+        ),
+    }
 }
 
 fn feed(f: &StateFeed) -> Feed {

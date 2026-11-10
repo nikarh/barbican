@@ -100,6 +100,9 @@ pub enum Call {
     /// first call after the agent started (or loaded a new country database) takes a moment longer.
     #[serde(rename = "countries.coverage")]
     CountriesCoverage(CoverageParams),
+    /// Result: [`GeoStatus`]: the geolocation databases in use, and their downloads.
+    #[serde(rename = "geoip.status")]
+    GeoipStatus,
     /// Result: `Feed[]`.
     #[serde(rename = "feeds.list")]
     FeedsList,
@@ -601,6 +604,50 @@ pub struct Feed {
     /// Prefixes in the last good copy.
     #[cfg_attr(test, ts(type = "number"))]
     pub count: i64,
+    pub error: Option<String>,
+}
+
+/// The geolocation databases, and how they are kept up to date.
+#[derive(Debug, Serialize, Clone)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct GeoStatus {
+    /// `geoip.download`: DB-IP's free databases are downloaded when missing, and when a month old.
+    pub download: bool,
+    /// When the agent last looked for databases due a download; `null` before the first time (or without
+    /// downloads). It looks once a day, from its start.
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub checked: Option<i64>,
+    /// When it looks next.
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub next_check: Option<i64>,
+    /// How old a database gets before it is downloaded again, in seconds.
+    #[cfg_attr(test, ts(type = "number"))]
+    pub max_age: i64,
+    pub country: GeoDatabase,
+    pub asn: GeoDatabase,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct GeoDatabase {
+    /// Where it is read from; `null`: not configured.
+    pub path: Option<String>,
+    /// What the database in use says about itself; `null`: none is in use (missing, or unreadable).
+    pub kind: Option<String>,
+    pub description: Option<String>,
+    /// When it was built.
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub built: Option<i64>,
+    /// When its file was written: downloaded, or put there.
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub written: Option<i64>,
+    /// With downloads on: when it is due again (a missing one is due now). The download happens at the first
+    /// daily check from then.
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub due: Option<i64>,
+    /// Why the last download failed, while it keeps failing.
     pub error: Option<String>,
 }
 

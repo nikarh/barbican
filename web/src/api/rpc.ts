@@ -12,6 +12,7 @@ import type {
   EventRow,
   Feed,
   FeedDef,
+  GeoStatus,
   IpDetail,
   IpRow,
   Live,
@@ -51,6 +52,7 @@ interface Results {
   'policy.get': Policy
   'policy.update': Policy
   'countries.coverage': BlockCoverage
+  'geoip.status': GeoStatus
   'feeds.list': Feed[]
   'feeds.presets': FeedDef[]
   'feed.save': Feed
