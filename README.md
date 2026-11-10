@@ -275,7 +275,9 @@ services:
 - `user`: any uid works; `group_add` is what grants the UI. Connecting to a socket on a read-only mount works.
 - It listens on 8080 (`barbican ui-proxy --listen <address>`), for the agent's socket at
   `/run/barbican-ui/ui.sock` (`--socket <path>`); `/healthz` answers while the proxy runs, and the image's healthcheck (`barbican healthcheck`)
-  asks it. While the agent restarts, the API answers 502 and the UI reconnects.
+  asks it. While the agent can't be reached (stopped, restarting, a missing socket or one the container may not use)
+  the API answers 502, the UI says so and why, and it reconnects on its own. The reason is what the proxy answers on
+  `/api/proxy` (JSON: the socket, and the error with what to check), which works with `curl` too.
 - The `Origin` check is the agent's, on the headers the browser sent: the proxy passes them through unchanged.
 
 ## Development

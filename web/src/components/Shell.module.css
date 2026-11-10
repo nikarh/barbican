@@ -121,6 +121,14 @@
   padding: 16px 16px calc(var(--tabbar-height) + 16px + env(safe-area-inset-bottom));
 }
 
+.content[data-stale] {
+  opacity: 0.5;
+  filter: saturate(0.3);
+  transition:
+    opacity 200ms ease 700ms,
+    filter 200ms ease 700ms;
+}
+
 .tabbar {
   position: fixed;
   left: 0;

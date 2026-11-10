@@ -3,10 +3,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import type { Live } from './generated/model'
-import { rpc, type ConnectionState, type Params, type Result } from './rpc'
+import { rpc, type Connection, type Params, type Result } from './rpc'
 
-export function useConnectionState(): ConnectionState {
-  return useSyncExternalStore(rpc.subscribeState, rpc.getState)
+export function useConnection(): Connection {
+  return useSyncExternalStore(rpc.subscribeState, rpc.getConnection)
 }
 
 export function useMeta() {
