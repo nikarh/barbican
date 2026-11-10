@@ -91,6 +91,7 @@ impl Traefik {
                 status: g(4)?.parse().ok()?,
                 host: None,
                 routed: Some(dash(g(6)?).is_some()),
+                router: dash(g(6)?),
                 user_agent: dash(g(5)?),
             }),
         ))
@@ -115,6 +116,8 @@ impl Traefik {
                 status,
                 host: text(parsed.RequestHost, host).and_then(dash),
                 routed: Some(routed),
+                // The host says it.
+                router: None,
                 user_agent: text(parsed.user_agent, agent).and_then(dash),
             }),
         ))

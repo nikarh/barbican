@@ -45,6 +45,8 @@ pub struct Http<'a> {
     pub host: Option<&'a str>,
     /// Whether the proxy found a route (a known host) for the request; `None` when the log doesn't say.
     pub routed: Option<bool>,
+    /// The proxy's route, when the log has no host: what the request went to (`torrents@docker`).
+    pub router: Option<&'a str>,
     pub user_agent: Option<&'a str>,
 }
 
@@ -144,6 +146,13 @@ impl<'a> Event<'a> {
                 );
                 if h.routed == Some(false) {
                     out.push_str(" (no route)");
+                } else if let (None, Some(router)) = (h.host, h.router) {
+                    // Which service it went to, without the provider (`@docker`).
+                    let _ = write!(
+                        out,
+                        " @{}",
+                        router.split_once('@').map_or(router, |(r, _)| r)
+                    );
                 }
             }
             Self::AuthFailure { user } => out.push_str(user.unwrap_or("")),
@@ -202,9 +211,20 @@ mod tests {
             status: 404,
             host: Some("example.com"),
             routed: Some(false),
+            router: None,
             user_agent: None,
         });
         assert_eq!(http.what(), "GET example.com/.env → 404 (no route)");
+        let routed = Event::Http(Http {
+            method: "GET",
+            path: "/wp-login.php",
+            status: 404,
+            host: None,
+            routed: Some(true),
+            router: Some("torrents@docker"),
+            user_agent: None,
+        });
+        assert_eq!(routed.what(), "GET /wp-login.php → 404 @torrents");
         let long = "é".repeat(400);
         let mut buf = String::from("old");
         Event::Probe { what: &long }.write_what(&mut buf);
