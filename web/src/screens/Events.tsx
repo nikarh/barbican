@@ -1,7 +1,6 @@
 import { Group, Select, Stack, TextInput } from '@mantine/core'
-import { useDebouncedValue, useMediaQuery } from '@mantine/hooks'
+import { useDebouncedValue } from '@mantine/hooks'
 import { IconSearch } from '@tabler/icons-react'
-import type { ColDef } from 'ag-grid-community'
 import { useCallback, useMemo, useState } from 'react'
 
 import { useMeta, useRules } from '../api/hooks'
@@ -10,6 +9,7 @@ import { rpc } from '../api/rpc'
 import { InfiniteGrid } from '../components/Grid'
 import { Country } from '../components/ui'
 import { count, dateTime, KIND_LABELS } from '../lib/format'
+import { columnsFor, useTier, type Column } from '../lib/columns'
 import { navigate } from '../lib/router'
 
 export function EventsScreen() {
@@ -20,7 +20,7 @@ export function EventsScreen() {
   const [source, setSource] = useState<string | null>(null)
   const rules = useRules()
   const meta = useMeta()
-  const wide = useMediaQuery('(min-width: 48em)', true)
+  const tier = useTier()
 
   const ruleName = useCallback(
     (id: number) =>
@@ -28,15 +28,23 @@ export function EventsScreen() {
     [rules.data],
   )
 
-  const columns = useMemo<ColDef<EventRow>[]>(() => {
-    const all: (ColDef<EventRow> & { phone?: boolean })[] = [
+  const columns = useMemo(() => {
+    const all: Column<EventRow>[] = [
       {
         headerName: 'Hour',
         field: 'hour',
-        width: 150,
+        width: 140,
         valueFormatter: (p) => dateTime(Number(p.value ?? 0)),
+        from: 'tablet',
       },
-      { headerName: 'Address', field: 'ip', width: 150, cellClass: 'mono', phone: true },
+      {
+        headerName: 'Address',
+        field: 'ip',
+        width: 140,
+        cellClass: 'mono',
+        from: 'phone',
+        phone: { width: 130 },
+      },
       {
         headerName: '',
         field: 'country',
@@ -53,15 +61,17 @@ export function EventsScreen() {
         headerName: 'What',
         field: 'what',
         flex: 2,
-        minWidth: 220,
+        minWidth: 160,
         cellClass: 'mono',
-        phone: true,
+        from: 'phone',
+        phone: { minWidth: 110 },
       },
       {
         headerName: 'Rule',
         field: 'rule',
         width: 150,
         valueFormatter: (p) => ruleName(Number(p.value ?? 0)),
+        from: 'tablet',
       },
       { headerName: 'Source', field: 'source', width: 100 },
       {
@@ -70,11 +80,12 @@ export function EventsScreen() {
         width: 80,
         type: 'rightAligned',
         valueFormatter: (p) => count(Number(p.value ?? 0)),
-        phone: true,
+        from: 'phone',
+        phone: { width: 70 },
       },
     ]
-    return all.filter((c) => wide || c.phone === true).map(({ phone: _phone, ...c }) => c)
-  }, [wide, ruleName])
+    return columnsFor(all, tier)
+  }, [tier, ruleName])
 
   const fetch = useCallback(
     (offset: number, limit: number) =>

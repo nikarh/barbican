@@ -10,8 +10,8 @@
   inset: 0;
 }
 
-/* Over the grid's body, below its header: placeholder rows while the first page loads, or what there is instead
- * of rows. Opaque, so ag-grid's own placeholder row doesn't show through. */
+/* Over the grid's body, below its header: what there is instead of rows. Opaque, so the placeholder rows don't
+ * show through. */
 .grid > .overlay {
   inset: 39px 1px 1px;
   overflow: hidden;
@@ -34,24 +34,20 @@
   color: var(--ink-faint);
 }
 
-/* Fades in, so a page that comes quickly doesn't flash. */
-.skeleton {
-  animation: appear 200ms ease 120ms both;
+/* A cell of a row still loading. It fades in, so a page that comes quickly doesn't flash. */
+.placeholder {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  animation: appear 200ms ease 150ms both;
+}
+
+.placeholder[data-end] {
+  justify-content: flex-end;
 }
 
 @keyframes appear {
   from {
     opacity: 0;
   }
-}
-
-.skeletonRow {
-  height: 40px;
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: 1fr;
-  align-items: center;
-  gap: 24px;
-  padding: 0 14px;
-  border-bottom: 1px solid var(--hairline);
 }

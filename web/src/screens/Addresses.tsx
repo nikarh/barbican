@@ -1,7 +1,6 @@
 import { Group, SegmentedControl, Select, Stack, TextInput } from '@mantine/core'
-import { useDebouncedValue, useMediaQuery } from '@mantine/hooks'
+import { useDebouncedValue } from '@mantine/hooks'
 import { IconSearch } from '@tabler/icons-react'
-import type { ColDef } from 'ag-grid-community'
 import { useCallback, useMemo, useState } from 'react'
 
 import type { IpRow } from '../api/generated/model'
@@ -10,6 +9,7 @@ import { rpc } from '../api/rpc'
 import { InfiniteGrid } from '../components/Grid'
 import { Country, StatusBadge } from '../components/ui'
 import { ago, count, remaining } from '../lib/format'
+import { columnsFor, useTier, type Column } from '../lib/columns'
 import { navigate } from '../lib/router'
 import { IpScreen } from './Ip'
 
@@ -25,24 +25,26 @@ function List() {
   const [debounced] = useDebouncedValue(query, 300)
   const [filter, setFilter] = useState<IpFilter>('all')
   const [sort, setSort] = useState<IpSort>('lastSeen')
-  const wide = useMediaQuery('(min-width: 48em)', true)
+  const tier = useTier()
 
-  const columns = useMemo<ColDef<IpRow>[]>(() => {
-    const all: (ColDef<IpRow> & { phone?: boolean })[] = [
+  const columns = useMemo(() => {
+    const all: Column<IpRow>[] = [
       {
         headerName: 'Address',
         field: 'ip',
         flex: 1.4,
         minWidth: 140,
         cellClass: 'mono',
-        phone: true,
+        from: 'phone',
+        phone: { minWidth: 130 },
       },
       {
         headerName: 'Country',
         field: 'country',
         width: 100,
         cellRenderer: (p: { value: string | null }) => <Country code={p.value} />,
-        phone: true,
+        from: 'phone',
+        phone: { width: 84 },
       },
       { headerName: 'Network', field: 'asName', flex: 1.4, minWidth: 140 },
       {
@@ -51,13 +53,15 @@ function List() {
         width: 90,
         type: 'rightAligned',
         valueFormatter: (p) => count(Number(p.value ?? 0)),
+        from: 'tablet',
       },
       {
         headerName: 'Last seen',
         field: 'lastSeen',
         width: 110,
         valueFormatter: (p) => ago(Number(p.value ?? 0)),
-        phone: true,
+        from: 'phone',
+        phone: { width: 100 },
       },
       {
         headerName: 'First seen',
@@ -68,6 +72,7 @@ function List() {
       {
         headerName: 'State',
         width: 200,
+        from: 'tablet',
         cellRenderer: (p: { data?: IpRow }) =>
           p.data ? (
             <Group gap={6} wrap="nowrap" h="100%">
@@ -81,8 +86,8 @@ function List() {
           ) : null,
       },
     ]
-    return all.filter((c) => wide || c.phone === true).map(({ phone: _phone, ...c }) => c)
-  }, [wide])
+    return columnsFor(all, tier)
+  }, [tier])
 
   const fetch = useCallback(
     (offset: number, limit: number) =>
