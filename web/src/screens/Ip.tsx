@@ -1,21 +1,185 @@
-import { Alert, Anchor, Badge, Button, Group, Stack, Table, Text, Title } from '@mantine/core'
+import { Alert, Anchor, Badge, Button, Group, Stack, Tabs, Text, Title } from '@mantine/core'
 import { IconArrowLeft } from '@tabler/icons-react'
-import { useMediaQuery } from '@mantine/hooks'
-import { useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 
 import { useAction, useIp, useRules } from '../api/hooks'
-import { BanDialog, Country, Panel } from '../components/ui'
+import type { Activity, Ban, IpDetail, Kind } from '../api/generated/model'
+import type { ActivitySort } from '../api/generated/rpc'
+import { rpc } from '../api/rpc'
+import { InfiniteGrid, type Sort } from '../components/Grid'
+import { BanDialog, Country } from '../components/ui'
+import { columnsFor, useTier, type Column } from '../lib/columns'
 import { ago, count, dateTime, KIND_LABELS, remaining } from '../lib/format'
-import { href } from '../lib/router'
+import { href, navigate } from '../lib/router'
 import { useNow } from '../lib/useNow'
+import classes from './Ip.module.css'
 
-export function IpScreen({ ip }: { ip: string }) {
-  const detail = useIp(ip)
+const SORTS: Record<string, ActivitySort> = {
+  last: 'last',
+  first: 'first',
+  count: 'count',
+  what: 'what',
+}
+
+/** What the address did: a row per what, source and rule, newest first (or as a header sorts it). */
+function ActivityGrid({ d }: { d: IpDetail }) {
   const rules = useRules()
+  const tier = useTier()
+  const ruleName = useCallback(
+    (id: number) =>
+      id === 0 ? '—' : (rules.data?.find((r) => r.id === id)?.name ?? `#${String(id)}`),
+    [rules.data],
+  )
+  const columns = useMemo(() => {
+    const all: Column<Activity>[] = [
+      {
+        headerName: 'Kind',
+        field: 'kind',
+        width: 120,
+        valueFormatter: (p) => KIND_LABELS[p.value as Kind],
+        from: 'tablet',
+      },
+      {
+        headerName: 'What',
+        field: 'what',
+        flex: 2,
+        minWidth: 160,
+        cellClass: 'mono',
+        tooltip: (p) => p.data?.what,
+        sortable: true,
+        from: 'phone',
+        phone: { minWidth: 110 },
+      },
+      {
+        headerName: 'Rule',
+        field: 'rule',
+        width: 150,
+        valueFormatter: (p) => ruleName(Number(p.value ?? 0)),
+        from: 'tablet',
+      },
+      { headerName: 'Source', field: 'source', width: 100 },
+      {
+        headerName: 'Times',
+        field: 'count',
+        width: 90,
+        type: 'rightAligned',
+        valueFormatter: (p) => count(Number(p.value ?? 0)),
+        sortable: true,
+        from: 'phone',
+        phone: { width: 72 },
+      },
+      {
+        headerName: 'First',
+        field: 'first',
+        width: 150,
+        valueFormatter: (p) => dateTime(Number(p.value ?? 0)),
+        sortable: true,
+      },
+      {
+        headerName: 'Last',
+        field: 'last',
+        width: 120,
+        valueFormatter: (p) => ago(Number(p.value ?? 0)),
+        sortable: true,
+        initialSort: 'desc',
+        from: 'phone',
+        phone: { width: 92 },
+      },
+    ]
+    return columnsFor(all, tier)
+  }, [tier, ruleName])
+  const fetch = useCallback(
+    (offset: number, limit: number, sort: Sort | null) =>
+      rpc.call('ip.activity', {
+        ip: d.ip,
+        sort: (sort && SORTS[sort.column]) ?? 'last',
+        ascending: sort !== null && !sort.descending,
+        offset,
+        limit,
+      }),
+    [d.ip],
+  )
+  return (
+    <InfiniteGrid<Activity>
+      columns={columns}
+      fetch={fetch}
+      // New events (or a ban) start it over.
+      query={`${d.ip}|${String(d.hits)}|${String(d.activityCount)}`}
+      empty={{
+        title: 'Nothing recorded',
+        hint: 'What its events matched shows up here: the requests, user names and probes.',
+      }}
+    />
+  )
+}
+
+/** The bans of the address, in force or not, newest first. */
+function BansGrid({ d }: { d: IpDetail }) {
+  const tier = useTier()
+  const columns = useMemo(() => {
+    const all: Column<Ban>[] = [
+      {
+        headerName: 'Blocked',
+        field: 'net',
+        width: 170,
+        cellClass: 'mono',
+        from: 'tablet',
+      },
+      {
+        headerName: 'Reason',
+        field: 'reason',
+        flex: 1,
+        minWidth: 160,
+        tooltip: (p) => p.data?.reason,
+        from: 'phone',
+        phone: { minWidth: 120 },
+      },
+      {
+        headerName: 'Since',
+        field: 'created',
+        width: 150,
+        valueFormatter: (p) => dateTime(Number(p.value ?? 0)),
+        from: 'phone',
+        phone: { width: 110, valueFormatter: (p) => ago(Number(p.value ?? 0)) },
+      },
+      {
+        headerName: 'Ends',
+        width: 150,
+        valueGetter: (p) =>
+          p.data === undefined
+            ? ''
+            : p.data.lifted !== null
+              ? `lifted ${ago(p.data.lifted)}${p.data.liftedBy === null ? '' : ` (${p.data.liftedBy})`}`
+              : remaining(p.data.until),
+        tooltip: (p) => (p.data?.until == null ? undefined : `until ${dateTime(p.data.until)}`),
+        from: 'phone',
+        phone: { width: 100 },
+      },
+    ]
+    return columnsFor(all, tier)
+  }, [tier])
+  const fetch = useCallback(
+    (offset: number, limit: number) =>
+      rpc.call('bans.list', { ip: d.ip, active: false, offset, limit }),
+    [d.ip],
+  )
+  return (
+    <InfiniteGrid<Ban>
+      columns={columns}
+      fetch={fetch}
+      query={`${d.ip}|${String(d.banCount)}|${String(d.activeBan?.id ?? '')}|${String(d.activeBan?.lifted ?? '')}`}
+      empty={{
+        title: 'Never banned',
+        hint: 'A rule bans it once its threshold is reached, or “Ban” does by hand.',
+      }}
+    />
+  )
+}
+
+export function IpScreen({ ip, tab }: { ip: string; tab: string | null }) {
+  const detail = useIp(ip)
   const now = useNow(30_000)
   const [banning, setBanning] = useState(false)
-  const [all, setAll] = useState(false)
-  const wide = useMediaQuery('(min-width: 48em)', true)
   const lift = useAction('ban.lift', 'Ban lifted')
   const allow = useAction('entry.save', 'Saved')
   const untrust = useAction('trust.remove', 'No longer trusted')
@@ -35,10 +199,9 @@ export function IpScreen({ ip }: { ip: string }) {
     )
   const d = detail.data
   if (!d) return back
-  const ruleName = (id: number) =>
-    id === 0 ? '—' : (rules.data?.find((r) => r.id === id)?.name ?? `#${String(id)}`)
+  const current = tab === 'bans' ? 'bans' : 'activity'
   return (
-    <Stack gap="md">
+    <Stack gap="md" className="fill">
       {back}
       <Group justify="space-between" align="flex-start">
         <div>
@@ -52,6 +215,11 @@ export function IpScreen({ ip }: { ip: string }) {
                 {' · '}AS{d.asn} {d.asName}
               </>
             )}
+          </Text>
+          <Text c="var(--ink-faint)" fz={12.5} mt={2}>
+            {d.firstSeen === null
+              ? 'Never seen doing anything a rule matched'
+              : `${count(d.hits)} hits · first seen ${dateTime(d.firstSeen)} · last ${ago(d.lastSeen, now)}`}
           </Text>
           <Group gap={6} mt={8}>
             {d.activeBan && (
@@ -115,88 +283,29 @@ export function IpScreen({ ip }: { ip: string }) {
         </Group>
       </Group>
 
-      <Panel
-        title="What it did"
-        right={
-          <Text fz={12} c="var(--ink-faint)">
-            {d.firstSeen === null
-              ? 'never seen'
-              : `${count(d.hits)} hits · first ${dateTime(d.firstSeen)} · last ${ago(d.lastSeen, now)}`}
-          </Text>
-        }
+      <Tabs
+        value={current}
+        onChange={(v) => {
+          navigate('addresses', { ip, ...(v === 'bans' ? { tab: 'bans' } : {}) }, true)
+        }}
+        keepMounted={false}
+        classNames={{ root: classes.tabs, panel: classes.panel }}
       >
-        {d.activity.length === 0 ? (
-          <Text c="var(--ink-faint)" fz={13}>
-            Nothing recorded.
-          </Text>
-        ) : (
-          <Table.ScrollContainer minWidth={wide ? 560 : 0}>
-            <Table verticalSpacing={5} fz={13} highlightOnHover>
-              <Table.Thead>
-                <Table.Tr>
-                  {wide && <Table.Th>Kind</Table.Th>}
-                  <Table.Th>What</Table.Th>
-                  {wide && <Table.Th>Rule</Table.Th>}
-                  {wide && <Table.Th>Source</Table.Th>}
-                  <Table.Th ta="right">Times</Table.Th>
-                  <Table.Th>Last</Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {(all ? d.activity : d.activity.slice(0, 40)).map((a) => (
-                  <Table.Tr key={`${a.kind}|${a.what}|${a.source}|${String(a.rule)}`}>
-                    {wide && <Table.Td c="var(--ink-dim)">{KIND_LABELS[a.kind]}</Table.Td>}
-                    <Table.Td className="mono" style={{ wordBreak: 'break-all' }}>
-                      {a.what}
-                    </Table.Td>
-                    {wide && <Table.Td>{ruleName(a.rule)}</Table.Td>}
-                    {wide && <Table.Td c="var(--ink-dim)">{a.source}</Table.Td>}
-                    <Table.Td ta="right" className="num">
-                      {count(a.count)}
-                    </Table.Td>
-                    <Table.Td c="var(--ink-dim)">{ago(a.last, now)}</Table.Td>
-                  </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
-            {!all && d.activity.length > 40 && (
-              <Button
-                variant="subtle"
-                size="xs"
-                mt={6}
-                onClick={() => {
-                  setAll(true)
-                }}
-              >
-                Show all {d.activity.length}
-              </Button>
-            )}
-          </Table.ScrollContainer>
-        )}
-      </Panel>
-
-      <Panel title="Bans">
-        {d.bans.length === 0 ? (
-          <Text c="var(--ink-faint)" fz={13}>
-            Never banned.
-          </Text>
-        ) : (
-          <Table verticalSpacing={5} fz={13}>
-            <Table.Tbody>
-              {d.bans.map((b) => (
-                <Table.Tr key={b.id}>
-                  <Table.Td className="mono">{b.net}</Table.Td>
-                  <Table.Td>{b.reason}</Table.Td>
-                  <Table.Td c="var(--ink-dim)">{dateTime(b.created)}</Table.Td>
-                  <Table.Td c="var(--ink-dim)">
-                    {b.lifted !== null ? `lifted (${b.liftedBy ?? ''})` : remaining(b.until, now)}
-                  </Table.Td>
-                </Table.Tr>
-              ))}
-            </Table.Tbody>
-          </Table>
-        )}
-      </Panel>
+        <Tabs.List>
+          <Tabs.Tab value="activity" rightSection={<Counter n={d.activityCount} />}>
+            Activity
+          </Tabs.Tab>
+          <Tabs.Tab value="bans" rightSection={<Counter n={d.banCount} />}>
+            Bans
+          </Tabs.Tab>
+        </Tabs.List>
+        <Tabs.Panel value="activity">
+          <ActivityGrid d={d} />
+        </Tabs.Panel>
+        <Tabs.Panel value="bans">
+          <BansGrid d={d} />
+        </Tabs.Panel>
+      </Tabs>
       <BanDialog
         opened={banning}
         onClose={() => {
@@ -205,5 +314,13 @@ export function IpScreen({ ip }: { ip: string }) {
         initial={d.ip}
       />
     </Stack>
+  )
+}
+
+function Counter({ n }: { n: number }) {
+  return (
+    <Badge variant="light" color="gray" size="sm" className="num">
+      {count(n)}
+    </Badge>
   )
 }

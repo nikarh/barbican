@@ -9,9 +9,10 @@ use serde_json::Value;
 use sqlx::{QueryBuilder, Row, Sqlite};
 
 use crate::api::{
-    Activity, BanCreateParams, BansParams, BlockCoverage, Call, Count, CoverageParams, DayStat,
-    Entry, EntrySaveParams, ErrorCode, EventRow, EventsParams, Feed, IpDetail, IpFilter, IpRow,
-    IpSort, IpsParams, Live, Meta, Overview, Page, PlaceExtent, RpcError, TrustInfo,
+    Activity, ActivitySort, BanCreateParams, BansParams, BlockCoverage, Call, Count,
+    CoverageParams, DayStat, Entry, EntrySaveParams, ErrorCode, EventRow, EventsParams, Feed,
+    IpActivityParams, IpDetail, IpFilter, IpRow, IpSort, IpsParams, Live, Meta, Overview, Page,
+    PlaceExtent, RpcError, TrustInfo,
 };
 use crate::app::{App, now};
 use crate::db::{self, BanRow, EntryRow};
@@ -66,6 +67,7 @@ pub async fn call(app: &Arc<App>, call: Call) -> Result<Value, RpcError> {
         Call::OverviewGet => json(overview(app).await?),
         Call::IpsList(p) => json(ips(app, p).await?),
         Call::IpGet(p) => json(ip(app, &p.ip).await?),
+        Call::IpActivity(p) => json(ip_activity(app, &p).await?),
         Call::EventsList(p) => json(events(app, p).await?),
         Call::BansList(p) => json(bans(app, p).await?),
         Call::BanCreate(p) => json(ban_create(app, p).await?),
@@ -445,41 +447,22 @@ async fn ip(app: &Arc<App>, text: &str) -> Result<IpDetail, RpcError> {
             .fetch_optional(pool)
             .await
             .map_err(internal)?;
-    let (bans, activity) = if let Some((id, ..)) = row {
-        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "{BAN_COLUMNS} WHERE ban.ip = ? ORDER BY ban.id DESC LIMIT 200"
-        )))
-        .bind(id)
-        .fetch_all(pool)
-        .await
-        .map_err(internal)?;
-        let bans = rows.iter().map(ban_of_row).collect::<Result<Vec<_>, _>>()?;
-        let activity: Vec<(i64, String, String, i64, i64, i64, i64)> = sqlx::query_as(
-            "SELECT what.kind, what.text, source.name, event.rule, sum(event.count), min(event.hour), max(event.hour)
-             FROM event JOIN what ON what.id = event.what JOIN source ON source.id = event.source
-             WHERE event.ip = ? GROUP BY event.what, event.source, event.rule ORDER BY max(event.hour) DESC LIMIT 500",
+    let (ban_count, activity_count) = if let Some((id, ..)) = row {
+        let bans: i64 = sqlx::query_scalar("SELECT count(*) FROM ban WHERE ip = ?")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .map_err(internal)?;
+        let activity: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM (SELECT 1 FROM event WHERE ip = ? GROUP BY what, source, rule)",
         )
         .bind(id)
-        .fetch_all(pool)
+        .fetch_one(pool)
         .await
         .map_err(internal)?;
-        let activity = activity
-            .into_iter()
-            .filter_map(|(kind, what, source, rule, count, first, last)| {
-                Some(Activity {
-                    kind: Kind::from_code(kind)?,
-                    what,
-                    source,
-                    rule,
-                    count,
-                    first: first * 3_600,
-                    last: last * 3_600 + 3_599,
-                })
-            })
-            .collect();
         (bans, activity)
     } else {
-        (Vec::new(), Vec::new())
+        (0, 0)
     };
     let state = app.state.read().map_err(internal)?;
     let active_ban = state
@@ -516,9 +499,75 @@ async fn ip(app: &Arc<App>, text: &str) -> Result<IpDetail, RpcError> {
         allowed: state.allowed(ip, now),
         denied: state.denied(ip, now),
         active_ban,
-        bans,
-        activity,
+        ban_count,
+        activity_count,
     })
+}
+
+/// The id of an address the agent has seen, from its text.
+async fn ip_id(pool: &sqlx::SqlitePool, text: &str) -> Result<Option<i64>, RpcError> {
+    let ip: IpAddr = text
+        .trim()
+        .parse()
+        .map_err(|_| bad(format!("{text:?} is not an address")))?;
+    sqlx::query_scalar("SELECT id FROM ip WHERE addr = ?")
+        .bind(db::addr_bytes(barbican_common::net::canonical(ip)))
+        .fetch_optional(pool)
+        .await
+        .map_err(internal)
+}
+
+/// What an address did: its events summed by what, source and rule, a page at a time. The address's events are
+/// read through the primary key (they are its prefix); only they are grouped and sorted.
+async fn ip_activity(app: &Arc<App>, p: &IpActivityParams) -> Result<Page<Activity>, RpcError> {
+    let pool = &app.db.pool;
+    let Some(id) = ip_id(pool, &p.ip).await? else {
+        return Ok(Page {
+            rows: Vec::new(),
+            total: 0,
+        });
+    };
+    let order = match p.sort {
+        ActivitySort::Last => "max(event.hour)",
+        ActivitySort::First => "min(event.hour)",
+        ActivitySort::Count => "sum(event.count)",
+        ActivitySort::What => "what.text",
+    };
+    let direction = if p.ascending { "ASC" } else { "DESC" };
+    let rows: Vec<(i64, String, String, i64, i64, i64, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT what.kind, what.text, source.name, event.rule, sum(event.count), min(event.hour), max(event.hour)
+         FROM event JOIN what ON what.id = event.what JOIN source ON source.id = event.source
+         WHERE event.ip = ? GROUP BY event.what, event.source, event.rule
+         ORDER BY {order} {direction}, event.what, event.source, event.rule LIMIT ? OFFSET ?"
+    )))
+    .bind(id)
+    .bind(limit(p.limit))
+    .bind(i64::from(p.offset))
+    .fetch_all(pool)
+    .await
+    .map_err(internal)?;
+    let total: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM (SELECT 1 FROM event WHERE ip = ? GROUP BY what, source, rule)",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await
+    .map_err(internal)?;
+    let rows = rows
+        .into_iter()
+        .filter_map(|(kind, what, source, rule, count, first, last)| {
+            Some(Activity {
+                kind: Kind::from_code(kind)?,
+                what,
+                source,
+                rule,
+                count,
+                first: first * 3_600,
+                last: last * 3_600 + 3_599,
+            })
+        })
+        .collect();
+    Ok(Page { rows, total })
 }
 
 fn events_where(qb: &mut QueryBuilder<Sqlite>, p: &EventsParams) -> Result<(), RpcError> {
@@ -593,15 +642,24 @@ async fn events(app: &Arc<App>, p: EventsParams) -> Result<Page<EventRow>, RpcEr
     Ok(Page { rows, total })
 }
 
-fn bans_where(qb: &mut QueryBuilder<Sqlite>, p: &BansParams, now: i64) {
+fn bans_where(qb: &mut QueryBuilder<Sqlite>, p: &BansParams, now: i64) -> Result<(), RpcError> {
     qb.push(" WHERE 1 = 1");
+    if let Some(ip) = p.ip.as_deref().filter(|s| !s.is_empty()) {
+        let ip: IpAddr = ip
+            .trim()
+            .parse()
+            .map_err(|_| bad(format!("{ip:?} is not an address")))?;
+        qb.push(" AND ban.ip = (SELECT id FROM ip WHERE addr = ");
+        qb.push_bind(db::addr_bytes(barbican_common::net::canonical(ip)));
+        qb.push(")");
+    }
     if p.active {
         qb.push(" AND ban.lifted IS NULL AND (ban.until IS NULL OR ban.until > ");
         qb.push_bind(now);
         qb.push(")");
     }
     let Some(query) = p.query.as_deref().map(str::trim).filter(|q| !q.is_empty()) else {
-        return;
+        return Ok(());
     };
     if let Some((first, last)) = search_range(query) {
         qb.push(" AND length(ip.addr) = ");
@@ -617,12 +675,13 @@ fn bans_where(qb: &mut QueryBuilder<Sqlite>, p: &BansParams, now: i64) {
         qb.push(" AND ban.reason LIKE ");
         qb.push_bind(format!("%{query}%"));
     }
+    Ok(())
 }
 
 async fn bans(app: &Arc<App>, p: BansParams) -> Result<Page<crate::api::Ban>, RpcError> {
     let now = now();
     let mut qb = QueryBuilder::<Sqlite>::new(BAN_COLUMNS);
-    bans_where(&mut qb, &p, now);
+    bans_where(&mut qb, &p, now)?;
     qb.push(" ORDER BY ban.id DESC LIMIT ");
     qb.push_bind(limit(p.limit));
     qb.push(" OFFSET ");
@@ -630,7 +689,7 @@ async fn bans(app: &Arc<App>, p: BansParams) -> Result<Page<crate::api::Ban>, Rp
     let rows = qb.build().fetch_all(&app.db.pool).await.map_err(internal)?;
     let mut count =
         QueryBuilder::<Sqlite>::new("SELECT count(*) FROM ban LEFT JOIN ip ON ip.id = ban.ip");
-    bans_where(&mut count, &p, now);
+    bans_where(&mut count, &p, now)?;
     let total: i64 = count
         .build_query_scalar()
         .fetch_one(&app.db.pool)
