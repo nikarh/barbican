@@ -3,6 +3,7 @@
 // Calls made in the same tick go out together as one frame (a batch); each resolves on its own as the server answers
 // it. Subscriptions are re-established after a reconnect.
 
+import { diagnose, type Problem } from './diagnose'
 import type {
   Ban,
   Entry,
@@ -78,6 +79,19 @@ export class RpcError extends Error {
 
 export type ConnectionState = 'connecting' | 'open' | 'closed'
 
+/** The connection, for the UI: whether it's open and, while it isn't, what's known about why. */
+export interface Connection {
+  state: ConnectionState
+  /** Attempts that failed since the connection was last open. */
+  failures: number
+  /** When (ms) the next attempt starts, while closed. */
+  retryAt: number | null
+  /** When (ms) the connection was last open, while it isn't; `null` when it never was. */
+  lostAt: number | null
+  /** Why it fails, once known. */
+  problem: Problem | null
+}
+
 interface Pending {
   resolve: (value: unknown) => void
   reject: (error: RpcError) => void
@@ -93,7 +107,15 @@ const MAX_BACKOFF_MS = 10_000
 
 export class RpcClient {
   private socket: WebSocket | null = null
-  private state: ConnectionState = 'connecting'
+  private connection: Connection = {
+    state: 'connecting',
+    failures: 0,
+    retryAt: null,
+    lostAt: null,
+    problem: null,
+  }
+  private retryTimer: number | null = null
+  private diagnosis = 0
   private readonly listeners = new Set<() => void>()
   private readonly pending = new Map<string, Pending>()
   private readonly subscriptions = new Map<string, Subscription>()
@@ -102,10 +124,17 @@ export class RpcClient {
   private nextId = 1
   private attempt = 0
   private readonly url: string
+  private readonly diagnose: () => Promise<Problem>
 
-  constructor(url: string) {
+  constructor(url: string, diagnose: () => Promise<Problem>) {
     this.url = url
+    this.diagnose = diagnose
     this.connect()
+    // Back online, or back in front of the user: no need to wait out the backoff.
+    window.addEventListener('online', this.retry)
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') this.retry()
+    })
   }
 
   // Connection state, for useSyncExternalStore.
@@ -114,22 +143,29 @@ export class RpcClient {
     return () => this.listeners.delete(listener)
   }
 
-  readonly getState = (): ConnectionState => this.state
+  readonly getConnection = (): Connection => this.connection
 
-  private setState(state: ConnectionState): void {
-    if (this.state === state) return
-    this.state = state
+  private update(change: Partial<Connection>): void {
+    this.connection = { ...this.connection, ...change }
     for (const listener of this.listeners) listener()
   }
 
+  /** Reconnects now instead of when the backoff ends, while closed. */
+  readonly retry = (): void => {
+    if (this.connection.state !== 'closed') return
+    if (this.retryTimer !== null) window.clearTimeout(this.retryTimer)
+    this.retryTimer = null
+    this.connect()
+  }
+
   private connect(): void {
-    this.setState('connecting')
+    this.update({ state: 'connecting', retryAt: null })
     const socket = new WebSocket(this.url)
     this.socket = socket
 
     socket.addEventListener('open', () => {
       this.attempt = 0
-      this.setState('open')
+      this.update({ state: 'open', failures: 0, lostAt: null, problem: null })
       // Resubscribe under the same ids, ahead of anything queued while offline.
       const queued = new Set(this.queue.map((r) => r.id))
       const resubscribe = [...this.subscriptions]
@@ -147,7 +183,23 @@ export class RpcClient {
     socket.addEventListener('close', () => {
       if (this.socket !== socket) return
       this.socket = null
-      this.setState('closed')
+      const delay = Math.min(MAX_BACKOFF_MS, 500 * 2 ** this.attempt)
+      this.attempt += 1
+      const { state, failures, lostAt } = this.connection
+      this.update({
+        state: 'closed',
+        failures: failures + 1,
+        retryAt: Date.now() + delay,
+        lostAt: state === 'open' ? Date.now() : lostAt,
+      })
+      this.diagnosis += 1
+      const diagnosis = this.diagnosis
+      void this.diagnose().then((problem) => {
+        // Stale once a later one started, or the connection is back.
+        if (diagnosis === this.diagnosis && this.connection.state !== 'open') {
+          this.update({ problem })
+        }
+      })
       // Calls still queued were never sent: they go out once connected. Those sent are lost.
       const queued = new Set(this.queue.map((r) => r.id))
       for (const [id, p] of this.pending) {
@@ -157,9 +209,8 @@ export class RpcClient {
           p.reject(new RpcError('disconnected', 'The connection to the agent was lost'))
         }
       }
-      const delay = Math.min(MAX_BACKOFF_MS, 500 * 2 ** this.attempt)
-      this.attempt += 1
-      window.setTimeout(() => {
+      this.retryTimer = window.setTimeout(() => {
+        this.retryTimer = null
         this.connect()
       }, delay)
     })
@@ -249,7 +300,7 @@ export class RpcClient {
     return () => {
       if (!this.subscriptions.delete(id)) return
       this.pending.delete(id)
-      if (this.state === 'open') {
+      if (this.connection.state === 'open') {
         void this.call('unsubscribe', { id }).catch(() => undefined)
       }
     }
@@ -259,4 +310,6 @@ export class RpcClient {
 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
 // Relative to the page, so that the app also works under a path prefix behind a proxy.
 const base = new URL('.', window.location.href).pathname
-export const rpc = new RpcClient(`${protocol}//${window.location.host}${base}api/ws`)
+export const rpc = new RpcClient(`${protocol}//${window.location.host}${base}api/ws`, () =>
+  diagnose(base),
+)

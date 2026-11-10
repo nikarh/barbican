@@ -8,8 +8,9 @@ import {
 } from '@tabler/icons-react'
 import type { ReactNode } from 'react'
 
-import { useConnectionState, useMeta } from '../api/hooks'
+import { useConnection, useMeta } from '../api/hooks'
 import { href, type Screen } from '../lib/router'
+import { ConnectionBanner } from './ConnectionBanner'
 import classes from './Shell.module.css'
 
 interface Tab {
@@ -29,8 +30,6 @@ const TABS: Tab[] = [
   { screen: 'settings', label: 'Settings', icon: IconAdjustments, phone: true },
 ]
 
-const CONNECTION_LABEL = { open: 'Live', connecting: 'Connecting', closed: 'Offline' } as const
-
 export function Logo() {
   return (
     <svg viewBox="0 0 32 32" width="18" height="18" aria-hidden="true">
@@ -43,8 +42,13 @@ export function Logo() {
 }
 
 export function Shell({ screen, children }: { screen: Screen; children: ReactNode }) {
-  const connection = useConnectionState()
+  const connection = useConnection()
   const meta = useMeta()
+  // Not connected after at least one attempt failed: say so, and that what's shown isn't live.
+  const offline = connection.state !== 'open' && connection.failures > 0
+  let label = 'Live'
+  if (offline) label = 'Offline'
+  else if (connection.state !== 'open') label = 'Connecting'
   return (
     <>
       <header className={classes.header}>
@@ -78,12 +82,17 @@ export function Shell({ screen, children }: { screen: Screen; children: ReactNod
             </span>
           )}
           <div className={classes.connection} role="status">
-            <span className={classes.dot} data-state={connection} />
-            {CONNECTION_LABEL[connection]}
+            <span className={classes.dot} data-state={offline ? 'closed' : connection.state} />
+            {label}
           </div>
         </div>
       </header>
-      <main className={classes.main}>{children}</main>
+      <main className={classes.main}>
+        {offline && <ConnectionBanner connection={connection} />}
+        <div className={classes.content} data-stale={offline || undefined}>
+          {children}
+        </div>
+      </main>
       <nav className={classes.tabbar} aria-label="Main">
         {TABS.filter((t) => t.phone).map(({ screen: s, label, icon: Icon }) => (
           <a
