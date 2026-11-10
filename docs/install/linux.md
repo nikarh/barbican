@@ -1,12 +1,14 @@
 # Any other Linux
 
 The agent is a static binary: any Linux on x86_64 or aarch64 with nftables runs it. The archive has the binary, the
-systemd unit and an example configuration.
+systemd unit (with the `barbican-ui` group it needs and the directory of the UI's socket, as sysusers.d and tmpfiles.d files) and an example configuration.
 
 ```sh
 curl -fL "https://github.com/nikarh/barbican/releases/latest/download/barbican-$(uname -m)-linux-musl.tar.gz" | tar -xz
 sudo install -m 0755 barbican/barbican /usr/bin/barbican
 sudo install -m 0644 barbican/barbican.service /etc/systemd/system/barbican.service
+sudo install -D -m 0644 barbican/barbican.sysusers /etc/sysusers.d/barbican.conf && sudo systemd-sysusers
+sudo install -D -m 0644 barbican/barbican.tmpfiles /etc/tmpfiles.d/barbican.conf && sudo systemd-tmpfiles --create
 sudo install -D -m 0644 barbican/config.toml /etc/barbican/config.toml
 sudo systemctl daemon-reload
 ```
