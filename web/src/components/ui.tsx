@@ -1,8 +1,19 @@
-import { Badge, Button, Group, Modal, Select, Stack, Text, TextInput, Tooltip } from '@mantine/core'
+import {
+  Autocomplete,
+  Badge,
+  Button,
+  Group,
+  Modal,
+  Select,
+  Stack,
+  Text,
+  TextInput,
+  Tooltip,
+} from '@mantine/core'
 import { useState, type ReactNode } from 'react'
 
 import { useAction } from '../api/hooks'
-import { countryName, flag, formatLength, parseLength } from '../lib/format'
+import { countryName, flag, lengthInWords, parseLength } from '../lib/format'
 
 export function Country({ code, name = false }: { code: string | null; name?: boolean }) {
   return (
@@ -84,14 +95,18 @@ export function LengthSelect({
   value,
   onChange,
   label,
+  hideLabel = false,
 }: {
   value: number | null
   onChange: (secs: number | null) => void
   label: string
+  /** In a row of inputs without labels: the label is for screen readers only. */
+  hideLabel?: boolean
 }) {
   return (
     <Select
-      label={label}
+      label={hideLabel ? undefined : label}
+      aria-label={label}
       data={LENGTHS}
       value={value === null ? 'forever' : String(value)}
       onChange={(v) => {
@@ -102,37 +117,88 @@ export function LengthSelect({
   )
 }
 
-/** A length typed as text (`90d`, `1h 30m`): shows what it read, and refuses what it can't. */
+/** Lengths a length input offers; any other can be typed. */
+const PRESETS = [3_600, 6 * 3_600, 86_400, 7 * 86_400, 30 * 86_400, 90 * 86_400, 365 * 86_400].map(
+  lengthInWords,
+)
+
+/** A length, typed ("90d", "12h", "2 weeks") or picked from a few, and shown in words ("3 months") once typed. A
+ * length it can't read is refused (and marked). */
 export function LengthInput({
   label,
   description,
   value,
   onChange,
+  w = 160,
+  'aria-label': ariaLabel,
 }: {
-  label: string
+  label?: string
   description?: string
   value: number
   onChange: (secs: number) => void
+  w?: number | string
+  'aria-label'?: string
 }) {
-  const [text, setText] = useState(formatLength(value))
+  const [text, setText] = useState(lengthInWords(value))
+  // A new value from outside (reverted, say) replaces what is shown, unless it is what was typed.
+  const [shown, setShown] = useState(value)
+  if (value !== shown) {
+    setShown(value)
+    if (parseLength(text) !== value) setText(lengthInWords(value))
+  }
   const parsed = parseLength(text)
+  // In a list (no label), a mark only: the message would push the row out of line.
+  const hint = 'e.g. 90d, 12h, 1y'
   return (
-    <TextInput
+    <Autocomplete
       label={label}
       description={description}
+      aria-label={ariaLabel ?? label}
       value={text}
-      error={parsed === null ? 'e.g. 90d, 12h, 1y' : undefined}
-      onChange={(e) => {
-        const next = e.currentTarget.value
+      data={PRESETS}
+      // What was typed narrows the choice, unless it is the current length (then all are offered).
+      filter={({ options, search }) => {
+        const typed = search.trim().toLowerCase()
+        if (typed === '' || parseLength(typed) === value) return options
+        return options.filter(
+          (o) =>
+            'value' in o &&
+            (o.value.startsWith(typed) || parseLength(o.value) === parseLength(typed)),
+        )
+      }}
+      error={parsed === null ? (label === undefined ? true : hint) : undefined}
+      title={parsed === null ? hint : undefined}
+      onChange={(next) => {
         setText(next)
         const secs = parseLength(next)
-        if (secs !== null) onChange(secs)
+        if (secs !== null) {
+          setShown(secs)
+          onChange(secs)
+        }
       }}
       onBlur={() => {
-        if (parsed !== null) setText(formatLength(parsed))
+        if (parsed !== null) setText(lengthInWords(parsed))
       }}
-      w={140}
+      w={w}
     />
+  )
+}
+
+/** A country as a list shows it: its flag, its name, and its code. */
+export function CountryLabel({ code, sub }: { code: string; sub?: ReactNode }) {
+  return (
+    <div className="place">
+      <span className="place-flag" aria-hidden="true">
+        {flag(code)}
+      </span>
+      <div className="place-text">
+        <div className="place-name">
+          <span className="place-title">{countryName(code)}</span>
+          <span className="place-code mono">{code}</span>
+        </div>
+        {sub !== undefined && <div className="place-sub">{sub}</div>}
+      </div>
+    </div>
   )
 }
 

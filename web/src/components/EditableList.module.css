@@ -1,0 +1,132 @@
+.list {
+  container-type: inline-size;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--mantine-radius-sm);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* What the item is, its value, the remove button. */
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 28px;
+  align-items: center;
+  column-gap: 12px;
+  row-gap: 2px;
+  min-height: 46px;
+  padding: 6px 8px 6px 12px;
+}
+
+/* Hairlines between the parts and between the rows. */
+.list > * + *,
+.rows > * + * {
+  border-top: 1px solid var(--hairline);
+}
+
+.row:hover {
+  background: var(--row-hover);
+}
+
+.header {
+  min-height: 30px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.header:hover {
+  background: none;
+}
+
+.label {
+  min-width: 0;
+  grid-column: 1;
+}
+
+.value {
+  grid-column: 2;
+  justify-self: end;
+  text-align: right;
+}
+
+.remove {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  color: var(--ink-faint);
+}
+
+.remove:hover {
+  color: var(--status-bad);
+}
+
+/* A narrow list (a phone): the value goes under what the item is; a wide value already in a wider one. */
+@container (max-width: 420px) {
+  .list .row {
+    grid-template-columns: minmax(0, 1fr) 28px;
+    row-gap: 6px;
+  }
+
+  .list .value {
+    grid-column: 1;
+    grid-row: 2;
+    justify-self: start;
+    text-align: left;
+  }
+
+  .list .remove {
+    grid-column: 2;
+  }
+
+  .list .header .value {
+    display: none;
+  }
+}
+
+@container (max-width: 560px) {
+  .list[data-wide] .row {
+    grid-template-columns: minmax(0, 1fr) 28px;
+    row-gap: 6px;
+  }
+
+  .list[data-wide] .value {
+    grid-column: 1;
+    grid-row: 2;
+    justify-self: start;
+    text-align: left;
+  }
+
+  .list[data-wide] .remove {
+    grid-column: 2;
+  }
+
+  .list[data-wide] .header .value {
+    display: none;
+  }
+}
+
+.empty {
+  padding: 12px;
+  font-size: 13px;
+  color: var(--ink-dim);
+}
+
+.add {
+  padding: 8px;
+  background: color-mix(in srgb, var(--row-hover) 60%, transparent);
+}
+
+.footer {
+  padding: 9px 12px;
+  font-size: 13px;
+  color: var(--ink-dim);
+}
