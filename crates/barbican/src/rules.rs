@@ -93,6 +93,35 @@ pub struct Rule {
     pub prefix_v6: u8,
 }
 
+/// Ban length for addresses of a network (an autonomous system), e.g. a VPN or relay many people share.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct AsnLength {
+    pub asn: u32,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub secs: u64,
+}
+
+/// Ban length for addresses a blocklist (feed) lists, by its name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct ListLength {
+    pub list: String,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub secs: u64,
+}
+
+/// What the policy needs to know about a banned address.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Who<'a> {
+    pub country: Option<&'a str>,
+    pub asn: Option<u32>,
+    /// The blocklists that list it.
+    pub listed: &'a [&'a str],
+}
+
 /// Ban length for addresses of a country.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
@@ -113,6 +142,10 @@ pub struct Policy {
     pub ban_secs: u64,
     /// Ban lengths for addresses of these countries, instead of the rule's or the default.
     pub country_lengths: Vec<CountryLength>,
+    /// Ban lengths for addresses of these networks (ASNs), e.g. shared VPN or relay egress.
+    pub asn_lengths: Vec<AsnLength>,
+    /// Ban lengths for addresses these blocklists list, e.g. a list of a relay's egress addresses.
+    pub list_lengths: Vec<ListLength>,
     /// Each earlier ban of the same address multiplies the length by this (1: no escalation).
     pub repeat_multiplier: u32,
     /// Escalation stops here.
@@ -134,6 +167,8 @@ impl Default for Policy {
         Self {
             ban_secs: 90 * DAY,
             country_lengths: Vec::new(),
+            asn_lengths: Vec::new(),
+            list_lengths: Vec::new(),
             repeat_multiplier: 2,
             max_ban_secs: 365 * DAY,
             trust_secs: 30 * DAY,
@@ -145,22 +180,36 @@ impl Default for Policy {
 }
 
 impl Policy {
-    /// How long a ban by `rule` lasts for an address of `country` that was banned `previous` times before.
+    /// How long a ban by `rule` lasts for an address that was banned `previous` times before. Of the lengths
+    /// for its country, its network and the blocklists that list it, the shortest replaces the rule's.
     /// `None`: until lifted.
     #[must_use]
-    pub fn length(&self, rule: BanLength, country: Option<&str>, previous: u32) -> Option<u64> {
+    pub fn length(&self, rule: BanLength, who: &Who<'_>, previous: u32) -> Option<u64> {
         let base = match rule {
             BanLength::Forever => return None,
             BanLength::Default => self.ban_secs,
             BanLength::Secs { secs } => secs,
         };
-        let base = country
-            .and_then(|c| {
-                self.country_lengths
-                    .iter()
-                    .find(|l| l.country.eq_ignore_ascii_case(c))
-            })
-            .map_or(base, |l| l.secs);
+        let country = who.country.and_then(|c| {
+            self.country_lengths
+                .iter()
+                .find(|l| l.country.eq_ignore_ascii_case(c))
+                .map(|l| l.secs)
+        });
+        let asn = who
+            .asn
+            .and_then(|a| self.asn_lengths.iter().find(|l| l.asn == a).map(|l| l.secs));
+        let list = self
+            .list_lengths
+            .iter()
+            .filter(|l| who.listed.contains(&l.list.as_str()))
+            .map(|l| l.secs)
+            .min();
+        let base = [country, asn, list]
+            .into_iter()
+            .flatten()
+            .min()
+            .unwrap_or(base);
         let factor = u64::from(self.repeat_multiplier.max(1)).saturating_pow(previous.min(32));
         Some(base.saturating_mul(factor).min(self.max_ban_secs.max(base)))
     }
@@ -776,6 +825,56 @@ mod tests {
         assert_eq!(compile(rule).unwrap_err().field, "conditions");
     }
 
+    fn country(code: &str) -> Who<'_> {
+        Who {
+            country: Some(code),
+            ..Who::default()
+        }
+    }
+
+    #[test]
+    fn shared_networks() {
+        let policy = Policy {
+            ban_secs: 90 * DAY,
+            country_lengths: vec![CountryLength {
+                country: "CA".into(),
+                secs: 2 * HOUR,
+            }],
+            asn_lengths: vec![AsnLength {
+                asn: 64_500,
+                secs: HOUR,
+            }],
+            list_lengths: vec![ListLength {
+                list: "relay".into(),
+                secs: 30 * 60,
+            }],
+            repeat_multiplier: 2,
+            ..Policy::default()
+        };
+        let asn = Who {
+            country: Some("CA"),
+            asn: Some(64_500),
+            listed: &[],
+        };
+        assert_eq!(policy.length(BanLength::Default, &asn, 0), Some(HOUR));
+        assert_eq!(policy.length(BanLength::Default, &asn, 1), Some(2 * HOUR));
+        let relay = Who {
+            country: None,
+            asn: Some(1),
+            listed: &["tor", "relay"],
+        };
+        assert_eq!(
+            policy.length(BanLength::Secs { secs: 365 * DAY }, &relay, 0),
+            Some(30 * 60)
+        );
+        let other = Who {
+            country: Some("DE"),
+            asn: Some(1),
+            listed: &["tor"],
+        };
+        assert_eq!(policy.length(BanLength::Default, &other, 0), Some(90 * DAY));
+    }
+
     #[test]
     fn lengths() {
         let policy = Policy {
@@ -788,31 +887,37 @@ mod tests {
             max_ban_secs: 365 * DAY,
             ..Policy::default()
         };
-        assert_eq!(policy.length(BanLength::Default, None, 0), Some(90 * DAY));
-        assert_eq!(policy.length(BanLength::Default, Some("lv"), 0), Some(HOUR));
         assert_eq!(
-            policy.length(BanLength::Secs { secs: 365 * DAY }, Some("LV"), 0),
+            policy.length(BanLength::Default, &Who::default(), 0),
+            Some(90 * DAY)
+        );
+        assert_eq!(
+            policy.length(BanLength::Default, &country("lv"), 0),
             Some(HOUR)
         );
         assert_eq!(
-            policy.length(BanLength::Default, Some("LV"), 3),
+            policy.length(BanLength::Secs { secs: 365 * DAY }, &country("LV"), 0),
+            Some(HOUR)
+        );
+        assert_eq!(
+            policy.length(BanLength::Default, &country("LV"), 3),
             Some(8 * HOUR)
         );
         assert_eq!(
-            policy.length(BanLength::Default, Some("DE"), 2),
+            policy.length(BanLength::Default, &country("DE"), 2),
             Some(360 * DAY)
         );
         assert_eq!(
-            policy.length(BanLength::Default, Some("DE"), 3),
+            policy.length(BanLength::Default, &country("DE"), 3),
             Some(365 * DAY)
         );
         assert_eq!(
-            policy.length(BanLength::Secs { secs: 400 * DAY }, None, 0),
+            policy.length(BanLength::Secs { secs: 400 * DAY }, &Who::default(), 0),
             Some(400 * DAY)
         );
-        assert_eq!(policy.length(BanLength::Forever, Some("LV"), 0), None);
+        assert_eq!(policy.length(BanLength::Forever, &country("LV"), 0), None);
         assert_eq!(
-            policy.length(BanLength::Default, None, 1000),
+            policy.length(BanLength::Default, &Who::default(), 1000),
             Some(365 * DAY)
         );
     }

@@ -29,6 +29,121 @@ import { useNow } from '../lib/useNow'
 
 const COUNTRY_OPTIONS = COUNTRIES.map((c) => ({ value: c.code, label: `${c.name} (${c.code})` }))
 
+/** Lengths for networks (ASNs) and blocklists: shared addresses (VPNs, relays) get short bans. */
+function SharedLengths({
+  policy: p,
+  set,
+}: {
+  policy: Policy
+  set: (patch: Partial<Policy>) => void
+}) {
+  const feeds = useFeeds()
+  const [asn, setAsn] = useState<string | number>('')
+  const [list, setList] = useState<string | null>(null)
+  return (
+    <>
+      <Text fz={13} fw={620} mt="xs">
+        By network or blocklist
+      </Text>
+      <Text fz={12} c="var(--ink-dim)" mt={-8}>
+        Addresses many people share (a VPN, Cloudflare WARP on AS13335, iCloud Private Relay through
+        its blocklist) are better banned briefly. The shortest of the country, network and blocklist
+        lengths counts.
+      </Text>
+      {p.asnLengths.map((l, i) => (
+        <Group key={`as${String(l.asn)}`} align="flex-end">
+          <Text w={220} fz={14}>
+            AS{l.asn}
+          </Text>
+          <LengthInput
+            label="Length"
+            value={l.secs}
+            onChange={(secs) => {
+              set({ asnLengths: p.asnLengths.map((x, j) => (j === i ? { ...x, secs } : x)) })
+            }}
+          />
+          <ActionIcon
+            color="red"
+            mb={6}
+            onClick={() => {
+              set({ asnLengths: p.asnLengths.filter((_, j) => j !== i) })
+            }}
+            aria-label={`Remove AS${String(l.asn)}`}
+          >
+            <IconTrash size={16} />
+          </ActionIcon>
+        </Group>
+      ))}
+      {p.listLengths.map((l, i) => (
+        <Group key={`list${l.list}`} align="flex-end">
+          <Text w={220} fz={14}>
+            Listed in {l.list}
+          </Text>
+          <LengthInput
+            label="Length"
+            value={l.secs}
+            onChange={(secs) => {
+              set({ listLengths: p.listLengths.map((x, j) => (j === i ? { ...x, secs } : x)) })
+            }}
+          />
+          <ActionIcon
+            color="red"
+            mb={6}
+            onClick={() => {
+              set({ listLengths: p.listLengths.filter((_, j) => j !== i) })
+            }}
+            aria-label={`Remove ${l.list}`}
+          >
+            <IconTrash size={16} />
+          </ActionIcon>
+        </Group>
+      ))}
+      <Group align="flex-end">
+        <NumberInput
+          label="Add a network"
+          placeholder="13335"
+          prefix="AS"
+          min={1}
+          value={asn}
+          onChange={setAsn}
+          w={160}
+        />
+        <Button
+          variant="default"
+          disabled={Number(asn) <= 0 || p.asnLengths.some((l) => l.asn === Number(asn))}
+          onClick={() => {
+            set({ asnLengths: [...p.asnLengths, { asn: Number(asn), secs: 3_600 }] })
+            setAsn('')
+          }}
+        >
+          Add
+        </Button>
+        <Select
+          label="Add a blocklist"
+          placeholder="Blocklist"
+          data={(feeds.data ?? [])
+            .map((f) => f.def.name)
+            .filter((n) => !p.listLengths.some((l) => l.list === n))}
+          value={list}
+          onChange={setList}
+          w={200}
+        />
+        <Button
+          variant="default"
+          disabled={list === null}
+          onClick={() => {
+            if (list === null) return
+            set({ listLengths: [...p.listLengths, { list, secs: 3_600 }] })
+            setList(null)
+          }}
+        >
+          Add
+        </Button>
+      </Group>
+    </>
+  )
+}
+
 function PolicyForm({ policy }: { policy: Policy }) {
   const [p, setP] = useState(policy)
   const [country, setCountry] = useState<string | null>(null)
@@ -127,6 +242,7 @@ function PolicyForm({ policy }: { policy: Policy }) {
               Add
             </Button>
           </Group>
+          <SharedLengths policy={p} set={set} />
         </Stack>
       </Panel>
 

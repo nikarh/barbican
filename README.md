@@ -156,9 +156,15 @@ what the rest doesn't (`!^(GET|POST)$`). A rule can ban a prefix (`/24`, `/64`) 
 Events are recorded under the first rule (in order) that matches; every banning rule that matches counts them. An
 address on the allow list, exempt, or trusted, is recorded but never banned.
 
-The policy (**Settings** in the UI): the default ban length (90 days), lengths per country, the repeat multiplier
+The policy (**Settings** in the UI): the default ban length (90 days), lengths per country, per network (ASN) and per
+blocklist (the shortest that applies counts), the repeat multiplier
 (each earlier ban of an address doubles the length) up to a maximum (a year), how long a login keeps an address
 trusted (30 days), countries and continents blocked as a whole, and how long events are kept (a year).
+
+**Shared addresses**: VPN and relay services (Cloudflare WARP, iCloud Private Relay, Tor) hand the same addresses to
+many people, scanners among them. Allowing them would let anyone through; banning them for a year shuts out
+everyone else using them. Give them short bans instead: a length for AS13335 (Cloudflare) and one for the "iCloud
+Private Relay" blocklist preset (Apple's published egress ranges), as data rather than a block.
 
 **Blocklists**: Spamhaus DROP, FireHOL level 1, blocklist.de and Tor's exit list can be added in one click, any list
 of addresses by URL (with basic authentication: CrowdSec's blocklists through a "blocklist integration" of a console

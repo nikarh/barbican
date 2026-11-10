@@ -7,6 +7,11 @@ export type Action = "ban" | "record";
 
 export type Activity = { kind: Kind, what: string, source: string, rule: number, count: number, first: number, last: number, };
 
+/**
+ * Ban length for addresses of a network (an autonomous system), e.g. a VPN or relay many people share.
+ */
+export type AsnLength = { asn: number, secs: number, };
+
 export type Ban = { id: number, 
 /**
  * What is blocked: the address, or a prefix.
@@ -159,6 +164,11 @@ banned: boolean, banUntil: number | null, trusted: boolean, };
 export type Kind = "http" | "auth_failure" | "auth_success" | "invalid_user" | "probe";
 
 /**
+ * Ban length for addresses a blocklist (feed) lists, by its name.
+ */
+export type ListLength = { list: string, secs: number, };
+
+/**
  * Pushed to `live.subscribe` subscribers.
  */
 export type Live = { "type": "event", at: number, ip: string, country: string | null, source: string, kind: Kind, what: string, rule: string | null, } | { "type": "ban", ban: Ban, } | { "type": "lift", id: number, };
@@ -201,6 +211,14 @@ banSecs: number,
  * Ban lengths for addresses of these countries, instead of the rule's or the default.
  */
 countryLengths: Array<CountryLength>, 
+/**
+ * Ban lengths for addresses of these networks (ASNs), e.g. shared VPN or relay egress.
+ */
+asnLengths: Array<AsnLength>, 
+/**
+ * Ban lengths for addresses these blocklists list, e.g. a list of a relay's egress addresses.
+ */
+listLengths: Array<ListLength>, 
 /**
  * Each earlier ban of the same address multiplies the length by this (1: no escalation).
  */
