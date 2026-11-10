@@ -696,6 +696,14 @@ export function SettingsScreen({ tab }: { tab: string | null }) {
             {meta.data?.dryRun === true ? 'dry run' : 'on'}. Edge API:{' '}
             {meta.data?.edgeApi === true ? 'on' : 'off'}.
           </Text>
+          {meta.data?.edgeFingerprint != null && (
+            <Text c="var(--ink-dim)" fz={13}>
+              Edge API certificate (the edges’ <code>fingerprint</code>):{' '}
+              <span className="mono" style={{ wordBreak: 'break-all' }}>
+                {meta.data.edgeFingerprint}
+              </span>
+            </Text>
+          )}
           <Text c="var(--ink-dim)" fz={13}>
             {meta.data?.hasCountries === true ? (
               <>

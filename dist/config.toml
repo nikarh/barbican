@@ -9,9 +9,13 @@ path = "/var/lib/barbican/barbican.db"
 [ui]
 listen = "127.0.0.1:7381"
 
-# The API edge agents (barbican-edge, on a router) follow. Each edge agent has its own token.
+# The API edge agents (barbican-edge, on a router) follow, over TLS only. Each edge agent has its own token, and
+# pins this agent's certificate by its fingerprint (barbican edge-fingerprint prints it). Without cert and key, a
+# self-signed certificate is made on the first start, next to the database.
 # [edge]
 # listen = "0.0.0.0:7380"
+# cert = "/etc/barbican/edge-cert.pem"
+# key = "/etc/barbican/edge-key.pem"
 # [[edge.client]]
 # name = "router"
 # token_file = "/etc/barbican/edge-router.token"

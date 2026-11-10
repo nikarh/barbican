@@ -71,6 +71,10 @@ pub struct Ui {
 #[serde(deny_unknown_fields)]
 pub struct Edge {
     pub listen: SocketAddr,
+    /// The TLS certificate (PEM) the edge API serves; edges pin it by its fingerprint. Without it (and `key`), a
+    /// self-signed one is made on the first start, next to the database.
+    pub cert: Option<PathBuf>,
+    pub key: Option<PathBuf>,
     /// Edge agents allowed to follow, each with its own token.
     #[serde(default, rename = "client")]
     pub clients: Vec<EdgeClient>,
@@ -253,6 +257,11 @@ impl Config {
             }
         }
         if let Some(edge) = &self.edge {
+            if edge.cert.is_some() != edge.key.is_some() {
+                return Err(Error::Invalid(
+                    "edge: set both `cert` and `key`, or neither".to_owned(),
+                ));
+            }
             for client in &edge.clients {
                 if client.token.is_some() == client.token_file.is_some() {
                     return Err(Error::Invalid(format!(

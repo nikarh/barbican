@@ -4,5 +4,6 @@
 
 pub mod backend;
 pub mod daemon;
+pub mod http;
 pub mod ipset;
 pub mod uci;

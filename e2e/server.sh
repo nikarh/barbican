@@ -214,9 +214,18 @@ systemctl start barbican
 if att_blocked; then pass "blocks are back by the time the agent reports ready"; else fail "blocks came back late"; fi
 
 say "the edge API"
-curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:7380/api/edge/v1/changes | grep -q 401 &&
+curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:7380/api/edge/v1/changes | grep -q 401 &&
   pass "refuses without a token" || fail "answers without a token"
-changes=$(curl -s -H 'Authorization: Bearer e2e-router-token-0123456789' 'http://127.0.0.1:7380/api/edge/v1/changes?since=0')
+if ! curl -s -m 3 -o /dev/null -H 'Authorization: Bearer e2e-router-token-0123456789' http://127.0.0.1:7380/api/edge/v1/changes; then
+  pass "plain HTTP is refused (TLS only)"
+else
+  fail "answers plain HTTP"
+fi
+command -v openssl >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openssl >/dev/null
+FINGERPRINT=$(${DIR}/barbican edge-fingerprint --config /etc/barbican/config.toml)
+served=$(openssl s_client -connect 127.0.0.1:7380 </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256 | cut -d= -f2)
+if [[ ${served} == "${FINGERPRINT}" ]]; then pass "edge-fingerprint prints the served certificate's fingerprint"; else fail "fingerprint ${FINGERPRINT} != ${served}"; fi
+changes=$(curl -sk -H 'Authorization: Bearer e2e-router-token-0123456789' 'https://127.0.0.1:7380/api/edge/v1/changes?since=0')
 if python3 -c 'import json,sys; c=json.loads(sys.argv[1]); assert c["full"] and any(b["net"]=="203.0.113.10" for b in c["block"])' "${changes}"; then
   pass "gives an edge the whole state"
 else
@@ -261,13 +270,22 @@ config barbican 'main'
 	option persist_interval '1'
 
 config upstream 'server'
-	option url 'http://127.0.0.1:7380'
+	option url 'https://127.0.0.1:7380'
+	option fingerprint 'FINGERPRINT'
 	option token 'e2e-router-token-0123456789'
 EOF2
+sed -i "s/FINGERPRINT/${FINGERPRINT}/" /tmp/edge-ipset.conf
 rm -f /tmp/edge-ipset-state.json
 EDGE="${DIR}/barbican-edge-ipset --config /tmp/edge-ipset.conf"
 setsid -f sh -c "exec ${EDGE} >/tmp/edge-ipset.log 2>&1" </dev/null
 in_ipset() { ipset list barbican-host4 2>/dev/null | grep -q '^203.0.113.10'; }
+# An edge configured with another fingerprint refuses the agent.
+sed "s/option fingerprint .*/option fingerprint '$(printf '00%.0s' $(seq 32))'/; s#/tmp/edge-ipset-#/tmp/edge-wrong-#;
+  s/^config barbican 'main'$/config barbican 'main'\n\toption enabled '0'/" /tmp/edge-ipset.conf >/tmp/edge-wrong.conf
+setsid -f sh -c "exec ${DIR}/barbican-edge-ipset --config /tmp/edge-wrong.conf >/tmp/edge-wrong.log 2>&1" </dev/null
+wrong() { grep -q "not the configured fingerprint" /tmp/edge-wrong.log; }
+if wait_until 10 wrong; then pass "an edge refuses an agent whose certificate isn't the pinned one"; else fail "the wrong fingerprint: $(cat /tmp/edge-wrong.log)"; fi
+pkill -f "edge-wrong.conf" || true
 if wait_until 10 att; then pass "nothing blocked yet"; else fail "blocked before anything was banned"; fi
 ${RPC} ban.create '{"net": "203.0.113.10", "secs": 3600, "reason": "e2e ipset"}' >/dev/null
 if wait_until 10 in_ipset && wait_until 5 att_blocked; then pass "a ban reaches the ipset and iptables drop it"; else fail "the ipset edge doesn't block"; fi

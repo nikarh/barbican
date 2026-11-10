@@ -48,13 +48,15 @@ router '[ -x /etc/init.d/barbican-edge ] && /etc/init.d/barbican-edge stop; true
 server 'sudo ip link set enp0s3 up && sudo ip addr replace 10.99.0.1/24 dev enp0s3 && sudo ip addr replace 203.0.113.77/32 dev enp0s3'
 router 'ip route replace 203.0.113.77/32 dev eth1'
 router 'apk del barbican-edge luci-app-barbican >/dev/null 2>&1; rm -f /etc/barbican/state.json; nft delete table inet barbican 2>/dev/null; mkdir -p /etc/barbican; true'
-cat >"${TMPDIR:-/tmp}/barbican-e2e-uci" <<'EOF'
+fingerprint=$(server 'sudo /opt/barbican/barbican edge-fingerprint --config /etc/barbican/config.toml')
+cat >"${TMPDIR:-/tmp}/barbican-e2e-uci" <<EOF
 config barbican 'main'
 	option enabled '1'
 	option persist_interval '1'
 
 config upstream 'server'
-	option url 'http://10.99.0.1:7380'
+	option url 'https://10.99.0.1:7380'
+	option fingerprint '${fingerprint}'
 	option token 'e2e-router-token-0123456789'
 EOF
 "${vm}" router put "${TMPDIR:-/tmp}/barbican-e2e-uci" /etc/config/barbican

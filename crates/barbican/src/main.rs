@@ -32,6 +32,8 @@ barbican: bans addresses that abuse services, from their logs
 Usage:
   barbican [--config <path>] [--dry-run]     run the agent
   barbican parse <parser> [<file>]           print what a parser makes of each line (of stdin without a file)
+  barbican edge-fingerprint [--config <path>]
+                                             print the edge API certificate's fingerprint, for edges' configuration
   barbican replay [--list] [--geoip <dir>] <parser>:<file>...
                                              run logs through the default rules and say what would be banned;
                                              each line starts with an RFC 3339 time (docker logs --timestamps)
@@ -58,6 +60,7 @@ fn main() -> ExitCode {
     match args.subcommand() {
         Ok(Some(command)) if command == "parse" => parse_command(args),
         Ok(Some(command)) if command == "replay" => replay_command(args),
+        Ok(Some(command)) if command == "edge-fingerprint" => fingerprint_command(args),
         Ok(Some(other)) => {
             let _ = writeln!(std::io::stderr(), "unknown command {other:?}\n\n{HELP}");
             ExitCode::FAILURE
@@ -195,6 +198,37 @@ fn agent(mut args: pico_args::Arguments) -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             tracing::error!("{e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn fingerprint_command(mut args: pico_args::Arguments) -> ExitCode {
+    let mut err = std::io::stderr();
+    let path: std::path::PathBuf = args
+        .opt_value_from_str(["-c", "--config"])
+        .ok()
+        .flatten()
+        .or_else(|| std::env::var_os("BARBICAN_CONFIG").map(Into::into))
+        .unwrap_or_else(|| config::DEFAULT_PATH.into());
+    let result = config::Config::load(&path)
+        .map_err(|e| e.to_string())
+        .and_then(|config| {
+            let edge = config
+                .edge
+                .as_ref()
+                .ok_or("the edge API isn't configured ([edge] in the configuration)")?;
+            // Only read: the agent makes the certificate on its first start, as its own user.
+            edge_api::identity(&config, edge, false)
+                .map_err(|e| format!("{e} (has the agent started with [edge] yet?)"))
+        });
+    match result {
+        Ok(identity) => {
+            let _ = writeln!(std::io::stdout(), "{}", identity.fingerprint);
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            let _ = writeln!(err, "{e}");
             ExitCode::FAILURE
         }
     }

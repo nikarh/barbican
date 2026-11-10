@@ -177,7 +177,11 @@ export type Meta = { version: string, dryRun: boolean, sources: Array<string>, h
 /**
  * The edge API is enabled.
  */
-edgeApi: boolean, };
+edgeApi: boolean, 
+/**
+ * SHA-256 of the edge API's TLS certificate, which edges are configured with.
+ */
+edgeFingerprint: string | null, };
 
 export type Overview = { bansActive: number, bansToday: number, eventsToday: number, ips: number, trusted: number, firewall: FirewallStatus, sources: Array<SourceStatus>, edges: Array<EdgeStatus>, 
 /**
