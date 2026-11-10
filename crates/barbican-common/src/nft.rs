@@ -472,6 +472,10 @@ fn wanted(desired: &Desired, now: u64) -> Wanted {
             .or_default()
             .push((net, remaining));
     }
+    // A stable order, so the same state always gives the same script.
+    for elements in out.values_mut() {
+        elements.sort_by_key(|(net, _)| *net);
+    }
     out
 }
 
