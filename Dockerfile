@@ -37,5 +37,6 @@ LABEL org.opencontainers.image.source="https://github.com/nikarh/barbican" \
 # nobody:nogroup. Any other uid:gid works too (`user:` in compose); it needs the socket's group (`group_add:`).
 USER 65534:65534
 EXPOSE 8080
-HEALTHCHECK --interval=30s --timeout=5s CMD ["/barbican", "healthcheck"]
+# The first checks every second: a proxy (traefik) routes to it only once it is healthy.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --start-interval=1s CMD ["/barbican", "healthcheck"]
 ENTRYPOINT ["/barbican", "ui-proxy"]
