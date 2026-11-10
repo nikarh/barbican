@@ -23,8 +23,10 @@ ModuleRegistry.registerModules([
   TooltipModule,
 ])
 
-/** The grids follow the page's own colors (CSS variables), in both schemes. */
+/** The grids follow the page's own colors (CSS variables), in both schemes. The variables pick their value with
+ * `light-dark()`, which follows `color-scheme`: the grid inherits the page's instead of setting its own (light). */
 const gridTheme = themeQuartz.withParams({
+  browserColorScheme: 'inherit',
   backgroundColor: 'var(--surface)',
   foregroundColor: 'var(--ink)',
   headerBackgroundColor: 'var(--surface)',
