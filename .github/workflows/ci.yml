@@ -75,7 +75,8 @@ jobs:
           barbican --version
           systemd-analyze verify /usr/lib/systemd/system/barbican.service
           sudo apt-get remove -y barbican
-      - run: mise x -- scripts/build-edge.sh armv7
+      # The edge agents, with OpenWrt packages (apk mkpkg runs in an Alpine container).
+      - run: mise x -- scripts/build-edge.sh armv7 ipset-armv7
 
   e2e:
     name: end-to-end

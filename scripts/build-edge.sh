@@ -2,7 +2,8 @@
 # Small static builds of the edge agents for routers, with cargo-zigbuild (see mise.toml), packaged as for a release
 # into out/:
 #
-#   barbican-edge-{x86_64,aarch64,armv7}.tar.gz   nftables, for OpenWrt (armv7: Cortex-A7/A9/A15 with an FPU)
+#   barbican-edge-{x86_64,aarch64,armv7}.tar.gz   nftables, for OpenWrt (armv7: Cortex-A7/A9/A15 with an FPU),
+#   barbican-edge-<arch>.{apk,ipk}                 and its OpenWrt packages, with luci-app-barbican.{apk,ipk}
 #   barbican-edge-ipset-armv7.tar.gz              iptables and ipset, for Asuswrt-Merlin (armv7 without an FPU,
 #                                                 which also runs on the newer, 64-bit routers' 32-bit userspace)
 #   barbican-edge-ipset-x86_64.tar.gz             the same, for tests
@@ -28,6 +29,9 @@ for name in "${names[@]}"; do
   dir="target/${target}/release-small"
   case "${name}" in
     ipset-*) scripts/package-edge.sh ipset "${name#ipset-}" "${dir}/barbican-edge-ipset" out ;;
-    *) scripts/package-edge.sh nft "${name}" "${dir}/barbican-edge" out ;;
+    *)
+      scripts/package-edge.sh nft "${name}" "${dir}/barbican-edge" out
+      scripts/package-openwrt.sh "${name}" "${dir}/barbican-edge" out
+      ;;
   esac
 done

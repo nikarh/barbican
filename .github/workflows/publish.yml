@@ -1,8 +1,9 @@
 name: Publish
 
 # Builds, signs and uploads the release files when a release is published, and for the `latest` pre-release when the
-# Latest workflow calls it: static (musl) agents with .deb and Arch Linux packages for x86_64 and aarch64, and the edge
-# agent for routers (x86_64, aarch64, armv7) with its LuCI pages and installer.
+# Latest workflow calls it: static (musl) agents with .deb and Arch Linux packages for x86_64 and aarch64; the edge
+# agent for OpenWrt (x86_64, aarch64, armv7) as archives and .apk/.ipk packages with luci-app-barbican; and the ipset
+# edge agent for Asuswrt-Merlin (armv7).
 on:
   release:
     types: [published]
