@@ -14,6 +14,14 @@ use crate::geo::Geo;
 use crate::rules::RuleSet;
 use crate::state::{Lists, State};
 
+/// A source's counters, updated for every line.
+#[derive(Debug, Default)]
+pub struct SourceCounters {
+    pub lines: std::sync::atomic::AtomicU64,
+    pub parsed: std::sync::atomic::AtomicU64,
+    pub last_line: std::sync::atomic::AtomicI64,
+}
+
 pub struct App {
     pub config: Config,
     pub db: Db,
@@ -34,6 +42,8 @@ pub struct App {
     pub journal_seq: watch::Sender<u64>,
     pub live: broadcast::Sender<Live>,
     pub sources: Mutex<BTreeMap<String, SourceStatus>>,
+    /// Lines read and matched per source, counted without a lock.
+    pub source_counters: Mutex<BTreeMap<String, Arc<SourceCounters>>>,
     pub edges: Mutex<BTreeMap<String, EdgeStatus>>,
     pub firewall: Mutex<FirewallStatus>,
     pub http: reqwest::Client,
@@ -80,6 +90,7 @@ impl App {
             journal_seq,
             live,
             sources: Mutex::new(BTreeMap::new()),
+            source_counters: Mutex::new(BTreeMap::new()),
             edges: Mutex::new(BTreeMap::new()),
             firewall: Mutex::new(FirewallStatus {
                 enabled,

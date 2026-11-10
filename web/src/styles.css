@@ -1,0 +1,85 @@
+:root {
+  --tabbar-height: 64px;
+  --header-height: 54px;
+  --content-width: 1180px;
+  --bg: light-dark(#f3f1ec, var(--mantine-color-dark-8));
+  --surface: light-dark(#ffffff, var(--mantine-color-dark-7));
+  --surface-raised: light-dark(#ffffff, var(--mantine-color-dark-6));
+  --hairline: light-dark(rgb(30 24 16 / 0.09), rgb(255 248 236 / 0.07));
+  --hairline-strong: light-dark(rgb(30 24 16 / 0.16), rgb(255 248 236 / 0.13));
+  --ink: var(--mantine-color-text);
+  --ink-dim: light-dark(#5e574d, var(--mantine-color-dark-1));
+  --ink-faint: light-dark(#8b847a, var(--mantine-color-dark-2));
+  --row-hover: light-dark(rgb(30 24 16 / 0.035), rgb(255 248 236 / 0.035));
+  --accent: light-dark(var(--mantine-color-brass-7), var(--mantine-color-brass-4));
+  --mark-ban: light-dark(var(--mantine-color-brass-6), var(--mantine-color-brass-4));
+  --mark-event: light-dark(#8d8478, #6e675f);
+  --status-good: light-dark(#2b8a3e, #69db7c);
+  --status-warn: light-dark(#b26b00, #ffb547);
+  --status-bad: light-dark(#c92a2a, #ff8787);
+  --status-info: light-dark(#1971c2, #74c0fc);
+}
+
+/* Space for the scrollbar is always reserved, so the layout doesn't shift between short and long pages. */
+html {
+  scrollbar-gutter: stable;
+}
+
+:root[data-mantine-color-scheme='light'] {
+  color-scheme: light;
+}
+
+:root[data-mantine-color-scheme='dark'] {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--bg);
+  -webkit-tap-highlight-color: transparent;
+  text-rendering: optimizeLegibility;
+}
+
+.mono {
+  font-family: var(--mantine-font-family-monospace);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.92em;
+  letter-spacing: -0.01em;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+.mantine-Alert-message {
+  overflow-wrap: anywhere;
+}
+
+.app-notification {
+  background: var(--surface-raised);
+  border: 1px solid var(--hairline-strong);
+  box-shadow: 0 18px 44px -14px rgb(0 0 0 / 0.5);
+}
+
+/* Cards: flat surfaces with a hairline, no shadows. */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--mantine-radius-md);
+}
+
+.panel-title {
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+a.plain {
+  color: inherit;
+  text-decoration: none;
+}
+
+a.plain:hover {
+  color: var(--accent);
+}

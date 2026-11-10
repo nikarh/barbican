@@ -1,0 +1,41 @@
+.figure {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.caption {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.reading {
+  font-size: 13px;
+  color: var(--ink-dim);
+}
+
+.reading strong {
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.plot {
+  width: 100%;
+  height: 96px;
+  display: block;
+  border-bottom: 1px solid var(--hairline-strong);
+}
+
+.bar {
+  transition: opacity 120ms ease;
+}
+
+.axis {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--ink-faint);
+}

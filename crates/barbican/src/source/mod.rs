@@ -7,7 +7,9 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 use crate::api::SourceStatus;
-use crate::app::App;
+use std::sync::atomic::Ordering;
+
+use crate::app::{App, SourceCounters};
 use crate::config::{Input, Source};
 use crate::engine::Prefilter;
 use crate::parse::Parser;
@@ -18,8 +20,6 @@ mod file;
 mod journald;
 mod victorialogs;
 
-/// Status updates are written to the shared map at most this often.
-const STATUS_EVERY: Duration = Duration::from_secs(1);
 /// Cursors are saved at most this often.
 const CURSOR_EVERY: Duration = Duration::from_secs(5);
 
@@ -29,10 +29,7 @@ pub struct Feeder {
     name: String,
     prefilter: Prefilter,
     tx: mpsc::Sender<Hit>,
-    lines: u64,
-    parsed: u64,
-    last_line: Option<i64>,
-    status_at: Instant,
+    counters: Arc<SourceCounters>,
     cursor: Option<String>,
     cursor_at: Instant,
 }
@@ -47,15 +44,16 @@ impl Feeder {
     ) -> Self {
         let prefilter = Prefilter::new(index, parser, app.rules.subscribe());
         let now = Instant::now();
+        let counters = Arc::new(SourceCounters::default());
+        if let Ok(mut all) = app.source_counters.lock() {
+            all.insert(source.name.clone(), Arc::clone(&counters));
+        }
         Self {
             app,
             name: source.name.clone(),
             prefilter,
             tx,
-            lines: 0,
-            parsed: 0,
-            last_line: None,
-            status_at: now,
+            counters,
             cursor: None,
             cursor_at: now,
         }
@@ -63,37 +61,28 @@ impl Feeder {
 
     /// Handles a line logged at `at`. `false` when the engine is gone.
     pub async fn line(&mut self, line: &str, at: i64) -> bool {
-        self.lines += 1;
-        self.last_line = Some(at);
+        self.counters.lines.fetch_add(1, Ordering::Relaxed);
+        self.counters.last_line.store(at, Ordering::Relaxed);
         if let Some(hit) = self.prefilter.line(line, at) {
-            self.parsed += 1;
+            self.counters.parsed.fetch_add(1, Ordering::Relaxed);
             if self.tx.send(hit).await.is_err() {
                 return false;
             }
         }
-        self.tick();
         true
     }
 
     /// The same, from a thread that isn't the runtime's.
     pub fn blocking_line(&mut self, line: &str, at: i64) -> bool {
-        self.lines += 1;
-        self.last_line = Some(at);
+        self.counters.lines.fetch_add(1, Ordering::Relaxed);
+        self.counters.last_line.store(at, Ordering::Relaxed);
         if let Some(hit) = self.prefilter.line(line, at) {
-            self.parsed += 1;
+            self.counters.parsed.fetch_add(1, Ordering::Relaxed);
             if self.tx.blocking_send(hit).is_err() {
                 return false;
             }
         }
-        self.tick();
         true
-    }
-
-    fn tick(&mut self) {
-        if self.status_at.elapsed() >= STATUS_EVERY {
-            self.status_at = Instant::now();
-            self.status(|s| s.connected = true);
-        }
     }
 
     /// Changes the source's status in the shared map (with the counters as they are now).
@@ -101,9 +90,6 @@ impl Feeder {
         if let Ok(mut sources) = self.app.sources.lock()
             && let Some(status) = sources.get_mut(&self.name)
         {
-            status.lines = self.lines;
-            status.parsed = self.parsed;
-            status.last_line = self.last_line;
             change(status);
         }
     }
