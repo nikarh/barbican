@@ -15,8 +15,19 @@ read -r -a suites <<<"${suites[*]}"
 vm=e2e/vm.sh
 
 log() { printf '[e2e] %s\n' "$*" >&2; }
-
-cleanup() {
+cleanup() { # <status> <the last command>
+  local status=$1
+  if ((status != 0)); then
+    # Exiting on a failed command (`set -e`) says which one, rather than silently.
+    log "exited with status ${status} after: $2"
+    # What the VMs printed, before they are gone (CI also keeps the console logs as an artifact).
+    for name in server router; do
+      if [[ -s "${STATE_DIR}/${name}/console.log" ]]; then
+        log "the end of the ${name} VM's console:"
+        tail -n 40 "${STATE_DIR}/${name}/console.log" >&2 || true
+      fi
+    done
+  fi
   # The boots, if the build failed.
   jobs -p | xargs -r kill 2>/dev/null || true
   if [[ -z "${KEEP_VM:-}" ]]; then
@@ -24,7 +35,7 @@ cleanup() {
     "${vm}" server down || true
   fi
 }
-trap cleanup EXIT
+trap 'cleanup "$?" "${BASH_COMMAND}"' EXIT
 
 # The VMs boot while the binaries build.
 "${vm}" server up &
