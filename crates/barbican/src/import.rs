@@ -30,6 +30,57 @@ pub struct Summary {
     pub cursors: Vec<String>,
 }
 
+/// One input: its next timed line, read ahead.
+struct Lines<R> {
+    source: u16,
+    reader: R,
+    buffer: String,
+    next: Option<(i64, String)>,
+    spare: String,
+}
+
+impl<R: std::io::BufRead> Lines<R> {
+    fn new(source: u16, reader: R) -> Self {
+        Self {
+            source,
+            reader,
+            buffer: String::new(),
+            next: None,
+            spare: String::new(),
+        }
+    }
+
+    /// Reads up to the next line with a time (lines without one are counted and skipped).
+    fn advance(&mut self, summary: &mut Summary) -> Result<(), String> {
+        loop {
+            self.buffer.clear();
+            if self
+                .reader
+                .read_line(&mut self.buffer)
+                .map_err(|e| e.to_string())?
+                == 0
+            {
+                return Ok(());
+            }
+            summary.lines += 1;
+            let line = self.buffer.trim_end_matches(['\n', '\r']);
+            if let Some((at, rest)) = crate::time::split_timestamped(line) {
+                let mut owned = std::mem::take(&mut self.spare);
+                owned.clear();
+                owned.push_str(rest);
+                self.next = Some((at, owned));
+                return Ok(());
+            }
+            summary.untimed += 1;
+        }
+    }
+
+    /// Gives a line's buffer back, for the next one.
+    fn recycle(&mut self, line: String) {
+        self.spare = line;
+    }
+}
+
 /// Parses `traefik:/path/to/log`.
 pub fn input(arg: &str) -> Option<ImportInput> {
     let (source, path) = arg.split_once(':')?;
@@ -69,28 +120,54 @@ pub async fn run(config: Config, inputs: &[ImportInput]) -> Result<Summary, Stri
     }
 
     let mut summary = Summary::default();
-    let lines = crate::replay::read(&files, &mut summary.lines, &mut summary.untimed)?;
     let before = db::bans_count(&app.db.pool)
         .await
         .map_err(|e| e.to_string())?;
     let mut engine = Engine::new(Arc::clone(&app), app.rules.subscribe());
     let mut batch: Vec<Hit> = Vec::with_capacity(512);
     let mut last: Vec<(u16, i64)> = Vec::new();
-    for (at, source, line) in &lines {
-        match last.iter_mut().find(|(s, _)| s == source) {
-            Some((_, t)) => *t = (*t).max(*at),
-            None => last.push((*source, *at)),
-        }
-        let Some((_, p)) = prefilters.iter_mut().find(|(s, _)| s == source) else {
-            continue;
+    let mut report = 1_000_000;
+    // Each file is read as it goes (they can be pipes, and far bigger than memory), merged by time: the file whose
+    // next line is the oldest goes next.
+    let mut readers = Vec::new();
+    for (source, path) in &files {
+        let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        readers.push(Lines::new(
+            *source,
+            std::io::BufReader::with_capacity(1 << 20, file),
+        ));
+    }
+    for r in &mut readers {
+        r.advance(&mut summary)?;
+    }
+    while let Some(r) = readers
+        .iter_mut()
+        .filter(|r| r.next.is_some())
+        .min_by_key(|r| r.next.as_ref().map(|(at, _)| *at))
+    {
+        let Some((at, line)) = r.next.take() else {
+            break;
         };
-        if let Some(hit) = p.line(line, *at) {
+        let source = r.source;
+        match last.iter_mut().find(|(s, _)| *s == source) {
+            Some((_, t)) => *t = (*t).max(at),
+            None => last.push((source, at)),
+        }
+        if let Some((_, p)) = prefilters.iter_mut().find(|(s, _)| *s == source)
+            && let Some(hit) = p.line(&line, at)
+        {
             batch.push(hit);
         }
+        r.recycle(line);
+        r.advance(&mut summary)?;
         if batch.len() == 512 {
             summary.hits += batch.len() as u64;
             engine.process(&batch).await.map_err(|e| e.to_string())?;
             batch.clear();
+        }
+        if summary.lines >= report {
+            report += 1_000_000;
+            tracing::info!(lines = summary.lines, hits = summary.hits, "Importing");
         }
     }
     summary.hits += batch.len() as u64;
@@ -104,9 +181,15 @@ pub async fn run(config: Config, inputs: &[ImportInput]) -> Result<Summary, Stri
         .map_err(|e| e.to_string())?
         .len() as u64;
 
-    // A docker source the agent hasn't read yet starts after the imported history, not an hour back.
+    summary.cursors = continue_after(&app, &last).await?;
+    Ok(summary)
+}
+
+/// A docker source the agent hasn't read yet starts after the imported history, not an hour back. Returns their names.
+async fn continue_after(app: &App, last: &[(u16, i64)]) -> Result<Vec<String>, String> {
+    let mut names = Vec::new();
     let mut conn = app.db.pool.acquire().await.map_err(|e| e.to_string())?;
-    for (source, at) in last {
+    for &(source, at) in last {
         let Some(s) = app.config.sources.get(usize::from(source)) else {
             continue;
         };
@@ -119,8 +202,8 @@ pub async fn run(config: Config, inputs: &[ImportInput]) -> Result<Summary, Stri
             db::set_cursor(&mut conn, &s.name, &format!("{}.000000000", at + 1))
                 .await
                 .map_err(|e| e.to_string())?;
-            summary.cursors.push(s.name.clone());
+            names.push(s.name.clone());
         }
     }
-    Ok(summary)
+    Ok(names)
 }
