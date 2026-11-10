@@ -64,7 +64,12 @@ impl Default for Database {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Ui {
-    pub listen: SocketAddr,
+    /// A TCP address to serve the UI on.
+    pub listen: Option<SocketAddr>,
+    /// A unix socket to serve the UI's API on instead, for `barbican ui-proxy` in a container (or any proxy).
+    pub socket: Option<PathBuf>,
+    /// The group the socket belongs to (mode 0660): who may use the UI. By default the agent's own.
+    pub socket_group: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -256,6 +261,13 @@ impl Config {
                 )));
             }
         }
+        if let Some(ui) = &self.ui
+            && ui.listen.is_some() == ui.socket.is_some()
+        {
+            return Err(Error::Invalid(
+                "ui: set either `listen` or `socket`".to_owned(),
+            ));
+        }
         if let Some(edge) = &self.edge {
             if edge.cert.is_some() != edge.key.is_some() {
                 return Err(Error::Invalid(
@@ -370,6 +382,22 @@ mod tests {
         ));
         assert!(config.firewall.enabled);
         assert_eq!(config.exempt.nets.len(), 5);
+    }
+
+    #[test]
+    fn ui_on_a_socket() {
+        let config =
+            parse("[ui]\nsocket = \"/run/barbican-ui/ui.sock\"\nsocket_group = \"barbican-ui\"\n")
+                .unwrap();
+        let ui = config.ui.unwrap();
+        assert_eq!(ui.listen, None);
+        assert_eq!(
+            ui.socket.unwrap(),
+            std::path::Path::new("/run/barbican-ui/ui.sock")
+        );
+        assert_eq!(ui.socket_group.as_deref(), Some("barbican-ui"));
+        assert!(parse("[ui]\n").is_err());
+        assert!(parse("[ui]\nlisten = \"127.0.0.1:1\"\nsocket = \"/x\"\n").is_err());
     }
 
     #[test]

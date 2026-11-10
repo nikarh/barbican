@@ -298,6 +298,41 @@ pub async fn bind(address: std::net::SocketAddr, what: &str) -> tokio::net::TcpL
     }
 }
 
+/// The id of a group, from `/etc/group`.
+fn group_id(name: &str) -> Option<u32> {
+    let groups = std::fs::read_to_string("/etc/group").ok()?;
+    groups.lines().find_map(|line| {
+        let mut fields = line.split(':');
+        (fields.next()? == name).then(|| fields.nth(1)?.parse().ok())?
+    })
+}
+
+/// Listens on a unix socket that only its group may use (0660), replacing a socket left by an earlier run.
+fn bind_socket(
+    path: &std::path::Path,
+    group: Option<&str>,
+) -> Result<tokio::net::UnixListener, String> {
+    use std::os::unix::fs::PermissionsExt;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    }
+    let listener =
+        tokio::net::UnixListener::bind(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if let Some(group) = group {
+        let gid = group_id(group).ok_or_else(|| format!("ui.socket_group: no group {group:?}"))?;
+        std::os::unix::fs::chown(path, None, Some(gid))
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660))
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(listener)
+}
+
 /// Tells systemd the agent is ready (`Type=notify`), when it runs under systemd.
 fn notify_ready() {
     use std::os::linux::net::SocketAddrExt;
@@ -367,10 +402,22 @@ pub async fn run(config: Config, dry_run: bool) -> Result<(), String> {
                 .route("/healthz", get(|| async { "ok" }))
                 .fallback(crate::web::serve)
                 .with_state(app);
-            let listener = bind(ui.listen, "UI").await;
-            axum::serve(listener, router)
-                .await
-                .map_err(|e| e.to_string())
+            match (ui.listen, &ui.socket) {
+                (Some(address), _) => {
+                    let listener = bind(address, "UI").await;
+                    axum::serve(listener, router)
+                        .await
+                        .map_err(|e| e.to_string())
+                }
+                (None, Some(path)) => {
+                    let listener = bind_socket(path, ui.socket_group.as_deref())?;
+                    tracing::info!(socket = %path.display(), "UI listening");
+                    axum::serve(listener, router)
+                        .await
+                        .map_err(|e| e.to_string())
+                }
+                (None, None) => Ok(()),
+            }
         });
     }
 

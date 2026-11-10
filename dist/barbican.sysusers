@@ -1,0 +1,2 @@
+# The group whose members may use the UI through ui.socket (/usr/lib/sysusers.d/barbican.conf).
+g barbican-ui -

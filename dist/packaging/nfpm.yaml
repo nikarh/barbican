@@ -38,6 +38,14 @@ contents:
     dst: /usr/lib/systemd/system/barbican.service
     file_info:
       mode: 0644
+  - src: dist/barbican.sysusers
+    dst: /usr/lib/sysusers.d/barbican.conf
+    file_info:
+      mode: 0644
+  - src: dist/barbican.tmpfiles
+    dst: /usr/lib/tmpfiles.d/barbican.conf
+    file_info:
+      mode: 0644
   - src: dist/config.toml
     dst: /etc/barbican/config.toml
     type: config|noreplace
