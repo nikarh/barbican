@@ -11,8 +11,10 @@ KEEP_VM=1 e2e/run.sh      # leave the VMs running afterwards
 
 The host needs `qemu-system-x86_64`, `qemu-img`, `genisoimage` (or `mkisofs`), `ssh`, `curl` and read/write access to
 `/dev/kvm`, and mise's tools (zig and cargo-zigbuild build static binaries). The first run downloads a Debian cloud
-image, OpenWrt's x86-64 image and DB-IP's country database, into `~/.cache/barbican-e2e`. CI runs the same on a
-GitHub runner with KVM.
+image, OpenWrt's x86-64 image and DB-IP's country database, into `~/.cache/barbican-e2e`, and provisions the server's
+image there (cloud-init installs the packages and Docker, a minute or two): `server-<hash>.qcow2`, made again when the
+provisioning in `vm.sh` changes. Each run boots both VMs from their images on throwaway disks. CI runs the same on a
+GitHub runner with KVM, with the images cached.
 
 `e2e/vm.sh <server|router> <up|ssh|put|down|destroy>` manages one VM. The two are joined by a UDP tunnel between their
 QEMUs: the server is 10.99.0.1, the router's WAN 10.99.0.2. Each is reached over SSH through user-mode networking.
