@@ -1,0 +1,8 @@
+#!/bin/sh
+# After installing or upgrading barbican-edge: a configuration if there is none, then (re)started.
+[ -n "${IPKG_INSTROOT}" ] && exit 0
+[ -f /etc/config/barbican ] || cp /usr/share/barbican/barbican.config /etc/config/barbican
+mkdir -p /etc/barbican
+/etc/init.d/barbican-edge enable
+/etc/init.d/barbican-edge restart
+exit 0

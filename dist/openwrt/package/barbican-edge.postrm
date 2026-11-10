@@ -1,0 +1,4 @@
+#!/bin/sh
+[ -n "${IPKG_INSTROOT}" ] && exit 0
+[ -x /usr/sbin/barbican-edge ] || nft delete table inet barbican 2>/dev/null
+exit 0
