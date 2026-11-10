@@ -22,10 +22,17 @@ declare -A TARGETS=(
 )
 names=("$@")
 [[ ${#names[@]} -gt 0 ]] || names=(x86_64 aarch64 armv7 ipset-armv7 ipset-x86_64)
+# All in one build: with codegen-units = 1, each target's last step uses a single core.
+declare -A targets=()
 for name in "${names[@]}"; do
-  target=${TARGETS[${name}]:?"unknown build ${name} (${!TARGETS[*]})"}
-  rustup target add "${target}" >/dev/null
-  cargo zigbuild --locked --profile release-small --target "${target}" -p barbican-edge
+  targets[${TARGETS[${name}]:?"unknown build ${name} (${!TARGETS[*]})"}]=1
+done
+rustup target add "${!targets[@]}" >/dev/null
+args=()
+for target in "${!targets[@]}"; do args+=(--target "${target}"); done
+cargo zigbuild --locked --profile release-small "${args[@]}" -p barbican-edge
+for name in "${names[@]}"; do
+  target=${TARGETS[${name}]}
   dir="target/${target}/release-small"
   case "${name}" in
     ipset-*) scripts/package-edge.sh ipset "${name#ipset-}" "${dir}/barbican-edge-ipset" out ;;
