@@ -44,6 +44,8 @@ pub struct App {
     pub sources: Mutex<BTreeMap<String, SourceStatus>>,
     /// Lines read and matched per source, counted without a lock.
     pub source_counters: Mutex<BTreeMap<String, Arc<SourceCounters>>>,
+    /// Where each source got to, not saved yet (saved every few seconds, and as the agent stops).
+    pub unsaved_cursors: Mutex<BTreeMap<String, Arc<Mutex<Option<String>>>>>,
     pub edges: Mutex<BTreeMap<String, EdgeStatus>>,
     pub firewall: Mutex<FirewallStatus>,
     pub http: reqwest::Client,
@@ -93,6 +95,7 @@ impl App {
             live,
             sources: Mutex::new(BTreeMap::new()),
             source_counters: Mutex::new(BTreeMap::new()),
+            unsaved_cursors: Mutex::new(BTreeMap::new()),
             edges: Mutex::new(BTreeMap::new()),
             firewall: Mutex::new(FirewallStatus {
                 enabled,
