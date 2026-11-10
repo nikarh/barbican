@@ -1,0 +1,3 @@
+[env]
+# The query! macros check against .sqlx/ (mise run db:prepare refreshes it).
+SQLX_OFFLINE = "true"

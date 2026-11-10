@@ -4,7 +4,9 @@ use std::io::{BufRead, Write};
 use std::process::ExitCode;
 
 mod config;
+mod geo;
 mod parse;
+mod rules;
 mod signal;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
