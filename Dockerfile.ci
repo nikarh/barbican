@@ -1,0 +1,13 @@
+# The image CI publishes, from the binaries CI has built already (see .github/workflows/publish.yml): rebuilding
+# inside Docker would compile everything from scratch on every run. The Dockerfile next to this one builds the same
+# image from source. ci-rootfs/<amd64|arm64>/ holds each platform's files.
+FROM scratch
+ARG TARGETARCH
+COPY ci-rootfs/${TARGETARCH}/ /
+LABEL org.opencontainers.image.source="https://github.com/nikarh/barbican" \
+      org.opencontainers.image.description="barbican's web UI, for an agent on the host" \
+      org.opencontainers.image.licenses="MIT OR Apache-2.0"
+USER 65534:65534
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s CMD ["/barbican", "healthcheck"]
+ENTRYPOINT ["/barbican", "ui-proxy"]

@@ -27,3 +27,11 @@ updates:
     groups:
       web-minor-patch:
         update-types: ["minor", "patch"]
+  - package-ecosystem: "docker"
+    directory: "/"
+    rebase-strategy: "auto"
+    schedule:
+      interval: "weekly"
+    groups:
+      docker:
+        patterns: ["*"]

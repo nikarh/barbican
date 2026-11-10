@@ -2,3 +2,4 @@
 /dev
 /e2e/.cache
 /out
+/ci-rootfs/
