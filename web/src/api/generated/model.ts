@@ -248,6 +248,36 @@ blockedContinents: Array<string>,
  */
 retentionDays: number, };
 
+/**
+ * Why the proxy can't reach the agent.
+ */
+export type ProxyProblem = { kind: ProxyProblemKind, 
+/**
+ * The error as the OS (or the HTTP client) put it.
+ */
+error: string, 
+/**
+ * What it means and what to check.
+ */
+hint: string, };
+
+export type ProxyProblemKind = "notFound" | "permissionDenied" | "refused" | "noAnswer" | "other";
+
+/**
+ * What `barbican ui-proxy` answers itself on `GET /api/proxy`, and in the body of its 502s: whether it reaches the
+ * agent's socket, and if not, why. A browser can't read why a WebSocket handshake failed, so the UI asks this after
+ * one does. Without the proxy (the agent serving the UI on `ui.listen`) the path is a 404.
+ */
+export type ProxyStatus = { 
+/**
+ * The agent's socket the proxy connects to.
+ */
+socket: string, 
+/**
+ * `null`: the agent answers on it.
+ */
+problem: ProxyProblem | null, };
+
 export type Rule = { 
 /**
  * 0 for a rule not saved yet.

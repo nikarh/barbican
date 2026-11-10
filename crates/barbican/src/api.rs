@@ -597,3 +597,43 @@ pub fn ban(row: &crate::db::BanRow, ip: Option<std::net::IpAddr>, country: Optio
         lifted_by: row.lifted_by.clone(),
     }
 }
+
+/// What `barbican ui-proxy` answers itself on `GET /api/proxy`, and in the body of its 502s: whether it reaches the
+/// agent's socket, and if not, why. A browser can't read why a WebSocket handshake failed, so the UI asks this after
+/// one does. Without the proxy (the agent serving the UI on `ui.listen`) the path is a 404.
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyStatus {
+    /// The agent's socket the proxy connects to.
+    pub socket: String,
+    /// `null`: the agent answers on it.
+    pub problem: Option<ProxyProblem>,
+}
+
+/// Why the proxy can't reach the agent.
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyProblem {
+    pub kind: ProxyProblemKind,
+    /// The error as the OS (or the HTTP client) put it.
+    pub error: String,
+    /// What it means and what to check.
+    pub hint: String,
+}
+
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub enum ProxyProblemKind {
+    /// No socket at the path.
+    NotFound,
+    /// The socket (or its directory) isn't the proxy's to use.
+    PermissionDenied,
+    /// A socket file nobody accepts connections on: a stopped agent's.
+    Refused,
+    /// Connected, but no HTTP answer.
+    NoAnswer,
+    Other,
+}
