@@ -126,7 +126,23 @@ prefixes: number, v4Addresses: number,
  */
 v6Networks: number, };
 
-export type Feed = { def: FeedDef, fetched: number | null, 
+export type Feed = { def: FeedDef, 
+/**
+ * The last attempt, failed or not.
+ */
+fetched: number | null, 
+/**
+ * The last fetch without an error: its list new, or unchanged.
+ */
+succeeded: number | null, 
+/**
+ * When its list last changed: the copy in use is from then.
+ */
+changed: number | null, 
+/**
+ * When it is fetched next (the agent looks for due feeds every 5 minutes); `null`: it is off.
+ */
+next: number | null, 
 /**
  * Prefixes in the last good copy.
  */

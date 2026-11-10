@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, definition, fetched, count, error, etag, data FROM feed ORDER BY id",
+  "query": "SELECT id, definition, fetched, succeeded, changed, count, error, etag, data FROM feed ORDER BY id",
   "describe": {
     "columns": [
       {
@@ -37,8 +37,30 @@
         }
       },
       {
-        "name": "count",
+        "name": "succeeded",
         "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "feed",
+            "name": "succeeded"
+          }
+        }
+      },
+      {
+        "name": "changed",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "feed",
+            "name": "changed"
+          }
+        }
+      },
+      {
+        "name": "count",
+        "ordinal": 5,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -49,7 +71,7 @@
       },
       {
         "name": "error",
-        "ordinal": 4,
+        "ordinal": 6,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -60,7 +82,7 @@
       },
       {
         "name": "etag",
-        "ordinal": 5,
+        "ordinal": 7,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -71,7 +93,7 @@
       },
       {
         "name": "data",
-        "ordinal": 6,
+        "ordinal": 8,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -91,8 +113,10 @@
       true,
       true,
       true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "d6f25aa5ce2709f2d57198d6e4de14be7e6ce27d70d1eb23ca8b7cbe39b103c4"
+  "hash": "bb9c3b3d7149d462486d3068a9d8e71e95b4ac0ddbd5b9aa37d4dec7869ed024"
 }

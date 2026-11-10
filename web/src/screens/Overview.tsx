@@ -1,9 +1,10 @@
 import { Alert, Anchor, Group, SimpleGrid, Stack, Table, Text } from '@mantine/core'
 
-import { useGeoStatus, useLive, useOverview } from '../api/hooks'
-import type { Live } from '../api/generated/model'
+import { useFeeds, useGeoStatus, useLive, useOverview } from '../api/hooks'
+import type { Feed, Live } from '../api/generated/model'
 import { Bars } from '../components/Bars'
 import { GeoSummary } from '../components/Geo'
+import status from '../components/Status.module.css'
 import { Country, Panel, Stat } from '../components/ui'
 import { ago, count, KIND_LABELS, remaining } from '../lib/format'
 import { href, ipHref } from '../lib/router'
@@ -56,9 +57,28 @@ function LiveFeed() {
   )
 }
 
+/** A blocklist's line for the overview: its name, how many prefixes, and how recent the list is. */
+function FeedLine({ feed: f, now }: { feed: Feed; now: number }) {
+  const ok = f.error === null && f.changed !== null
+  let when = f.succeeded === null ? 'not yet' : `checked ${ago(f.succeeded, now)}`
+  if (!f.def.enabled) when = 'off'
+  else if (f.error !== null) when = 'failing'
+  return (
+    <div className={status.line} title={f.error ?? undefined}>
+      <span className={status.dot} data-ok={ok || !f.def.enabled} data-off={!f.def.enabled} />
+      <span className={status.value}>{f.def.name}</span>
+      <span className={status.faint}>{count(f.count)} prefixes</span>
+      <span className={status.when} data-bad={f.error !== null && f.def.enabled}>
+        {when}
+      </span>
+    </div>
+  )
+}
+
 export function OverviewScreen() {
   const overview = useOverview()
   const geo = useGeoStatus()
+  const feeds = useFeeds()
   const now = useNow(30_000)
   if (overview.error) return <Alert color="red">{overview.error.message}</Alert>
   const o = overview.data
@@ -172,7 +192,19 @@ export function OverviewScreen() {
               </Anchor>
             }
           >
-            <Stack gap={6}>{geo.data && <GeoSummary geo={geo.data} now={now} />}</Stack>
+            <Stack gap={6}>
+              {geo.data && <GeoSummary geo={geo.data} now={now} />}
+              {(feeds.data ?? []).length > 0 && (
+                <div className={classes.subhead}>
+                  <a className="plain panel-title" href={href('settings', { tab: 'feeds' })}>
+                    Blocklists
+                  </a>
+                </div>
+              )}
+              {(feeds.data ?? []).map((f) => (
+                <FeedLine key={f.def.id} feed={f} now={now} />
+              ))}
+            </Stack>
           </Panel>
 
           <Panel title="Sources">

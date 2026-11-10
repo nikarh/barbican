@@ -599,8 +599,18 @@ pub struct Entry {
 #[serde(rename_all = "camelCase")]
 pub struct Feed {
     pub def: FeedDef,
+    /// The last attempt, failed or not.
     #[cfg_attr(test, ts(type = "number | null"))]
     pub fetched: Option<i64>,
+    /// The last fetch without an error: its list new, or unchanged.
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub succeeded: Option<i64>,
+    /// When its list last changed: the copy in use is from then.
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub changed: Option<i64>,
+    /// When it is fetched next (the agent looks for due feeds every 5 minutes); `null`: it is off.
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub next: Option<i64>,
     /// Prefixes in the last good copy.
     #[cfg_attr(test, ts(type = "number"))]
     pub count: i64,

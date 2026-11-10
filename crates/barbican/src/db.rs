@@ -53,6 +53,8 @@ pub struct FeedRow {
     pub id: i64,
     pub definition: String,
     pub fetched: Option<i64>,
+    pub succeeded: Option<i64>,
+    pub changed: Option<i64>,
     pub count: Option<i64>,
     pub error: Option<String>,
     pub etag: Option<String>,
@@ -532,7 +534,7 @@ pub async fn set_cursor(
 pub async fn feeds(pool: &SqlitePool) -> Result<Vec<FeedRow>, Error> {
     let rows = sqlx::query_as!(
         FeedRow,
-        "SELECT id, definition, fetched, count, error, etag, data FROM feed ORDER BY id"
+        "SELECT id, definition, fetched, succeeded, changed, count, error, etag, data FROM feed ORDER BY id"
     )
     .fetch_all(pool)
     .await?;
@@ -558,9 +560,12 @@ pub async fn feed_update(
 ) -> Result<bool, Error> {
     let done = sqlx::query!(
         "UPDATE feed SET definition = ?,
-             data = CASE WHEN ? THEN data END, etag = CASE WHEN ? THEN etag END, fetched = CASE WHEN ? THEN fetched END
+             data = CASE WHEN ? THEN data END, etag = CASE WHEN ? THEN etag END, fetched = CASE WHEN ? THEN fetched END,
+             succeeded = CASE WHEN ? THEN succeeded END, changed = CASE WHEN ? THEN changed END
          WHERE id = ?",
         definition,
+        keep_data,
+        keep_data,
         keep_data,
         keep_data,
         keep_data,
@@ -578,20 +583,31 @@ pub async fn feed_delete(pool: &SqlitePool, id: i64) -> Result<bool, Error> {
     Ok(done.rows_affected() > 0)
 }
 
-/// Records a fetch: new data (with its count and etag), or only an error that keeps the last good copy.
+/// A feed's new list and how many prefixes it has.
+pub type FeedData<'a> = (&'a str, i64);
+
+/// Records a fetch: new data (with its count) and the etag, the same list again (no data), or only an error that
+/// keeps the last good copy.
 pub async fn feed_fetched(
     pool: &SqlitePool,
     id: i64,
     now: i64,
-    result: Result<(Option<&str>, i64, Option<&str>), &str>,
+    result: Result<(Option<FeedData<'_>>, Option<&str>), &str>,
 ) -> Result<(), Error> {
     match result {
-        Ok((data, count, etag)) => {
+        Ok((new, etag)) => {
+            let (data, count) = new.unzip();
             sqlx::query!(
-                "UPDATE feed SET fetched = ?, error = NULL, count = ?, etag = ?, data = coalesce(?, data) WHERE id = ?",
+                "UPDATE feed SET fetched = ?, succeeded = ?, error = NULL, etag = ?,
+                     changed = CASE WHEN ? IS NULL THEN changed ELSE ? END,
+                     count = coalesce(?, count), data = coalesce(?, data)
+                 WHERE id = ?",
+                now,
+                now,
+                etag,
+                data,
                 now,
                 count,
-                etag,
                 data,
                 id
             )
@@ -777,18 +793,35 @@ mod tests {
         );
 
         let f = feed_insert(&db.pool, "{}").await.unwrap();
-        feed_fetched(&db.pool, f, 5, Ok((Some("192.0.2.0/24\n"), 1, Some("e1"))))
+        feed_fetched(
+            &db.pool,
+            f,
+            5,
+            Ok((Some(("192.0.2.0/24\n", 1)), Some("e1"))),
+        )
+        .await
+        .unwrap();
+        // Not modified: checked, not changed.
+        feed_fetched(&db.pool, f, 6, Ok((None, Some("e1"))))
             .await
             .unwrap();
-        feed_fetched(&db.pool, f, 6, Err("timeout")).await.unwrap();
+        feed_fetched(&db.pool, f, 7, Err("timeout")).await.unwrap();
         let feed = &feeds(&db.pool).await.unwrap()[0];
         assert_eq!(
             (feed.data.as_deref(), feed.error.as_deref(), feed.count),
             (Some("192.0.2.0/24\n"), Some("timeout"), Some(1))
         );
+        assert_eq!(
+            (feed.fetched, feed.succeeded, feed.changed),
+            (Some(7), Some(6), Some(5))
+        );
         feed_update(&db.pool, f, "{\"url\":2}", false)
             .await
             .unwrap();
-        assert_eq!(feeds(&db.pool).await.unwrap()[0].data, None);
+        let feed = &feeds(&db.pool).await.unwrap()[0];
+        assert_eq!(
+            (feed.data.as_deref(), feed.succeeded, feed.changed),
+            (None, None, None)
+        );
     }
 }
