@@ -1,7 +1,6 @@
 import { Button, Group, SegmentedControl, Stack, TextInput } from '@mantine/core'
-import { useDebouncedValue, useMediaQuery } from '@mantine/hooks'
+import { useDebouncedValue } from '@mantine/hooks'
 import { IconPlus, IconSearch } from '@tabler/icons-react'
-import type { ColDef } from 'ag-grid-community'
 import { useCallback, useMemo, useState } from 'react'
 
 import type { Ban } from '../api/generated/model'
@@ -9,6 +8,7 @@ import { rpc } from '../api/rpc'
 import { InfiniteGrid } from '../components/Grid'
 import { BanDialog, Country } from '../components/ui'
 import { ago, remaining } from '../lib/format'
+import { columnsFor, useTier, type Column } from '../lib/columns'
 import { navigate } from '../lib/router'
 
 export function BansScreen() {
@@ -16,46 +16,55 @@ export function BansScreen() {
   const [debounced] = useDebouncedValue(query, 300)
   const [active, setActive] = useState(true)
   const [banning, setBanning] = useState(false)
-  const wide = useMediaQuery('(min-width: 48em)', true)
+  const tier = useTier()
 
-  const columns = useMemo<ColDef<Ban>[]>(() => {
-    const all: (ColDef<Ban> & { phone?: boolean })[] = [
+  const columns = useMemo(() => {
+    const all: Column<Ban>[] = [
       {
         headerName: 'Blocked',
         field: 'net',
-        flex: 1.2,
-        minWidth: 140,
+        width: 190,
         cellClass: 'mono',
-        phone: true,
+        from: 'phone',
+        phone: { width: 140 },
       },
       {
         headerName: 'Country',
         field: 'country',
         width: 100,
         cellRenderer: (p: { value: string | null }) => <Country code={p.value} />,
+        from: 'tablet',
       },
-      { headerName: 'Reason', field: 'reason', flex: 1.4, minWidth: 140, phone: true },
+      {
+        headerName: 'Reason',
+        field: 'reason',
+        flex: 1.4,
+        minWidth: 140,
+        from: 'phone',
+        phone: { minWidth: 100 },
+      },
       {
         headerName: 'Since',
         field: 'created',
         width: 110,
         valueFormatter: (p) => ago(Number(p.value ?? 0)),
+        from: 'tablet',
       },
       {
         headerName: 'Ends',
         width: 120,
-        minWidth: 90,
         valueGetter: (p) =>
           p.data === undefined
             ? ''
             : p.data.lifted !== null
               ? `lifted ${ago(p.data.lifted)}`
               : remaining(p.data.until),
-        phone: true,
+        from: 'phone',
+        phone: { width: 84 },
       },
     ]
-    return all.filter((c) => wide || c.phone === true).map(({ phone: _phone, ...c }) => c)
-  }, [wide])
+    return columnsFor(all, tier)
+  }, [tier])
 
   const fetch = useCallback(
     (offset: number, limit: number) =>

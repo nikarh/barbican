@@ -7,6 +7,7 @@ import {
   themeQuartz,
   type ColDef,
   type GridApi,
+  type ICellRendererParams,
   type GridReadyEvent,
   type IDatasource,
   type RowClickedEvent,
@@ -65,10 +66,14 @@ type FirstPage = { query: string } & (
   | { state: 'error'; message: string }
 )
 
+/** Rows shown before the first page is in: as many as a tall window shows. */
+const PLACEHOLDER_ROWS = 30
+
 /** A grid that loads its rows page by page as it scrolls (ag-grid's infinite row model). `fetch` gets an offset
- * and a limit; whenever `query` changes (filters), the grid starts over. Until the first page is in, it shows
- * placeholder rows; then the rows, what `empty` says, or the error. It takes the height its parent (a `.fill`
- * screen) has left, and no less than a few rows. */
+ * and a limit; whenever `query` changes (filters), the grid starts over.
+ * Until the first page is in, its rows are placeholders in the real columns, so nothing moves when the rows come;
+ * then the rows, what `empty` says, or the error. It takes the height its parent (a `.fill` screen) has left, and
+ * no less than a few rows. */
 export function InfiniteGrid<T>({
   columns,
   fetch,
@@ -146,24 +151,38 @@ export function InfiniteGrid<T>({
     api.current?.setGridOption('datasource', datasource)
   }
 
+  const defaultColDef = useMemo<ColDef<T>>(
+    () => ({ sortable: false, resizable: true, suppressMovable: true }),
+    [],
+  )
+  // Until a row has its data, each cell is a placeholder.
+  const columnDefs = useMemo(
+    () =>
+      columns.map((c) => ({
+        ...c,
+        cellRendererSelector: (p: ICellRendererParams<T>) =>
+          p.data === undefined ? { component: Placeholder } : c.cellRendererSelector?.(p),
+      })),
+    [columns],
+  )
+
   const state = first?.query === query ? first : null
   return (
     <div className={classes.grid}>
       <AgGridReact<T>
         theme={gridTheme}
-        columnDefs={columns}
-        defaultColDef={{ sortable: false, resizable: true, suppressMovable: true }}
+        columnDefs={columnDefs}
+        defaultColDef={defaultColDef}
         rowModelType="infinite"
         cacheBlockSize={pageSize}
         maxBlocksInCache={20}
-        infiniteInitialRowCount={1}
+        infiniteInitialRowCount={PLACEHOLDER_ROWS}
         onGridReady={onReady}
         onRowClicked={onClick}
         {...(onRowClick ? { rowStyle: { cursor: 'pointer' } } : {})}
         suppressCellFocus
         suppressNoRowsOverlay
       />
-      {state === null && <Loading columns={Math.min(columns.length, 5)} />}
       {state?.state === 'empty' && (
         <div className={classes.overlay}>
           <div className={classes.message}>
@@ -199,25 +218,16 @@ export function InfiniteGrid<T>({
   )
 }
 
-/** Placeholder rows, while the first page loads. */
-function Loading({ columns }: { columns: number }) {
+/** A cell of a row still loading: a bar of a width that varies from row to row and column to column, as text
+ * does. */
+function Placeholder<T>({ node, column, colDef }: ICellRendererParams<T>) {
+  const row = node.rowIndex ?? 0
+  const id = column?.getColId() ?? ''
+  let col = 7
+  for (let i = 0; i < id.length; i++) col = (col * 31 + id.charCodeAt(i)) % 997
   return (
-    <div className={classes.overlay} role="status" aria-label="Loading">
-      <div className={classes.skeleton}>
-        {Array.from({ length: 30 }, (_, row) => (
-          <div key={row} className={classes.skeletonRow}>
-            {Array.from({ length: columns }, (_, col) => (
-              <Skeleton
-                key={col}
-                height={10}
-                radius="xl"
-                // Widths that vary a little from row to row, as text does.
-                width={`${String(55 + ((row * 7 + col * 13) % 35))}%`}
-              />
-            ))}
-          </div>
-        ))}
-      </div>
+    <div className={classes.placeholder} data-end={colDef?.type === 'rightAligned' || undefined}>
+      <Skeleton height={9} radius="xl" width={`${String(40 + ((row * 7 + col * 13) % 45))}%`} />
     </div>
   )
 }
