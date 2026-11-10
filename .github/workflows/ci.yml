@@ -104,13 +104,22 @@ jobs:
       - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
           install_args: zig github:rust-cross/cargo-zigbuild
-      - name: Cache the VM images and the country database
+      # The images as e2e/vm.sh makes them: the server's provisioned (with the key it lets in), once per version
+      # of vm.sh. Saved only when there was none.
+      - name: Cache the VM images
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/.cache/barbican-e2e/debian-13-genericcloud-amd64.qcow2
+            ~/.cache/barbican-e2e/server-*.qcow2
+            ~/.cache/barbican-e2e/id_ed25519
+            ~/.cache/barbican-e2e/id_ed25519.pub
             ~/.cache/barbican-e2e/openwrt-*.img
-            ~/.cache/barbican-e2e/dbip-country-lite.mmdb
-          key: barbican-e2e-${{ hashFiles('e2e/vm.sh') }}-${{ github.run_id }}
-          restore-keys: barbican-e2e-${{ hashFiles('e2e/vm.sh') }}-
+          key: barbican-e2e-images-${{ hashFiles('e2e/vm.sh') }}
+      - id: month
+        run: echo "month=$(date -u +%Y-%m)" >>"$GITHUB_OUTPUT"
+      - name: Cache the country database
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/barbican-e2e/dbip-country-lite.mmdb
+          key: barbican-e2e-dbip-${{ steps.month.outputs.month }}
       - run: e2e/run.sh
