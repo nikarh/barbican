@@ -58,6 +58,8 @@ database. A full example is [`dist/config.toml`](dist/config.toml).
 |---|---|---|
 | `database.path` | `/var/lib/barbican/barbican.db` | |
 | `ui.listen` | (no UI) | The web UI and its WebSocket API. It has no login: listen on localhost or a private address, behind a proxy with authentication. |
+| `ui.socket` | | Instead of `listen`: a unix socket, for [the UI in a container](#the-ui-in-a-container). |
+| `ui.socket_group` | the agent's | The group that owns the socket (mode 0660): its members may use the UI. The unit is in `barbican-ui`. |
 | `edge.listen` | (no edge API) | The API edge agents follow, over TLS only. |
 | `edge.cert`, `edge.key` | made on the first start | Its TLS certificate and key (PEM). Without them, a self-signed pair is made next to the database; edges pin it by its fingerprint (`barbican edge-fingerprint`). |
 | `edge.client` | | `[[edge.client]]` tables: `name`, and `token` or `token_file` (at least 16 characters). |
@@ -213,6 +215,50 @@ http:
           - url: http://172.17.0.1:7381   # ui.listen on the docker0 address
 ```
 
+### The UI in a container
+
+The agent has to run on the host (it changes the host's firewall, early in boot), but the UI can be a container next
+to your other ones, routed and authenticated like them. The agent then serves the UI's API on a unix socket instead
+of a port, and the image `ghcr.io/nikarh/barbican` (amd64, arm64) runs `barbican ui-proxy`: it serves the UI and
+passes `/api` (the WebSocket included) to the socket. The socket's directory, `/run/barbican-ui`, and the socket
+belong to the group `barbican-ui` (both made by the packages; modes 2770 and 0660), so only containers given that
+group can use it, and nothing listens on a port of the host.
+
+```toml
+# /etc/barbican/config.toml
+[ui]
+socket = "/run/barbican-ui/ui.sock"
+socket_group = "barbican-ui"
+```
+
+```yaml
+services:
+  barbican:
+    image: ghcr.io/nikarh/barbican:latest
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    user: "65534:65534"
+    # The gid of barbican-ui on the host (getent group barbican-ui): the container knows no group names.
+    group_add: ["${BARBICAN_UI_GID}"]
+    volumes:
+      # The directory, not the socket: the agent makes a new socket each time it starts.
+      - /run/barbican-ui:/run/barbican-ui:ro
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.barbican.rule: Host(`barbican.example.com`)
+      traefik.http.routers.barbican.middlewares: auth
+      traefik.http.services.barbican.loadbalancer.server.port: "8080"
+```
+
+- `read_only`, `cap_drop: [ALL]`, `no-new-privileges`: the image is one static binary (`FROM scratch`) that writes
+  nothing and needs no privileges.
+- `user`: any uid works; `group_add` is what grants the UI. Connecting to a socket on a read-only mount works.
+- It listens on 8080 (`barbican ui-proxy --listen <address>`), for the agent's socket at
+  `/run/barbican-ui/ui.sock` (`--socket <path>`); `/healthz` answers while the proxy runs, and the image's healthcheck (`barbican healthcheck`)
+  asks it. While the agent restarts, the API answers 502 and the UI reconnects.
+- The `Origin` check is the agent's, on the headers the browser sent: the proxy passes them through unchanged.
+
 ## Development
 
 [mise](https://mise.jdx.dev) installs the tools and runs the tasks (`mise tasks`):
@@ -223,8 +269,8 @@ http:
 - `mise run e2e`: the end-to-end suites, in throwaway VMs ([`e2e/README.md`](e2e/README.md))
 - `mise run db:prepare` after changing a query or a migration; `mise run bindings` after changing the UI's API
 
-The workspace has three crates: `barbican` (the agent), `barbican-edge` (the router agent: plain threads, no TLS, a
-few hundred kilobytes) and `barbican-common` (addresses, the edge protocol, nftables). The UI is React with Mantine
+The workspace has three crates: `barbican` (the agent, and the UI proxy of the image), `barbican-edge` (the router
+agents: plain threads, its own small HTTPS client, about a megabyte) and `barbican-common` (addresses, the edge protocol, nftables). The UI is React with Mantine
 and ag-grid in `web/`; the LuCI pages are in `luci/`.
 
 ## Attribution and license

@@ -6,8 +6,8 @@
    workspace version in `Cargo.toml`, regenerates `CHANGELOG.md` with git-cliff from the conventional commits, and
    opens a pull request titled `Release vX.Y.Z` with the release notes as its body.
 2. Review and merge it. The **Release** workflow tags the merge commit and creates the GitHub release with the notes.
-3. The **Publish** workflow builds everything below (static musl binaries, the agent with the UI embedded), writes
-   `SHA256SUMS` and its GPG signature, and uploads them to the release.
+3. The **Publish** workflow builds everything below (static musl binaries, the agent with the UI embedded, the UI's
+   image), writes `SHA256SUMS` and its GPG signature, and uploads them to the release.
 
 Every push to `main` also updates the `latest` pre-release (the **Latest** workflow): the tag moves to the new
 commit, the notes list the unreleased changes, and Publish uploads the same files, signed the same way, with the
@@ -27,6 +27,11 @@ the newest file:
 | `barbican-edge-{x86_64,aarch64,armv7}.tar.gz` | The same, with `install.sh`, for installing by hand |
 | `barbican-edge-ipset-{armv7,x86_64}.tar.gz` | The ipset edge agent for Asuswrt-Merlin, with its supervisor and installer |
 | `SHA256SUMS`, `SHA256SUMS.asc` | Checksums of all of the above and their detached GPG signature |
+
+The UI's container image, `ghcr.io/nikarh/barbican` (linux/amd64 and linux/arm64), is tagged `X.Y.Z`, `X.Y` and
+`latest` for releases, and `main` and `sha-<commit>` for builds of main. Before it is pushed, Publish runs it
+read-only, without capabilities, as nobody, in front of an agent on the runner, and checks the page, the WebSocket
+and the Origin check through it.
 
 To check downloads:
 
