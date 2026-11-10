@@ -42,10 +42,6 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 debug = false
 
-# The query! macros run at compile time; an optimized build of them pays off on every check.
-[profile.dev.package.sqlx-macros]
-opt-level = 3
-
 [profile.release]
 strip = true
 panic = "abort"

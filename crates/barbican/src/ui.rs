@@ -113,6 +113,7 @@ fn meta(app: &App) -> Meta {
         has_countries: geo.has_countries(),
         has_asns: geo.has_asns(),
         edge_api: app.config.edge.is_some(),
+        edge_fingerprint: app.edge_fingerprint.get().cloned(),
     }
 }
 

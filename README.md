@@ -75,7 +75,8 @@ database. A full example is [`dist/config.toml`](dist/config.toml).
 |---|---|---|
 | `database.path` | `/var/lib/barbican/barbican.db` | |
 | `ui.listen` | (no UI) | The web UI and its WebSocket API. It has no login: listen on localhost or a private address, behind a proxy with authentication. |
-| `edge.listen` | (no edge API) | The API edge agents follow. |
+| `edge.listen` | (no edge API) | The API edge agents follow, over TLS only. |
+| `edge.cert`, `edge.key` | made on the first start | Its TLS certificate and key (PEM). Without them, a self-signed pair is made next to the database; edges pin it by its fingerprint (`barbican edge-fingerprint`). |
 | `edge.client` | | `[[edge.client]]` tables: `name`, and `token` or `token_file` (at least 16 characters). |
 | `firewall.enabled` | `true` | `false`: decide and record, change nothing (as `--dry-run`). |
 | `firewall.table` | `barbican` | The `inet` table barbican owns. |
@@ -202,7 +203,8 @@ config barbican 'main'
 	option persist_interval '3600'
 
 config upstream 'server'
-	option url 'http://192.168.1.10:7380'
+	option url 'https://192.168.1.10:7380'
+	option fingerprint '3F:A1:...'        # barbican edge-fingerprint, on the agent
 	option token_file '/etc/barbican/server.token'
 ```
 
@@ -211,8 +213,12 @@ at boot by the init script before the firewall and the network start (`START=11`
 while agents are unreachable. A router without a clock that keeps time boots in the past: lengths are counted from
 when the state was saved.
 
-`barbican-edge status` prints its status; LuCI shows it (**Services → Barbican**). Only `http://` upstreams: keep the
-edge API on the LAN, its tokens protect it.
+`barbican-edge status` prints its status; LuCI shows it (**Services → Barbican**).
+
+**Security**: edges only pull, nothing can push to them. The edge API is TLS only, and an edge accepts exactly the
+certificate whose fingerprint it is configured with (no CA, so it works with bare LAN addresses): nobody between an
+edge and its agent can read the tokens or feed the edge bans or allow lists. Each edge has its own token (at least
+16 characters), and the API only reads.
 
 The edge API (`GET /api/edge/v1/changes?epoch=&since=&wait=`, `GET /api/edge/v1/list`, both with
 `Authorization: Bearer <token>`) is described in [`crates/barbican-common/src/edge.rs`](crates/barbican-common/src/edge.rs).

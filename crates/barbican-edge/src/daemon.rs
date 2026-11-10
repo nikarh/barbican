@@ -64,6 +64,8 @@ pub struct Upstream {
     pub name: String,
     pub url: String,
     pub token: String,
+    /// SHA-256 of the agent's TLS certificate.
+    pub fingerprint: String,
 }
 
 #[derive(Debug, Clone)]
@@ -104,11 +106,21 @@ pub fn load_config(path: &Path, defaults: &Defaults) -> Result<Config, String> {
             .ok_or_else(|| format!("upstream {name}: no url"))?
             .trim_end_matches('/')
             .to_owned();
-        if !url.starts_with("http://") {
+        if !url.starts_with("https://") {
             return Err(format!(
-                "upstream {name}: only http:// URLs (no TLS on the router; keep the API on the LAN)"
+                "upstream {name}: only https:// URLs (the edge API is TLS only)"
             ));
         }
+        let fingerprint = s
+            .option("fingerprint")
+            .ok_or_else(|| {
+                format!(
+                    "upstream {name}: no fingerprint (barbican edge-fingerprint prints the agent's)"
+                )
+            })?
+            .to_owned();
+        crate::http::parse_fingerprint(&fingerprint)
+            .map_err(|e| format!("upstream {name}: {e}"))?;
         let token = match (s.option("token"), s.option("token_file")) {
             (Some(t), _) => t.to_owned(),
             (None, Some(f)) => std::fs::read_to_string(f)
@@ -117,7 +129,12 @@ pub fn load_config(path: &Path, defaults: &Defaults) -> Result<Config, String> {
                 .to_owned(),
             (None, None) => return Err(format!("upstream {name}: no token")),
         };
-        upstreams.push(Upstream { name, url, token });
+        upstreams.push(Upstream {
+            name,
+            url,
+            token,
+            fingerprint,
+        });
     }
     Ok(Config {
         program: defaults.name,
@@ -223,24 +240,23 @@ fn follow(
     mut list_version: String,
     tx: &mpsc::Sender<Message>,
 ) {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(WAIT + 15)))
-        .user_agent(format!("{program}/{VERSION}"))
-        .build()
-        .into();
-    let auth = format!("Bearer {}", upstream.token);
+    let client = match crate::http::Client::new(
+        &upstream.url,
+        &upstream.fingerprint,
+        &upstream.token,
+        &format!("{program}/{VERSION}"),
+    ) {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = tx.send(Message::Failed(index, e));
+            return;
+        }
+    };
     let mut backoff = Duration::from_secs(2);
     loop {
-        let url = format!(
-            "{}{CHANGES_PATH}?epoch={epoch}&since={seq}&wait={WAIT}",
-            upstream.url
-        );
-        let result = agent
-            .get(&url)
-            .header("Authorization", &auth)
-            .call()
-            .map_err(|e| e.to_string())
-            .and_then(|mut r| r.body_mut().read_to_string().map_err(|e| e.to_string()))
+        let path = format!("{CHANGES_PATH}?epoch={epoch}&since={seq}&wait={WAIT}");
+        let result = client
+            .get(&path, Duration::from_secs(WAIT + 15), 16 * 1024 * 1024)
             .and_then(|body| serde_json::from_str::<Changes>(&body).map_err(|e| e.to_string()));
         match result {
             Ok(changes) => {
@@ -252,7 +268,7 @@ fn follow(
                     return;
                 }
                 if wanted != list_version {
-                    match fetch_list(&agent, upstream, &auth) {
+                    match fetch_list(&client) {
                         Ok((version, nets)) => {
                             list_version.clone_from(&version);
                             if tx.send(Message::List(index, version, nets)).is_err() {
@@ -276,21 +292,8 @@ fn follow(
     }
 }
 
-fn fetch_list(
-    agent: &ureq::Agent,
-    upstream: &Upstream,
-    auth: &str,
-) -> Result<(String, Vec<Net>), String> {
-    let body = agent
-        .get(format!("{}{LIST_PATH}", upstream.url))
-        .header("Authorization", auth)
-        .call()
-        .map_err(|e| e.to_string())?
-        .body_mut()
-        .with_config()
-        .limit(256 * 1024 * 1024)
-        .read_to_string()
-        .map_err(|e| e.to_string())?;
+fn fetch_list(client: &crate::http::Client) -> Result<(String, Vec<Net>), String> {
+    let body = client.get(LIST_PATH, Duration::from_secs(120), 256 * 1024 * 1024)?;
     parse_list(&body).map_err(|e| e.to_string())
 }
 
@@ -735,10 +738,11 @@ mod tests {
             &path,
             format!(
                 "config barbican 'main'\n\toption lists '0'\n\toption priority '-250'\n\n\
-                 config upstream 'files'\n\toption url 'http://192.0.2.10:7380/'\n\toption token 'abc'\n\n\
-                 config upstream 'pi'\n\toption url 'http://192.0.2.11:7380'\n\toption token_file '{}'\n\n\
+                 config upstream 'files'\n\toption url 'https://192.0.2.10:7380/'\n\toption token 'abc'\n\toption fingerprint '{fp}'\n\n\
+                 config upstream 'pi'\n\toption url 'https://192.0.2.11:7380'\n\toption token_file '{}'\n\toption fingerprint '{fp}'\n\n\
                  config upstream 'off'\n\toption enabled '0'\n\toption url 'http://192.0.2.12:7380'\n",
-                token.display()
+                token.display(),
+                fp = "AB".repeat(32)
             ),
         )
         .unwrap();
@@ -747,11 +751,11 @@ mod tests {
         assert_eq!(c.main.option("priority"), Some("-250"));
         assert_eq!(c.state, PathBuf::from("/tmp/state.json"));
         assert_eq!(c.upstreams.len(), 2);
-        assert_eq!(c.upstreams[0].url, "http://192.0.2.10:7380");
+        assert_eq!(c.upstreams[0].url, "https://192.0.2.10:7380");
         assert_eq!(c.upstreams[1].token, "secret-from-file");
         std::fs::write(
             &path,
-            "config upstream\n\toption url 'https://x'\n\toption token 'a'\n",
+            "config upstream\n\toption url 'https://x'\n\toption token 'a'\n\toption fingerprint 'nope'\n",
         )
         .unwrap();
         assert!(load_config(&path, &DEFAULTS).is_err());

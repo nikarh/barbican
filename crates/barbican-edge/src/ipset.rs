@@ -156,7 +156,23 @@ impl<E: Exec> Ipset<E> {
         let program = self.tables(family).ok_or("no ip6tables")?;
         let mut all = vec!["-t", "mangle"];
         all.extend_from_slice(args);
-        self.exec.run(program, &all, None)
+        // Another program changing the rules holds the xtables lock; old iptables (1.4) has no -w to wait for it.
+        let mut tries = 0;
+        loop {
+            match self.exec.run(program, &all, None) {
+                Err(e)
+                    if e.contains("xtables lock")
+                        || e.contains("Resource temporarily unavailable") =>
+                {
+                    tries += 1;
+                    if tries >= 25 {
+                        return Err(e);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+                other => return other,
+            }
+        }
     }
 
     fn hooked(&self, family: Family) -> bool {

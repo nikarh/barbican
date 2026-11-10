@@ -48,6 +48,8 @@ pub struct App {
     pub firewall: Mutex<FirewallStatus>,
     pub http: reqwest::Client,
     pub dry_run: bool,
+    /// The edge API's certificate fingerprint, once it listens.
+    pub edge_fingerprint: std::sync::OnceLock<String>,
 }
 
 /// The HTTP client for downloads (geolocation databases, blocklists), with rustls on ring.
@@ -98,6 +100,7 @@ impl App {
             }),
             http,
             dry_run,
+            edge_fingerprint: std::sync::OnceLock::new(),
         })
     }
 

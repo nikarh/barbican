@@ -101,6 +101,7 @@ packages:
   - ipset
   - jq
   - nftables
+  - openssl
   - python3
   - socat
   - sqlite3

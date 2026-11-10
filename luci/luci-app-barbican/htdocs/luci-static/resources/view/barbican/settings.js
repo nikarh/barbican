@@ -36,7 +36,7 @@ return view.extend({
 		o.placeholder = '-190';
 
 		s = m.section(form.GridSection, 'upstream', _('Agents'),
-			_('The edge API of each agent: http://<address>:<port>, on the LAN.'));
+			_('The edge API of each agent: https://<address>:<port>, with the fingerprint of its certificate (barbican edge-fingerprint on the agent prints it).'));
 		s.addremove = true;
 		s.anonymous = false;
 		s.nodescriptions = true;
@@ -47,10 +47,18 @@ return view.extend({
 		o.editable = true;
 
 		o = s.option(form.Value, 'url', _('URL'));
-		o.placeholder = 'http://192.168.1.10:7380';
+		o.placeholder = 'https://192.168.1.10:7380';
 		o.rmempty = false;
 		o.validate = function(section, value) {
-			return /^http:\/\/[^\/\s]+(\/.*)?$/.test(value) || _('An http:// URL (TLS isn\'t supported on the router)');
+			return /^https:\/\/[^\/\s]+(\/.*)?$/.test(value) || _('An https:// URL');
+		};
+
+		o = s.option(form.Value, 'fingerprint', _('Certificate fingerprint'),
+			_('SHA-256 of the agent\'s certificate: only that certificate is accepted.'));
+		o.rmempty = false;
+		o.modalonly = true;
+		o.validate = function(section, value) {
+			return /^(SHA256:)?([0-9A-Fa-f]{2}:?){32}$/.test(value.trim()) || _('64 hex digits, colons optional');
 		};
 
 		o = s.option(form.Value, 'token', _('Token'));

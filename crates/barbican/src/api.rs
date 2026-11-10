@@ -304,6 +304,8 @@ pub struct Meta {
     pub has_asns: bool,
     /// The edge API is enabled.
     pub edge_api: bool,
+    /// SHA-256 of the edge API's TLS certificate, which edges are configured with.
+    pub edge_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone, Default)]
