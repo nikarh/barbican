@@ -57,7 +57,7 @@ jobs:
         run: test "$TAG" = "v$(cargo pkgid -p barbican | sed 's/.*[#@]//')"
       - name: Build the frontend
         run: npm --prefix web ci --no-audit --no-fund && npm --prefix web run build
-      - run: cargo zigbuild --locked --release --target ${{ matrix.arch }}-unknown-linux-musl -p barbican
+      - run: cargo zigbuild --locked --release --target ${{ matrix.arch }}-unknown-linux-musl -p barbican -p barbican-vlogs
         env:
           BARBICAN_VERSION_SUFFIX: ${{ inputs.version-suffix }}
       - name: Archive and packages
@@ -66,7 +66,8 @@ jobs:
           bin=target/${{ matrix.arch }}-unknown-linux-musl/release/barbican
           mkdir -p out barbican
           cp "$bin" out/barbican-${{ matrix.arch }}-linux-musl
-          cp "$bin" dist/barbican.service dist/barbican.sysusers dist/barbican.tmpfiles dist/config.toml README.md LICENSE-MIT LICENSE-APACHE barbican/
+          cp "$bin-vlogs" out/barbican-vlogs-${{ matrix.arch }}-linux-musl
+          cp "$bin" "$bin-vlogs" dist/barbican.service dist/barbican.sysusers dist/barbican.tmpfiles dist/config.toml README.md LICENSE-MIT LICENSE-APACHE barbican/
           tar -czf out/barbican-${{ matrix.arch }}-linux-musl.tar.gz barbican
           scripts/package.sh ${{ matrix.arch }} "$bin" out
         env:
