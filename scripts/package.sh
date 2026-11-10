@@ -27,6 +27,8 @@ stage=target/package
 rm -rf "${stage}"
 mkdir -p "${stage}"
 install -m 0755 "${binary}" "${stage}/barbican"
+# barbican-vlogs, built next to it.
+install -m 0755 "${binary}-vlogs" "${stage}/barbican-vlogs"
 grep -q '^ExecStart=/usr/bin/barbican$' dist/barbican.service
 
 version="$(cargo pkgid -p barbican | sed 's/.*[#@]//')${BARBICAN_VERSION_SUFFIX:-}"

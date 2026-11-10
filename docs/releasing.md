@@ -20,7 +20,8 @@ the newest file:
 | Asset | Contents |
 | --- | --- |
 | `barbican-{x86_64,aarch64}-linux-musl` | The agent |
-| `barbican-{x86_64,aarch64}-linux-musl.tar.gz` | The agent, its systemd unit, the example config, the README and the licenses |
+| `barbican-vlogs-{x86_64,aarch64}-linux-musl` | A VictoriaLogs query's history as timestamped lines, for `barbican import` |
+| `barbican-{x86_64,aarch64}-linux-musl.tar.gz` | The agent and barbican-vlogs, its systemd unit, the example config, the README and the licenses |
 | `barbican_{amd64,arm64}.deb`, `barbican-{x86_64,aarch64}.pkg.tar.zst` | Debian and Arch Linux packages of the agent |
 | `barbican-edge-{x86_64,aarch64,armv7}.apk`, `.ipk` | The edge agent for OpenWrt (25.12 and later, 24.10 and earlier) |
 | `luci-app-barbican.apk`, `.ipk` | Its LuCI pages |

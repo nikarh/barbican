@@ -65,7 +65,7 @@ jobs:
       - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
           install_args: zig github:rust-cross/cargo-zigbuild nfpm
-      - run: cargo zigbuild --locked --release --target x86_64-unknown-linux-musl -p barbican
+      - run: cargo zigbuild --locked --release --target x86_64-unknown-linux-musl -p barbican -p barbican-vlogs
         env:
           BARBICAN_VERSION_SUFFIX: -dev+${{ github.sha }}
       - run: scripts/package.sh x86_64 target/x86_64-unknown-linux-musl/release/barbican out

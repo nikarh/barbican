@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/barbican", "crates/barbican-common", "crates/barbican-edge"]
+members = ["crates/barbican", "crates/barbican-common", "crates/barbican-edge", "crates/barbican-vlogs"]
 
 [workspace.package]
 version = "0.1.0"

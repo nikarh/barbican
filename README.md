@@ -127,18 +127,19 @@ would have (most are long over; a year-long one from a month ago is still on). E
 source of the configuration, in the same timestamped format. Stop the agent first; a docker source the agent hasn't
 read yet then goes on from the end of the import, not an hour back.
 
+`barbican-vlogs` (in the same packages) streams a VictoriaLogs query's history in that format, oldest first: the
+time range in windows, several fetched at a time, each parsed as it arrives (about 400 000 lines a second on a small
+server). As the agent's user, so the database stays its own:
+
 ```sh
 systemctl stop barbican
-# From VictoriaLogs, for example. The agent's own directory is where its user can read them.
-mkdir -p /var/lib/private/barbican/import && cd /var/lib/private/barbican/import
-curl -s http://127.0.0.1:9428/select/logsql/query -d 'query=container_name:traefik' -d start=30d \
-  | jq -r '._time + " " + ._msg' > traefik.log
-# As the agent's user (the unit's DynamicUser).
-systemd-run --wait --pipe -p DynamicUser=yes -p User=barbican -p StateDirectory=barbican \
-  barbican import traefik:/var/lib/barbican/import/traefik.log
-rm -r /var/lib/private/barbican/import
+systemd-run --wait --pipe -p DynamicUser=yes -p User=barbican -p StateDirectory=barbican bash -c '
+  vlogs() { barbican-vlogs --url http://127.0.0.1:9428 --since 2026-02-12 "$1"; }
+  barbican import traefik:<(vlogs container_name:traefik) sftp:<(vlogs container_name:sftpd)'
 systemctl start barbican
 ```
+
+`barbican-vlogs --help` has its options (`--since`/`--until` as a time, a date or an age like `30d`, `--parallel`).
 
 ## Rules and policy
 

@@ -72,9 +72,9 @@ dir = "web"
 run = "npm run build"
 
 [tasks.build]
-description = "Release build of the agent (with the frontend embedded) and of the edge agent"
+description = "Release build of the agent (with the frontend embedded), barbican-vlogs and the edge agent"
 depends = ["web:build"]
-run = "cargo build --locked --release -p barbican -p barbican-edge"
+run = "cargo build --locked --release -p barbican -p barbican-vlogs -p barbican-edge"
 
 [tasks."build:edge"]
 description = "Small static builds of the edge agent for routers: mise run build:edge [target...]"

@@ -34,6 +34,10 @@ contents:
     dst: /usr/bin/barbican
     file_info:
       mode: 0755
+  - src: target/package/barbican-vlogs
+    dst: /usr/bin/barbican-vlogs
+    file_info:
+      mode: 0755
   - src: dist/barbican.service
     dst: /usr/lib/systemd/system/barbican.service
     file_info:

@@ -192,6 +192,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "barbican-vlogs"
+version = "0.1.0"
+dependencies = [
+ "barbican-common",
+ "futures-util",
+ "pico-args",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1477,6 +1491,8 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "rustls-platform-verifier",
+ "serde",
+ "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
