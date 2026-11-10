@@ -148,12 +148,15 @@ export class RpcClient {
       if (this.socket !== socket) return
       this.socket = null
       this.setState('closed')
+      // Calls still queued were never sent: they go out once connected. Those sent are lost.
+      const queued = new Set(this.queue.map((r) => r.id))
       for (const [id, p] of this.pending) {
+        if (queued.has(id)) continue
+        this.pending.delete(id)
         if (!this.subscriptions.has(id)) {
           p.reject(new RpcError('disconnected', 'The connection to the agent was lost'))
         }
       }
-      this.pending.clear()
       const delay = Math.min(MAX_BACKOFF_MS, 500 * 2 ** this.attempt)
       this.attempt += 1
       window.setTimeout(() => {
