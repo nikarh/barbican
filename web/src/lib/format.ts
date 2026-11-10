@@ -28,12 +28,21 @@ export const CONTINENTS: { code: string; name: string }[] = [
   { code: 'SA', name: 'South America' },
 ]
 
-/** Every ISO 3166-1 alpha-2 code the browser knows a name for. */
+/** Codes the browser has names for that aren't countries of today (withdrawn ones, such as DD for East Germany,
+ * named "Germany"; reserved ones; groupings): geolocation databases don't use them. */
+const NOT_COUNTRIES = new Set(
+  'AC AN BU CP CS DD DG DY EA EU EZ FX HV IC NH NT QO QU RH SU TA TP UK UN VD XA XB YD YU ZR'.split(
+    ' ',
+  ),
+)
+
+/** Every ISO 3166-1 alpha-2 code of a country of today that the browser knows a name for. */
 export const COUNTRIES: { code: string; name: string }[] = (() => {
   const out: { code: string; name: string }[] = []
   for (let a = 65; a <= 90; a += 1) {
     for (let b = 65; b <= 90; b += 1) {
       const code = String.fromCharCode(a, b)
+      if (NOT_COUNTRIES.has(code)) continue
       try {
         const name = regionNames.of(code)
         if (name !== undefined && name !== code && !name.includes('Unknown'))
