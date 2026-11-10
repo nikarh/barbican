@@ -90,7 +90,8 @@ say "a reboot without the agent"
 rpc ban.create "'{\"net\": \"203.0.113.77\", \"secs\": null, \"reason\": \"e2e edge reboot\"}'" >/dev/null
 wait_until 15 in_set || true
 # The state is saved when it changed, at most every persist_interval (1 s here).
-sleep 3
+saved() { router 'grep -q 203.0.113.77 /etc/barbican/state.json'; }
+wait_until 10 saved || true
 server 'sudo systemctl stop barbican'
 router 'reboot' || true
 # Until the old system is gone (SSH answers for a while during the shutdown), then until the new one is up.
