@@ -19,6 +19,10 @@ build. CI runs the same on a GitHub runner with KVM, with the images cached.
 `e2e/vm.sh <server|router> <up|ssh|put|down|destroy>` manages one VM. The two are joined by a UDP tunnel between their
 QEMUs: the server is 10.99.0.1, the router's WAN 10.99.0.2. Each is reached over SSH through user-mode networking.
 
+The suites wait for what they check, not for a fixed time: a dropped connection is one that isn't answered within
+half a second (over a veth, an answer takes well under a millisecond), and a check that something did *not* happen
+waits until the agent has handled what came after it.
+
 ## The server suite (`server.sh`)
 
 Runs in the Debian VM as root. Attackers live in network namespaces: `att` with 203.0.113.10 and 1.0.1.10 (an

@@ -26,12 +26,14 @@ wait_until() {
   shift
   until "$@"; do
     ((SECONDS < deadline)) || return 1
-    sleep 0.3
+    sleep 0.1
   done
 }
 
+# Dropped packets show as a connection that doesn't happen. Over a veth the kernel answers a SYN in well under a
+# millisecond, busy or not, so half a second without an answer means dropped.
 reach() { # <netns> <source address> <target>
-  ip netns exec "$1" curl -s -o /dev/null -m 2 --interface "$2" "http://$3:8080/"
+  ip netns exec "$1" curl -s -o /dev/null --connect-timeout 0.5 -m 3 --interface "$2" "http://$3:8080/"
 }
 blocked() { ! reach "$@"; }
 att() { reach att 203.0.113.10 203.0.113.1; }
@@ -49,6 +51,11 @@ active_ban_id() { # <net>
 import json, sys
 rows = [b for b in json.load(sys.stdin)['rows'] if b['net'] == sys.argv[1]]
 print(rows[0]['id'] if rows else '')" "$1"
+}
+banned() { [[ -n $(active_ban_id "$1") ]]; }
+# Whether the agent has handled an event of this address: what it did about it is in the database by then.
+seen() { # <ip>
+  ${RPC} events.list "{\"ip\": \"$1\", \"offset\": 0}" | python3 -c "import json, sys; sys.exit(not json.load(sys.stdin)['rows'])"
 }
 lift() { # <net>
   local id
@@ -171,14 +178,17 @@ if wait_until 5 att; then pass "lifted"; else fail "still blocked after lifting"
 say "the allow list wins"
 entry=$(${RPC} entry.save '{"net": "203.0.113.0/24", "allow": true, "note": "e2e", "secs": null}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
 probe 203.0.113.10
-sleep 2
-if att && [[ -z $(active_ban_id 203.0.113.10) ]]; then pass "an allowed address isn't banned"; else fail "an allowed address was banned"; fi
+# An allowed address leaves no trace; a probe after it, from elsewhere, is handled after it.
+probe 192.0.2.10
+wait_until 5 banned 192.0.2.10 || true
+if att && ! banned 203.0.113.10; then pass "an allowed address isn't banned"; else fail "an allowed address was banned"; fi
 ${RPC} entry.delete "{\"id\": ${entry}}" >/dev/null
+lift 192.0.2.10
 
 say "thresholds, from the journal"
 systemd-cat -t e2e-sshd echo "Invalid user admin from 198.51.100.10 port 4242"
-sleep 2
-if by; then pass "one unknown user isn't enough"; else fail "banned on the first unknown user"; fi
+wait_until 5 seen 198.51.100.10 || true
+if by && ! banned 198.51.100.10; then pass "one unknown user isn't enough"; else fail "banned on the first unknown user"; fi
 systemd-cat -t e2e-sshd echo "Invalid user oracle from 198.51.100.10 port 4243"
 if wait_until 5 blocked by 198.51.100.10 198.51.100.1; then pass "the second one bans"; else fail "not banned after two unknown users"; fi
 lift 198.51.100.10
@@ -201,7 +211,7 @@ ${RPC} policy.update "${policy}" >/dev/null
 if wait_until 30 cn; then pass "unblocked"; else fail "still blocked after unblocking the country"; fi
 
 say "bans run out in the kernel"
-${RPC} ban.create '{"net": "203.0.113.10", "secs": 4, "reason": "e2e"}' >/dev/null
+${RPC} ban.create '{"net": "203.0.113.10", "secs": 5, "reason": "e2e"}' >/dev/null
 if wait_until 5 att_blocked; then pass "a ban by hand blocks"; else fail "a ban by hand doesn't block"; fi
 systemctl stop barbican
 if nft list table inet barbican >/dev/null && att_blocked; then pass "stopping leaves the blocks in place"; else fail "stopping removed the blocks"; fi
@@ -251,7 +261,7 @@ if wait_until 120 drop_fetched; then pass "Spamhaus DROP is fetched"; else fail 
 # A list served here, blocking: its prefix is dropped as a whole.
 mkdir -p /tmp/feed && printf '# e2e\n198.51.100.0/24 ; bystanders\n' >/tmp/feed/list.txt
 setsid -f sh -c 'cd /tmp/feed && exec python3 -m http.server 8099 --bind 127.0.0.1' </dev/null >/dev/null 2>&1
-sleep 1
+wait_until 5 curl -fs -o /dev/null http://127.0.0.1:8099/list.txt
 feed=$(${RPC} feed.save '{"id": 0, "name": "e2e", "url": "http://127.0.0.1:8099/list.txt", "enabled": true, "block": true, "refreshSecs": 3600, "username": null, "password": null}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["def"]["id"])')
 if wait_until 30 blocked by 198.51.100.10 198.51.100.1; then pass "a blocking list drops what it lists"; else fail "the blocking list doesn't block"; fi
 if att; then pass "others still get through"; else fail "a blocking list blocked more than it lists"; fi
@@ -288,7 +298,7 @@ in_ipset() { ipset list barbican-host4 2>/dev/null | grep -q '^203.0.113.10'; }
 sed "s/option fingerprint .*/option fingerprint '$(printf '00%.0s' $(seq 32))'/; s#/tmp/edge-ipset-#/tmp/edge-wrong-#;
   s/^config barbican 'main'$/config barbican 'main'\n\toption enabled '0'/" /tmp/edge-ipset.conf >/tmp/edge-wrong.conf
 setsid -f sh -c "exec ${DIR}/barbican-edge-ipset --config /tmp/edge-wrong.conf >/tmp/edge-wrong.log 2>&1" </dev/null
-wrong() { grep -q "not the configured fingerprint" /tmp/edge-wrong.log; }
+wrong() { grep -q "not the configured fingerprint" /tmp/edge-wrong.log 2>/dev/null; }
 if wait_until 10 wrong; then pass "an edge refuses an agent whose certificate isn't the pinned one"; else fail "the wrong fingerprint: $(cat /tmp/edge-wrong.log)"; fi
 pkill -f "edge-wrong.conf" || true
 if wait_until 10 att; then pass "nothing blocked yet"; else fail "blocked before anything was banned"; fi
@@ -302,9 +312,10 @@ lift 203.0.113.10
 if wait_until 10 att; then pass "a lift reaches it"; else fail "still blocked by the ipset edge"; fi
 ${RPC} ban.create '{"net": "203.0.113.10", "secs": null, "reason": "e2e ipset"}' >/dev/null
 wait_until 10 att_blocked || true
-sleep 2
+# It saves its state as it stops.
 pkill -TERM -f "barbican-edge-ipset --config /tmp/edge-ipset.conf" || true
-sleep 1
+edge_gone() { ! pgrep -f "barbican-edge-ipset --config /tmp/edge-ipset.conf" >/dev/null; }
+wait_until 5 edge_gone || true
 # A router's firewall restart drops the rules; restore puts them back from the saved state.
 iptables-legacy -t mangle -D PREROUTING -j BARBICAN
 if att; then pass "without the jump, traffic passes"; else fail "blocked without the jump"; fi
