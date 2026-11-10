@@ -7,17 +7,24 @@ mod api;
 mod app;
 mod config;
 mod db;
+mod edge_api;
 mod engine;
 mod feeds;
+mod firewall;
 mod geo;
 mod parse;
 mod replay;
+mod rpc;
 mod rules;
+mod run;
 mod signal;
+mod source;
 mod state;
 mod time;
+mod ui;
+mod web;
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const VERSION: &str = env!("BARBICAN_VERSION");
 
 const HELP: &str = "\
 barbican: bans addresses that abuse services, from their logs
@@ -55,7 +62,7 @@ fn main() -> ExitCode {
             let _ = writeln!(std::io::stderr(), "unknown command {other:?}\n\n{HELP}");
             ExitCode::FAILURE
         }
-        Ok(None) => ExitCode::SUCCESS,
+        Ok(None) => agent(args),
         Err(e) => {
             let _ = writeln!(std::io::stderr(), "{e}");
             ExitCode::FAILURE
@@ -137,6 +144,57 @@ fn replay_command(mut args: pico_args::Arguments) -> ExitCode {
         }
         Err(e) => {
             let _ = writeln!(err, "replay: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn agent(mut args: pico_args::Arguments) -> ExitCode {
+    let mut err = std::io::stderr();
+    let dry_run = args.contains("--dry-run");
+    let path: std::path::PathBuf = args
+        .opt_value_from_str(["-c", "--config"])
+        .ok()
+        .flatten()
+        .or_else(|| std::env::var_os("BARBICAN_CONFIG").map(Into::into))
+        .unwrap_or_else(|| config::DEFAULT_PATH.into());
+    let rest = args.finish();
+    if !rest.is_empty() {
+        let _ = writeln!(err, "unexpected arguments: {rest:?}\n\n{HELP}");
+        return ExitCode::FAILURE;
+    }
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let builder = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr);
+    // The journal has timestamps of its own.
+    if std::env::var_os("JOURNAL_STREAM").is_some() {
+        builder.without_time().init();
+    } else {
+        builder.init();
+    }
+    let config = match config::Config::load(&path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match runtime.block_on(run::run(config, dry_run)) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            tracing::error!("{e}");
             ExitCode::FAILURE
         }
     }

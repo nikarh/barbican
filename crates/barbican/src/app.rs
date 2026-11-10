@@ -5,19 +5,22 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use barbican_common::edge::Journal;
-use barbican_common::nft::Counters;
 use tokio::sync::{Notify, broadcast, watch};
 
 use crate::api::{EdgeStatus, FirewallStatus, Live, SourceStatus};
 use crate::config::Config;
 use crate::db::Db;
 use crate::geo::Geo;
+use crate::rules::RuleSet;
 use crate::state::{Lists, State};
 
 pub struct App {
     pub config: Config,
     pub db: Db,
     pub state: RwLock<State>,
+    /// The compiled rules every source matches lines against; replaced as a whole.
+    pub rules: watch::Sender<Arc<RuleSet>>,
+    pub rules_generation: std::sync::atomic::AtomicU64,
     pub geo: RwLock<Arc<Geo>>,
     /// The list sets' content, as the firewall last computed it.
     pub lists: RwLock<Lists>,
@@ -33,10 +36,8 @@ pub struct App {
     pub sources: Mutex<BTreeMap<String, SourceStatus>>,
     pub edges: Mutex<BTreeMap<String, EdgeStatus>>,
     pub firewall: Mutex<FirewallStatus>,
-    pub counters: Mutex<Counters>,
     pub http: reqwest::Client,
     pub dry_run: bool,
-    pub started: i64,
 }
 
 /// The HTTP client for downloads (geolocation databases, blocklists), with rustls on ring.
@@ -62,11 +63,14 @@ impl App {
         let epoch = format!("{:x}", now() ^ i64::from(std::process::id()) << 32);
         let (journal_seq, _) = watch::channel(0);
         let (live, _) = broadcast::channel(1_024);
+        let (rules, _) = watch::channel(Arc::new(RuleSet::default()));
         let enabled = config.firewall.enabled && !dry_run;
         Arc::new(Self {
             config,
             db,
             state: RwLock::new(State::default()),
+            rules,
+            rules_generation: std::sync::atomic::AtomicU64::new(0),
             geo: RwLock::new(Arc::new(Geo::default())),
             lists: RwLock::new(Lists::default()),
             firewall_wake: Notify::new(),
@@ -81,10 +85,8 @@ impl App {
                 enabled,
                 ..FirewallStatus::default()
             }),
-            counters: Mutex::new(Counters::default()),
             http,
             dry_run,
-            started: now(),
         })
     }
 

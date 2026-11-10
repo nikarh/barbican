@@ -126,8 +126,9 @@ pub struct Block {
 pub struct Desired {
     pub allow: Vec<Net>,
     pub block: Vec<Block>,
-    /// Countries and blocklists, all in one: replaced as a whole when `lists_version` changes.
-    pub lists: Vec<Net>,
+    /// Countries and blocklists, all in one: replaced as a whole when `lists_version` changes. Shared, since it
+    /// can be large and changes rarely.
+    pub lists: std::sync::Arc<Vec<Net>>,
     /// Identifies the content of `lists`, e.g. a hash of it.
     pub lists_version: String,
 }
@@ -715,11 +716,11 @@ mod tests {
                     until: None,
                 },
             ],
-            lists: vec![
+            lists: std::sync::Arc::new(vec![
                 net("198.51.100.0/25"),
                 net("2001:db8:1::/48"),
                 net("0.0.0.0/0"),
-            ],
+            ]),
             lists_version: "v1".to_owned(),
         };
         let changes = fw.reconcile(&desired, 1_000).unwrap();

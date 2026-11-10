@@ -1,8 +1,6 @@
 //! Rules (what counts as abuse, and what to do about it) and the ban policy (for how long). Both are edited in the
 //! UI and stored in the database; the defaults below are what a new database starts with.
 
-use std::collections::BTreeMap;
-
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
@@ -552,16 +550,6 @@ impl RuleSet {
         }
         matched
     }
-}
-
-/// Every country's length, by code; for the UI.
-#[must_use]
-pub fn country_lengths(policy: &Policy) -> BTreeMap<String, u64> {
-    policy
-        .country_lengths
-        .iter()
-        .map(|l| (l.country.to_ascii_uppercase(), l.secs))
-        .collect()
 }
 
 #[cfg(test)]

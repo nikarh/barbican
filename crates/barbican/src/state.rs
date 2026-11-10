@@ -6,7 +6,7 @@ use std::net::IpAddr;
 use std::sync::Arc;
 
 use barbican_common::edge::ListRef;
-use barbican_common::net::{Net, NetSet, aggregate};
+use barbican_common::net::{Net, aggregate};
 use barbican_common::nft::{Block, Desired};
 
 use crate::db::{BanRow, EntryRow};
@@ -255,7 +255,7 @@ impl State {
         Desired {
             allow,
             block,
-            lists: lists.nets.as_ref().clone(),
+            lists: Arc::clone(&lists.nets),
             lists_version: lists.version.clone(),
         }
     }
@@ -269,12 +269,6 @@ impl Lists {
             count: self.nets.len(),
         }
     }
-}
-
-/// The prefixes a set of nets covers, for checking membership of many addresses.
-#[must_use]
-pub fn set_of(nets: &[Net]) -> NetSet {
-    NetSet::new(nets)
 }
 
 #[cfg(test)]
