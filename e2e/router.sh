@@ -66,8 +66,9 @@ if wait_until 10 attacker_through; then pass "the attacker reaches the router"; 
 
 say "following the agent"
 rpc ban.create "'{\"net\": \"203.0.113.77\", \"secs\": null, \"reason\": \"e2e edge\"}'" >/dev/null
-# Installed as a package, which enables and starts it.
-router 'apk add --allow-untrusted /tmp/barbican-edge.apk /tmp/luci-app-barbican.apk >/dev/null 2>&1'
+# Installed as a package, which enables and starts it. The router has no way to the internet: apk would try each
+# repository for most of a minute.
+router 'apk add --no-network --allow-untrusted /tmp/barbican-edge.apk /tmp/luci-app-barbican.apk >/dev/null 2>&1'
 if router '[ -e /etc/rc.d/S11barbican-edge ] && pidof barbican-edge >/dev/null'; then pass "the package installs, enables and starts it"; else fail "the package didn't start it"; fi
 if wait_until 15 in_set; then pass "the agent's ban reached the router"; else fail "the ban isn't in the router's set"; fi
 if attacker_blocked; then pass "the router drops the banned address"; else fail "the banned address still gets through the router"; fi
