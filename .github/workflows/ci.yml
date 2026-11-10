@@ -67,6 +67,8 @@ jobs:
         env:
           BARBICAN_VERSION_SUFFIX: -dev+${{ github.sha }}
       - run: scripts/package.sh x86_64 target/x86_64-unknown-linux-musl/release/barbican out
+        env:
+          BARBICAN_VERSION_SUFFIX: -dev+${{ github.sha }}
       - name: The package installs
         run: |
           set -euo pipefail
