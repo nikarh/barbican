@@ -80,21 +80,55 @@ export function formatLength(seconds: number): string {
   return parts.join(' ')
 }
 
-/** Reads what formatLength writes ("90d", "1h 30m", "2w"), or a number of seconds. */
+const UNIT_NAMES: Record<string, [string, string]> = {
+  y: ['year', 'years'],
+  mo: ['month', 'months'],
+  w: ['week', 'weeks'],
+  d: ['day', 'days'],
+  h: ['hour', 'hours'],
+  min: ['minute', 'minutes'],
+  s: ['second', 'seconds'],
+}
+
+/** "90 days", "1 year", "1 hour 30 minutes": a length in words (two units at most). */
+export function lengthInWords(seconds: number): string {
+  if (seconds <= 0) return '0 seconds'
+  const parts: string[] = []
+  let rest = Math.round(seconds)
+  for (const [unit, size] of DURATION_UNITS) {
+    if (rest >= size && parts.length < 2) {
+      const n = Math.floor(rest / size)
+      const [one, many] = UNIT_NAMES[unit] ?? [unit, unit]
+      parts.push(`${String(n)} ${n === 1 ? one : many}`)
+      rest -= n * size
+    }
+  }
+  return parts.join(' ')
+}
+
+// Longer spellings first: "mo" before "m", "min" before "m".
+const UNIT_PATTERN =
+  /(\d+(?:\.\d+)?)\s*(years?|yrs?|y|months?|mo|weeks?|wk?|days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)/g
+
+/** Reads what formatLength and lengthInWords write ("90d", "1h 30m", "2 weeks", "1 year 2 months"), or a number
+ * of seconds. */
 export function parseLength(text: string): number | null {
   const trimmed = text.trim().toLowerCase()
   if (trimmed === '') return null
   if (/^\d+$/.test(trimmed)) return Number(trimmed)
   let total = 0
-  const re = /(\d+(?:\.\d+)?)\s*(mo|min|y|w|d|h|m|s)/g
   let matched = ''
-  for (const m of trimmed.matchAll(re)) {
-    const unit = DURATION_UNITS.find(([u]) => u === (m[2] === 'm' ? 'min' : m[2]))
+  for (const m of trimmed.matchAll(UNIT_PATTERN)) {
+    const name = m[2] ?? ''
+    let key = name.charAt(0)
+    if (name.startsWith('mo')) key = 'mo'
+    else if (name.startsWith('m')) key = 'min'
+    const unit = DURATION_UNITS.find(([u]) => u === key)
     if (unit === undefined || m[1] === undefined) return null
     total += Number(m[1]) * unit[1]
     matched += m[0]
   }
-  if (matched.replace(/\s/g, '') !== trimmed.replace(/\s/g, '')) return null
+  if (matched.replace(/\s/g, '') !== trimmed.replace(/[\s,]|and/g, '')) return null
   return total > 0 ? Math.round(total) : null
 }
 

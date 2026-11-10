@@ -4,201 +4,148 @@ import {
   Anchor,
   Badge,
   Button,
-  Chip,
   Group,
   Modal,
-  MultiSelect,
   NumberInput,
   Select,
   Stack,
   Switch,
-  Table,
   Tabs,
   Text,
   TextInput,
 } from '@mantine/core'
-import { IconPlus, IconRefresh, IconTrash } from '@tabler/icons-react'
-import { useState } from 'react'
+import { IconPlus, IconRefresh, IconTrash, IconWorld } from '@tabler/icons-react'
+import { useState, type ReactNode } from 'react'
 
 import { useAction, useEntries, useFeedPresets, useFeeds, useMeta, usePolicy } from '../api/hooks'
 import type { FeedDef, Policy } from '../api/generated/model'
-import { Country, LengthInput, LengthSelect, Panel } from '../components/ui'
-import { ago, CONTINENTS, count, COUNTRIES, remaining } from '../lib/format'
+import { AddPicker, EditableList } from '../components/EditableList'
+import { COUNTRY_SELECT } from '../components/countrySelect'
+import { CountryLabel, LengthInput, LengthSelect, Panel } from '../components/ui'
+import { ago, CONTINENTS, count, COUNTRIES, countryName, remaining } from '../lib/format'
 import { navigate } from '../lib/router'
 import { useNow } from '../lib/useNow'
 
-const COUNTRY_OPTIONS = COUNTRIES.map((c) => ({ value: c.code, label: `${c.name} (${c.code})` }))
+const COUNTRY_OPTIONS = COUNTRIES.map((c) => ({ value: c.code, label: c.name }))
 
-/** Lengths for networks (ASNs) and blocklists: shared addresses (VPNs, relays) get short bans. */
-function SharedLengths({
-  policy: p,
-  set,
+/** New entries of the lengths lists start at this; shared addresses are better banned briefly. */
+const NEW_LENGTH = 3_600
+
+/** A part of a panel: a heading, what it is for, and its content. */
+function Section({
+  title,
+  description,
+  children,
 }: {
-  policy: Policy
-  set: (patch: Partial<Policy>) => void
+  title: string
+  description: ReactNode
+  children: ReactNode
 }) {
-  const feeds = useFeeds()
-  const [asn, setAsn] = useState<string | number>('')
-  const [list, setList] = useState<string | null>(null)
   return (
-    <>
-      <Text fz={13} fw={620} mt="xs">
-        By network or blocklist
-      </Text>
-      <Text fz={12} c="var(--ink-dim)" mt={-8}>
-        Addresses many people share (a VPN, Cloudflare WARP on AS13335, iCloud Private Relay through
-        its blocklist) are better banned briefly. The shortest of the country, network and blocklist
-        lengths counts.
-      </Text>
-      {p.asnLengths.map((l, i) => (
-        <Group key={`as${String(l.asn)}`} align="flex-end">
-          <Text w={220} fz={14}>
-            AS{l.asn}
-          </Text>
-          <LengthInput
-            label="Length"
-            value={l.secs}
-            onChange={(secs) => {
-              set({ asnLengths: p.asnLengths.map((x, j) => (j === i ? { ...x, secs } : x)) })
-            }}
-          />
-          <ActionIcon
-            color="red"
-            mb={6}
-            onClick={() => {
-              set({ asnLengths: p.asnLengths.filter((_, j) => j !== i) })
-            }}
-            aria-label={`Remove AS${String(l.asn)}`}
-          >
-            <IconTrash size={16} />
-          </ActionIcon>
-        </Group>
-      ))}
-      {p.listLengths.map((l, i) => (
-        <Group key={`list${l.list}`} align="flex-end">
-          <Text w={220} fz={14}>
-            Listed in {l.list}
-          </Text>
-          <LengthInput
-            label="Length"
-            value={l.secs}
-            onChange={(secs) => {
-              set({ listLengths: p.listLengths.map((x, j) => (j === i ? { ...x, secs } : x)) })
-            }}
-          />
-          <ActionIcon
-            color="red"
-            mb={6}
-            onClick={() => {
-              set({ listLengths: p.listLengths.filter((_, j) => j !== i) })
-            }}
-            aria-label={`Remove ${l.list}`}
-          >
-            <IconTrash size={16} />
-          </ActionIcon>
-        </Group>
-      ))}
-      <Group align="flex-end">
-        <NumberInput
-          label="Add a network"
-          placeholder="13335"
-          prefix="AS"
-          min={1}
-          value={asn}
-          onChange={setAsn}
-          w={160}
-        />
-        <Button
-          variant="default"
-          disabled={Number(asn) <= 0 || p.asnLengths.some((l) => l.asn === Number(asn))}
-          onClick={() => {
-            set({ asnLengths: [...p.asnLengths, { asn: Number(asn), secs: 3_600 }] })
-            setAsn('')
-          }}
-        >
-          Add
-        </Button>
-        <Select
-          label="Add a blocklist"
-          placeholder="Blocklist"
-          data={(feeds.data ?? [])
-            .map((f) => f.def.name)
-            .filter((n) => !p.listLengths.some((l) => l.list === n))}
-          value={list}
-          onChange={setList}
-          w={200}
-        />
-        <Button
-          variant="default"
-          disabled={list === null}
-          onClick={() => {
-            if (list === null) return
-            set({ listLengths: [...p.listLengths, { list, secs: 3_600 }] })
-            setList(null)
-          }}
-        >
-          Add
-        </Button>
-      </Group>
-    </>
+    <Stack gap={8} mt="xs">
+      <div>
+        <Text fz={14} fw={620}>
+          {title}
+        </Text>
+        <Text fz={12.5} c="var(--ink-dim)" maw={760}>
+          {description}
+        </Text>
+      </div>
+      {children}
+    </Stack>
   )
 }
 
-function PolicyForm({ policy }: { policy: Policy }) {
-  const [p, setP] = useState(policy)
-  const [country, setCountry] = useState<string | null>(null)
-  const save = useAction('policy.update', 'Saved')
-  const set = (patch: Partial<Policy>) => {
-    setP((x) => ({ ...x, ...patch }))
+/** The add row of the networks' lengths: an AS number, added with the button or Enter. */
+function AsnAdder({ taken, onAdd }: { taken: number[]; onAdd: (asn: number) => void }) {
+  const [asn, setAsn] = useState<string | number>('')
+  const n = Number(asn)
+  const valid = Number.isInteger(n) && n > 0 && !taken.includes(n)
+  const add = () => {
+    if (!valid) return
+    onAdd(n)
+    setAsn('')
   }
-  const changed = JSON.stringify(p) !== JSON.stringify(policy)
   return (
-    <Stack gap="md">
-      <Panel title="Ban lengths">
-        <Stack gap="sm">
-          <Group align="flex-end" wrap="wrap">
-            <LengthInput
-              label="Default"
-              description="Rules without a length of their own"
-              value={p.banSecs}
-              onChange={(banSecs) => {
-                set({ banSecs })
-              }}
-            />
-            <NumberInput
-              label="Repeat offenders"
-              description="Each earlier ban multiplies by"
-              min={1}
-              max={10}
-              value={p.repeatMultiplier}
-              onChange={(v) => {
-                set({ repeatMultiplier: Math.max(1, Number(v) || 1) })
-              }}
-              w={180}
-            />
-            <LengthInput
-              label="At most"
-              description="Escalation stops here"
-              value={p.maxBanSecs}
-              onChange={(maxBanSecs) => {
-                set({ maxBanSecs })
-              }}
-            />
-          </Group>
-          <Text fz={13} fw={620} mt="xs">
-            By country
-          </Text>
-          <Text fz={12} c="var(--ink-dim)" mt={-8}>
-            Addresses of these countries are banned for this long instead (escalation still
-            applies): shorter for your own country, where people you know share addresses.
-          </Text>
-          {p.countryLengths.map((l, i) => (
-            <Group key={l.country} align="flex-end">
-              <Text w={220} fz={14}>
-                <Country code={l.country} name />
-              </Text>
+    <Group gap={8} wrap="nowrap">
+      <NumberInput
+        placeholder="AS number"
+        prefix="AS"
+        min={1}
+        allowDecimal={false}
+        allowNegative={false}
+        hideControls
+        value={asn}
+        onChange={setAsn}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') add()
+        }}
+        aria-label="AS number to add"
+        error={taken.includes(n) ? true : undefined}
+        style={{ flex: 1 }}
+        classNames={{ input: 'mono' }}
+      />
+      <Button
+        variant="default"
+        leftSection={<IconPlus size={16} />}
+        disabled={!valid}
+        onClick={add}
+      >
+        Add
+      </Button>
+    </Group>
+  )
+}
+
+function LengthsPanel({ p, set }: { p: Policy; set: (patch: Partial<Policy>) => void }) {
+  const feeds = useFeeds()
+  const feedNames = (feeds.data ?? []).map((f) => f.def.name)
+  const freeFeeds = feedNames.filter((n) => !p.listLengths.some((l) => l.list === n))
+  return (
+    <Panel title="Ban lengths">
+      <Stack gap="md">
+        <Group align="flex-end" wrap="wrap">
+          <LengthInput
+            label="Default"
+            description="Rules without a length of their own"
+            value={p.banSecs}
+            onChange={(banSecs) => {
+              set({ banSecs })
+            }}
+          />
+          <NumberInput
+            label="Repeat offenders"
+            description="Each earlier ban multiplies by"
+            min={1}
+            max={10}
+            value={p.repeatMultiplier}
+            onChange={(v) => {
+              set({ repeatMultiplier: Math.max(1, Number(v) || 1) })
+            }}
+            w={180}
+          />
+          <LengthInput
+            label="At most"
+            description="Escalation stops here"
+            value={p.maxBanSecs}
+            onChange={(maxBanSecs) => {
+              set({ maxBanSecs })
+            }}
+          />
+        </Group>
+
+        <Section
+          title="By country"
+          description="Addresses of these countries are banned for this long instead (escalation still applies): shorter for your own country, where people you know share addresses."
+        >
+          <EditableList
+            items={p.countryLengths}
+            itemKey={(l) => l.country}
+            headers={['Country', 'Ban length']}
+            label={(l) => <CountryLabel code={l.country} />}
+            value={(l, i) => (
               <LengthInput
-                label="Length"
+                aria-label={`Ban length for ${countryName(l.country)}`}
                 value={l.secs}
                 onChange={(secs) => {
                   set({
@@ -206,84 +153,238 @@ function PolicyForm({ policy }: { policy: Policy }) {
                   })
                 }}
               />
-              <ActionIcon
-                color="red"
-                mb={6}
-                onClick={() => {
-                  set({ countryLengths: p.countryLengths.filter((_, j) => j !== i) })
-                }}
-                aria-label={`Remove ${l.country}`}
-              >
-                <IconTrash size={16} />
-              </ActionIcon>
-            </Group>
-          ))}
-          <Group align="flex-end">
-            <Select
-              label="Add a country"
-              placeholder="Country"
-              data={COUNTRY_OPTIONS.filter(
-                (c) => !p.countryLengths.some((l) => l.country === c.value),
-              )}
-              value={country}
-              onChange={setCountry}
-              searchable
-              w={260}
-            />
-            <Button
-              variant="default"
-              disabled={country === null}
-              onClick={() => {
-                if (country === null) return
-                set({ countryLengths: [...p.countryLengths, { country, secs: 3_600 }] })
-                setCountry(null)
-              }}
-            >
-              Add
-            </Button>
-          </Group>
-          <SharedLengths policy={p} set={set} />
-        </Stack>
-      </Panel>
-
-      <Panel title="Countries blocked as a whole">
-        <Stack gap="sm">
-          <Text fz={12} c="var(--ink-dim)">
-            Nothing from these reaches the services, on this host and on the edges. Replies to
-            connections made from here still pass.
-          </Text>
-          <MultiSelect
-            label="Countries"
-            data={COUNTRY_OPTIONS}
-            value={p.blockedCountries}
-            onChange={(blockedCountries) => {
-              set({ blockedCountries })
+            )}
+            onRemove={(i) => {
+              set({ countryLengths: p.countryLengths.filter((_, j) => j !== i) })
             }}
-            searchable
-            clearable
+            removeLabel={(l) => `Remove ${countryName(l.country)}`}
+            empty="No country has a length of its own: the rule’s length, or the default, counts."
+            add={
+              <AddPicker
+                placeholder="Add a country…"
+                aria-label="Add a country"
+                data={COUNTRY_OPTIONS.filter(
+                  (c) => !p.countryLengths.some((l) => l.country === c.value),
+                )}
+                {...COUNTRY_SELECT}
+                onAdd={(country) => {
+                  set({ countryLengths: [...p.countryLengths, { country, secs: NEW_LENGTH }] })
+                }}
+              />
+            }
           />
-          <div>
-            <Text fz={14} fw={500} mb={6}>
-              Continents
-            </Text>
-            <Chip.Group
-              multiple
-              value={p.blockedContinents}
-              onChange={(blockedContinents) => {
-                set({ blockedContinents })
+        </Section>
+
+        <Section
+          title="By network"
+          description="Addresses many people share (a VPN, Cloudflare WARP on AS13335) are better banned briefly. The shortest of the country, network and blocklist lengths counts."
+        >
+          <EditableList
+            items={p.asnLengths}
+            itemKey={(l) => String(l.asn)}
+            headers={['Network', 'Ban length']}
+            label={(l) => <span className="mono">AS{l.asn}</span>}
+            value={(l, i) => (
+              <LengthInput
+                aria-label={`Ban length for AS${String(l.asn)}`}
+                value={l.secs}
+                onChange={(secs) => {
+                  set({ asnLengths: p.asnLengths.map((x, j) => (j === i ? { ...x, secs } : x)) })
+                }}
+              />
+            )}
+            onRemove={(i) => {
+              set({ asnLengths: p.asnLengths.filter((_, j) => j !== i) })
+            }}
+            removeLabel={(l) => `Remove AS${String(l.asn)}`}
+            empty="No network has a length of its own."
+            add={
+              <AsnAdder
+                taken={p.asnLengths.map((l) => l.asn)}
+                onAdd={(asn) => {
+                  set({ asnLengths: [...p.asnLengths, { asn, secs: NEW_LENGTH }] })
+                }}
+              />
+            }
+          />
+        </Section>
+
+        <Section
+          title="By blocklist"
+          description="Addresses a blocklist lists, such as iCloud Private Relay’s egress addresses."
+        >
+          <EditableList
+            items={p.listLengths}
+            itemKey={(l) => l.list}
+            headers={['Listed in', 'Ban length']}
+            label={(l) => (
+              <div className="place-text">
+                <div className="place-title">{l.list}</div>
+                {feeds.data !== undefined && !feedNames.includes(l.list) && (
+                  <div className="place-sub" style={{ color: 'var(--status-warn)' }}>
+                    No blocklist has this name any more
+                  </div>
+                )}
+              </div>
+            )}
+            value={(l, i) => (
+              <LengthInput
+                aria-label={`Ban length for addresses listed in ${l.list}`}
+                value={l.secs}
+                onChange={(secs) => {
+                  set({ listLengths: p.listLengths.map((x, j) => (j === i ? { ...x, secs } : x)) })
+                }}
+              />
+            )}
+            onRemove={(i) => {
+              set({ listLengths: p.listLengths.filter((_, j) => j !== i) })
+            }}
+            removeLabel={(l) => `Remove ${l.list}`}
+            empty={
+              feedNames.length === 0 ? (
+                <>
+                  No blocklist has a length of its own. Blocklists are added under{' '}
+                  <Anchor
+                    component="button"
+                    fz="inherit"
+                    onClick={() => {
+                      navigate('settings', { tab: 'feeds' }, true)
+                    }}
+                  >
+                    Blocklists
+                  </Anchor>
+                  .
+                </>
+              ) : (
+                'No blocklist has a length of its own.'
+              )
+            }
+            add={
+              <AddPicker
+                placeholder={feedNames.length === 0 ? 'No blocklists yet' : 'Add a blocklist…'}
+                aria-label="Add a blocklist"
+                data={freeFeeds}
+                disabled={freeFeeds.length === 0}
+                onAdd={(list) => {
+                  set({ listLengths: [...p.listLengths, { list, secs: NEW_LENGTH }] })
+                }}
+              />
+            }
+          />
+        </Section>
+      </Stack>
+    </Panel>
+  )
+}
+
+const CONTINENT_NAMES = new Map(CONTINENTS.map((c) => [c.code, c.name]))
+
+/** A blocked country or continent. */
+interface Place {
+  kind: 'country' | 'continent'
+  code: string
+}
+
+function placeName(place: Place): string {
+  return place.kind === 'continent'
+    ? (CONTINENT_NAMES.get(place.code) ?? place.code)
+    : countryName(place.code)
+}
+
+function PlaceLabel({ place, sub }: { place: Place; sub?: ReactNode }) {
+  if (place.kind === 'country') return <CountryLabel code={place.code} sub={sub} />
+  return (
+    <div className="place">
+      <span className="place-flag" aria-hidden="true">
+        <IconWorld size={19} stroke={1.6} />
+      </span>
+      <div className="place-text">
+        <div className="place-name">
+          <span className="place-title">{placeName(place)}</span>
+          <span className="place-code mono">{place.code}</span>
+        </div>
+        {sub !== undefined && <div className="place-sub">{sub}</div>}
+      </div>
+    </div>
+  )
+}
+
+function BlockedPanel({ p, set }: { p: Policy; set: (patch: Partial<Policy>) => void }) {
+  const meta = useMeta()
+  const places: Place[] = [
+    ...p.blockedContinents.map((code) => ({ kind: 'continent' as const, code })),
+    ...p.blockedCountries.map((code) => ({ kind: 'country' as const, code })),
+  ]
+  const options = [
+    {
+      group: 'Continents',
+      items: CONTINENTS.filter((c) => !p.blockedContinents.includes(c.code)).map((c) => ({
+        value: `continent:${c.code}`,
+        label: c.name,
+      })),
+    },
+    {
+      group: 'Countries',
+      items: COUNTRY_OPTIONS.filter((c) => !p.blockedCountries.includes(c.value)),
+    },
+  ]
+  const remove = (place: Place) => {
+    if (place.kind === 'continent')
+      set({ blockedContinents: p.blockedContinents.filter((c) => c !== place.code) })
+    else set({ blockedCountries: p.blockedCountries.filter((c) => c !== place.code) })
+  }
+  return (
+    <Panel title="Countries blocked as a whole">
+      <Stack gap="sm">
+        <Text fz={12.5} c="var(--ink-dim)" maw={760}>
+          Nothing from these reaches the services, on this host and on the edges. Replies to
+          connections made from here still pass.
+        </Text>
+        {meta.data?.hasCountries === false && (
+          <Alert color="yellow" variant="light">
+            There is no country database: no address has a country, and none of these is blocked.
+          </Alert>
+        )}
+        <EditableList
+          items={places}
+          itemKey={(x) => `${x.kind}:${x.code}`}
+          label={(x) => <PlaceLabel place={x} />}
+          onRemove={(i) => {
+            const place = places[i]
+            if (place !== undefined) remove(place)
+          }}
+          removeLabel={(x) => `Stop blocking ${placeName(x)}`}
+          empty="No country or continent is blocked."
+          add={
+            <AddPicker
+              placeholder="Block a country or a continent…"
+              aria-label="Block a country or a continent"
+              data={options}
+              {...COUNTRY_SELECT}
+              onAdd={(v) => {
+                if (v.startsWith('continent:'))
+                  set({ blockedContinents: [...p.blockedContinents, v.slice(10)].sort() })
+                else set({ blockedCountries: [...p.blockedCountries, v].sort() })
               }}
-            >
-              <Group gap={6}>
-                {CONTINENTS.map((c) => (
-                  <Chip key={c.code} value={c.code} size="sm">
-                    {c.name}
-                  </Chip>
-                ))}
-              </Group>
-            </Chip.Group>
-          </div>
-        </Stack>
-      </Panel>
+            />
+          }
+        />
+      </Stack>
+    </Panel>
+  )
+}
+
+function PolicyForm({ policy }: { policy: Policy }) {
+  const [p, setP] = useState(policy)
+  const save = useAction('policy.update', 'Saved')
+  const set = (patch: Partial<Policy>) => {
+    setP((x) => ({ ...x, ...patch }))
+  }
+  const changed = JSON.stringify(p) !== JSON.stringify(policy)
+  return (
+    <Stack gap="md">
+      <LengthsPanel p={p} set={set} />
+      <BlockedPanel p={p} set={set} />
 
       <Panel title="Other">
         <Group align="flex-end" wrap="wrap">
@@ -349,6 +450,7 @@ function EntriesTab() {
   const [secs, setSecs] = useState<number | null>(null)
   const save = useAction('entry.save', 'Saved')
   const remove = useAction('entry.delete', 'Removed')
+  const list = entries.data ?? []
   return (
     <Stack gap="md">
       <Text fz={13} c="var(--ink-dim)" maw={700}>
@@ -356,99 +458,100 @@ function EntriesTab() {
         even when banned or in a blocked country. A denied one is blocked whatever the rules say.
         Private networks are always allowed.
       </Text>
-      <form
-        onSubmit={(e) => {
-          e.preventDefault()
-          save.mutate(
-            { net: net.trim(), allow, note, secs },
-            {
-              onSuccess: () => {
-                setNet('')
-                setNote('')
-              },
-            },
-          )
-        }}
-      >
-        <Group align="flex-end" wrap="wrap">
-          <TextInput
-            label="Address or prefix"
-            placeholder="198.51.100.0/24"
-            value={net}
-            onChange={(e) => {
-              setNet(e.currentTarget.value)
-            }}
-            required
-            classNames={{ input: 'mono' }}
-            w={220}
-          />
-          <Select
-            label="List"
-            data={[
-              { value: 'allow', label: 'Allow' },
-              { value: 'deny', label: 'Deny' },
-            ]}
-            value={allow ? 'allow' : 'deny'}
-            onChange={(v) => {
-              setAllow(v !== 'deny')
-            }}
-            allowDeselect={false}
-            w={110}
-          />
-          <TextInput
-            label="Note"
-            value={note}
-            onChange={(e) => {
-              setNote(e.currentTarget.value)
-            }}
-            style={{ flex: '1 1 160px' }}
-          />
-          <div style={{ width: 160 }}>
-            <LengthSelect label="For" value={secs} onChange={setSecs} />
+      {entries.error && <Alert color="red">{entries.error.message}</Alert>}
+      <EditableList
+        items={list}
+        itemKey={(e) => String(e.id)}
+        headers={['Address or prefix', 'List']}
+        wide
+        label={(e) => (
+          <div className="place-text">
+            <div className="mono" style={{ overflowWrap: 'anywhere' }}>
+              {e.net}
+            </div>
+            {e.note !== '' && <div className="place-sub">{e.note}</div>}
           </div>
-          <Button type="submit" loading={save.isPending} leftSection={<IconPlus size={16} />}>
-            Add
-          </Button>
-        </Group>
-      </form>
-      <Table.ScrollContainer minWidth={520}>
-        <Table verticalSpacing={6} fz={13} highlightOnHover>
-          <Table.Thead>
-            <Table.Tr>
-              <Table.Th>Address or prefix</Table.Th>
-              <Table.Th>List</Table.Th>
-              <Table.Th>Note</Table.Th>
-              <Table.Th>Ends</Table.Th>
-              <Table.Th />
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {(entries.data ?? []).map((e) => (
-              <Table.Tr key={e.id}>
-                <Table.Td className="mono">{e.net}</Table.Td>
-                <Table.Td>
-                  <Badge color={e.allow ? 'green' : 'red'}>{e.allow ? 'Allow' : 'Deny'}</Badge>
-                </Table.Td>
-                <Table.Td>{e.note}</Table.Td>
-                <Table.Td c="var(--ink-dim)">
-                  {e.until === null ? 'never' : remaining(e.until, now)}
-                </Table.Td>
-                <Table.Td ta="right">
-                  <ActionIcon
-                    color="red"
-                    onClick={() => {
-                      remove.mutate({ id: e.id })
-                    }}
-                    aria-label={`Remove ${e.net}`}
-                  >
-                    <IconTrash size={16} />
-                  </ActionIcon>
-                </Table.Td>
-              </Table.Tr>
-            ))}
-          </Table.Tbody>
-        </Table>
-      </Table.ScrollContainer>
+        )}
+        value={(e) => (
+          <Group gap={10} wrap="nowrap">
+            <Badge color={e.allow ? 'green' : 'red'} w={64}>
+              {e.allow ? 'Allow' : 'Deny'}
+            </Badge>
+            <Text fz={12} c="var(--ink-faint)" w={72}>
+              {e.until === null ? 'no end' : remaining(e.until, now)}
+            </Text>
+          </Group>
+        )}
+        onRemove={(i) => {
+          const e = list[i]
+          if (e !== undefined) remove.mutate({ id: e.id })
+        }}
+        removeLabel={(e) => `Remove ${e.net}`}
+        empty={entries.isPending ? 'Loading…' : 'Nothing is allowed or denied by hand.'}
+        add={
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              save.mutate(
+                { net: net.trim(), allow, note, secs },
+                {
+                  onSuccess: () => {
+                    setNet('')
+                    setNote('')
+                  },
+                },
+              )
+            }}
+          >
+            <Group gap={8} align="flex-start" wrap="wrap">
+              <TextInput
+                placeholder="198.51.100.0/24"
+                aria-label="Address or prefix"
+                value={net}
+                onChange={(e) => {
+                  setNet(e.currentTarget.value)
+                }}
+                required
+                classNames={{ input: 'mono' }}
+                style={{ flex: '2 1 180px' }}
+              />
+              <Select
+                aria-label="List"
+                data={[
+                  { value: 'allow', label: 'Allow' },
+                  { value: 'deny', label: 'Deny' },
+                ]}
+                value={allow ? 'allow' : 'deny'}
+                onChange={(v) => {
+                  setAllow(v !== 'deny')
+                }}
+                allowDeselect={false}
+                w={100}
+              />
+              <TextInput
+                placeholder="Note"
+                aria-label="Note"
+                value={note}
+                onChange={(e) => {
+                  setNote(e.currentTarget.value)
+                }}
+                style={{ flex: '2 1 140px' }}
+              />
+              <div style={{ flex: '1 1 130px' }}>
+                <LengthSelect label="For" hideLabel value={secs} onChange={setSecs} />
+              </div>
+              <Button
+                type="submit"
+                variant="default"
+                loading={save.isPending}
+                leftSection={<IconPlus size={16} />}
+              >
+                Add
+              </Button>
+            </Group>
+          </form>
+        }
+      />
     </Stack>
   )
 }
