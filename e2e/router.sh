@@ -8,7 +8,8 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-EDGE_BIN="$1"
+# The packages of scripts/package-openwrt.sh.
+PACKAGES="$1"
 vm=e2e/vm.sh
 failures=0
 
@@ -46,9 +47,7 @@ say "setup"
 router '[ -x /etc/init.d/barbican-edge ] && /etc/init.d/barbican-edge stop; true'
 server 'sudo ip link set enp0s3 up && sudo ip addr replace 10.99.0.1/24 dev enp0s3 && sudo ip addr replace 203.0.113.77/32 dev enp0s3'
 router 'ip route replace 203.0.113.77/32 dev eth1'
-"${vm}" router put "${EDGE_BIN}" /usr/sbin/barbican-edge
-"${vm}" router put dist/openwrt/barbican-edge.init /etc/init.d/barbican-edge
-router 'chmod +x /usr/sbin/barbican-edge /etc/init.d/barbican-edge; mkdir -p /etc/barbican /www/luci-static/resources/view/barbican'
+router 'apk del barbican-edge luci-app-barbican >/dev/null 2>&1; rm -f /etc/barbican/state.json; nft delete table inet barbican 2>/dev/null; mkdir -p /etc/barbican; true'
 cat >"${TMPDIR:-/tmp}/barbican-e2e-uci" <<'EOF'
 config barbican 'main'
 	option enabled '1'
@@ -59,17 +58,15 @@ config upstream 'server'
 	option token 'e2e-router-token-0123456789'
 EOF
 "${vm}" router put "${TMPDIR:-/tmp}/barbican-e2e-uci" /etc/config/barbican
-for f in luci/luci-app-barbican/htdocs/luci-static/resources/view/barbican/*.js; do
-  "${vm}" router put "${f}" "/www/luci-static/resources/view/barbican/$(basename "${f}")"
-done
-"${vm}" router put luci/luci-app-barbican/root/usr/share/luci/menu.d/luci-app-barbican.json /usr/share/luci/menu.d/luci-app-barbican.json
-"${vm}" router put luci/luci-app-barbican/root/usr/share/rpcd/acl.d/luci-app-barbican.json /usr/share/rpcd/acl.d/luci-app-barbican.json
-router '/etc/init.d/barbican-edge stop 2>/dev/null; nft delete table inet barbican 2>/dev/null; rm -f /etc/barbican/state.json; /etc/init.d/rpcd restart' || true
+"${vm}" router put "${PACKAGES}/barbican-edge-x86_64.apk" /tmp/barbican-edge.apk
+"${vm}" router put "${PACKAGES}/luci-app-barbican.apk" /tmp/luci-app-barbican.apk
 if wait_until 10 attacker_through; then pass "the attacker reaches the router"; else fail "no ping through before anything is blocked"; fi
 
 say "following the agent"
 rpc ban.create "'{\"net\": \"203.0.113.77\", \"secs\": null, \"reason\": \"e2e edge\"}'" >/dev/null
-router '/etc/init.d/barbican-edge enable && /etc/init.d/barbican-edge start'
+# Installed as a package, which enables and starts it.
+router 'apk add --allow-untrusted /tmp/barbican-edge.apk /tmp/luci-app-barbican.apk >/dev/null 2>&1'
+if router '[ -e /etc/rc.d/S11barbican-edge ] && pidof barbican-edge >/dev/null'; then pass "the package installs, enables and starts it"; else fail "the package didn't start it"; fi
 if wait_until 15 in_set; then pass "the agent's ban reached the router"; else fail "the ban isn't in the router's set"; fi
 if attacker_blocked; then pass "the router drops the banned address"; else fail "the banned address still gets through the router"; fi
 if ping_from 10.99.0.1; then pass "others still get through"; else fail "a bystander is blocked on the router"; fi
@@ -127,7 +124,12 @@ fi
 
 say "cleanup"
 lift_all
-router '/etc/init.d/barbican-edge stop; barbican-edge remove' || true
+router 'apk del barbican-edge luci-app-barbican >/dev/null 2>&1; barbican-edge remove 2>/dev/null; true'
+if router '! pidof barbican-edge >/dev/null && [ ! -e /etc/rc.d/S11barbican-edge ] && [ -f /etc/config/barbican ]'; then
+  pass "removing the package stops it and keeps the configuration"
+else
+  fail "removing the package"
+fi
 
 if ((failures > 0)); then
   say "barbican-edge's log"

@@ -224,6 +224,80 @@ else
 fi
 lift 203.0.113.10
 
+say "downloads and blocklists (internet)"
+# The ASN database is downloaded from DB-IP when missing.
+sed -i 's#^download = false#asn = "/var/lib/barbican/dbip-asn-lite.mmdb"\ndownload = true#' /etc/barbican/config.toml
+systemctl restart barbican
+asn_known() { ${RPC} ip.get '{"ip": "1.1.1.1"}' | python3 -c 'import json,sys; sys.exit(json.load(sys.stdin)["asn"] != 13335)'; }
+if wait_until 180 asn_known; then pass "the ASN database is downloaded (1.1.1.1 is AS13335)"; else fail "no ASN database after downloading"; fi
+# A real public list.
+${RPC} feed.save '{"id": 0, "name": "Spamhaus DROP", "url": "https://www.spamhaus.org/drop/drop_v4.json", "enabled": true, "block": false, "refreshSecs": 43200, "username": null, "password": null}' >/dev/null
+drop_fetched() { ${RPC} feeds.list | python3 -c 'import json,sys; f=[x for x in json.load(sys.stdin) if x["def"]["name"]=="Spamhaus DROP"][0]; sys.exit(not (f["count"] > 100 and f["error"] is None))'; }
+if wait_until 120 drop_fetched; then pass "Spamhaus DROP is fetched"; else fail "Spamhaus DROP: $(${RPC} feeds.list)"; fi
+# A list served here, blocking: its prefix is dropped as a whole.
+mkdir -p /tmp/feed && printf '# e2e\n198.51.100.0/24 ; bystanders\n' >/tmp/feed/list.txt
+setsid -f sh -c 'cd /tmp/feed && exec python3 -m http.server 8099 --bind 127.0.0.1' </dev/null >/dev/null 2>&1
+sleep 1
+feed=$(${RPC} feed.save '{"id": 0, "name": "e2e", "url": "http://127.0.0.1:8099/list.txt", "enabled": true, "block": true, "refreshSecs": 3600, "username": null, "password": null}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["def"]["id"])')
+if wait_until 30 blocked by 198.51.100.10 198.51.100.1; then pass "a blocking list drops what it lists"; else fail "the blocking list doesn't block"; fi
+if att; then pass "others still get through"; else fail "a blocking list blocked more than it lists"; fi
+${RPC} feed.delete "{\"id\": ${feed}}" >/dev/null
+if wait_until 10 by; then pass "removing the list unblocks"; else fail "still blocked after removing the list"; fi
+pkill -f 'http.server 8099' || true
+
+say "an ipset edge (iptables, as on Asuswrt-Merlin)"
+# The agent only decides (dry run): what blocks now is barbican-edge-ipset, through iptables-legacy and ipset.
+command -v ipset >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ipset >/dev/null
+mkdir -p /etc/systemd/system/barbican.service.d
+printf '[Service]\nExecStart=\nExecStart=%s/barbican --dry-run\n' "${DIR}" >/etc/systemd/system/barbican.service.d/dry-run.conf
+systemctl daemon-reload
+systemctl restart barbican
+nft delete table inet barbican 2>/dev/null || true
+cat >/tmp/edge-ipset.conf <<'EOF2'
+config barbican 'main'
+	option iptables 'iptables-legacy'
+	option state '/tmp/edge-ipset-state.json'
+	option status '/tmp/edge-ipset-status.json'
+	option persist_interval '1'
+
+config upstream 'server'
+	option url 'http://127.0.0.1:7380'
+	option token 'e2e-router-token-0123456789'
+EOF2
+rm -f /tmp/edge-ipset-state.json
+EDGE="${DIR}/barbican-edge-ipset --config /tmp/edge-ipset.conf"
+setsid -f sh -c "exec ${EDGE} >/tmp/edge-ipset.log 2>&1" </dev/null
+in_ipset() { ipset list barbican-host4 2>/dev/null | grep -q '^203.0.113.10'; }
+if wait_until 10 att; then pass "nothing blocked yet"; else fail "blocked before anything was banned"; fi
+${RPC} ban.create '{"net": "203.0.113.10", "secs": 3600, "reason": "e2e ipset"}' >/dev/null
+if wait_until 10 in_ipset && wait_until 5 att_blocked; then pass "a ban reaches the ipset and iptables drop it"; else fail "the ipset edge doesn't block"; fi
+if by; then pass "others still get through"; else fail "a bystander is blocked by the ipset edge"; fi
+if curl -s -o /dev/null -m 2 http://203.0.113.10:9000/; then pass "replies to the host's own connections pass"; else fail "outbound to a banned address broke"; fi
+timeout=$(ipset list barbican-host4 | awk '/^203.0.113.10/ {print $3}')
+if ((timeout > 3000 && timeout <= 3600)); then pass "the element times out in the kernel (${timeout} s left)"; else fail "timeout ${timeout}"; fi
+lift 203.0.113.10
+if wait_until 10 att; then pass "a lift reaches it"; else fail "still blocked by the ipset edge"; fi
+${RPC} ban.create '{"net": "203.0.113.10", "secs": null, "reason": "e2e ipset"}' >/dev/null
+wait_until 10 att_blocked || true
+sleep 2
+pkill -TERM -f "barbican-edge-ipset --config /tmp/edge-ipset.conf" || true
+sleep 1
+# A router's firewall restart drops the rules; restore puts them back from the saved state.
+iptables-legacy -t mangle -D PREROUTING -j BARBICAN
+if att; then pass "without the jump, traffic passes"; else fail "blocked without the jump"; fi
+${DIR}/barbican-edge-ipset --config /tmp/edge-ipset.conf restore
+if att_blocked; then pass "restore puts the blocks back"; else fail "restore didn't block"; fi
+${DIR}/barbican-edge-ipset --config /tmp/edge-ipset.conf remove
+if att && ! ipset list -n | grep -q barbican && ! iptables-legacy -t mangle -S | grep -q BARBICAN; then
+  pass "remove takes its rules and sets away"
+else
+  fail "remove left something"
+fi
+lift 203.0.113.10
+rm -f /etc/systemd/system/barbican.service.d/dry-run.conf
+systemctl daemon-reload
+systemctl restart barbican
+
 say "done"
 if ((failures > 0)); then
   echo "${failures} check(s) failed"

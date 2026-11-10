@@ -49,10 +49,10 @@ wait "${server_up}"
 
 log "copying into the server VM"
 "${vm}" server ssh 'sudo mkdir -p /opt/barbican && sudo chown debian /opt/barbican'
-for f in "${bin}/barbican" e2e/rpc.py e2e/server.sh dist/barbican.service "${geo}"; do
+for f in "${bin}/barbican" "${bin}/barbican-edge-ipset" e2e/rpc.py e2e/server.sh dist/barbican.service "${geo}"; do
   "${vm}" server put "${f}" "/opt/barbican/$(basename "${f}")"
 done
-"${vm}" server ssh 'chmod +x /opt/barbican/barbican /opt/barbican/server.sh'
+"${vm}" server ssh 'chmod +x /opt/barbican/barbican /opt/barbican/barbican-edge-ipset /opt/barbican/server.sh'
 
 status=0
 for suite in "${suites[@]}"; do
@@ -63,7 +63,8 @@ for suite in "${suites[@]}"; do
       ;;
     router)
       log "router suite"
-      e2e/router.sh "${bin}/barbican-edge" || status=1
+      scripts/package-openwrt.sh x86_64 "${bin}/barbican-edge" target/e2e-packages >/dev/null
+      e2e/router.sh target/e2e-packages || status=1
       ;;
     *)
       log "unknown suite ${suite}"
