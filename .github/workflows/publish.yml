@@ -49,7 +49,7 @@ jobs:
           ref: ${{ env.TAG }}
           fetch-depth: 0
       - run: rustup toolchain install && rustup target add ${{ matrix.arch }}-unknown-linux-musl
-      - uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
           install_args: node zig cargo:cargo-zigbuild nfpm
       - name: Check the tag matches the version
@@ -169,7 +169,7 @@ jobs:
         with:
           ref: ${{ env.TAG }}
       - run: rustup toolchain install
-      - uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
           install_args: zig cargo:cargo-zigbuild
       - run: scripts/build-edge.sh
