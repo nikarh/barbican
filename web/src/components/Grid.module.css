@@ -1,0 +1,11 @@
+/* Fills what the screen leaves (it is the last child of a .fill screen); the grid inside is sized to it. */
+.grid {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 300px;
+}
+
+.grid > :global(*) {
+  position: absolute;
+  inset: 0;
+}

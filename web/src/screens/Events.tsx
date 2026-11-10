@@ -90,7 +90,7 @@ export function EventsScreen() {
   )
 
   return (
-    <Stack gap="sm">
+    <Stack gap="sm" className="fill">
       <Group gap="sm" wrap="wrap">
         <TextInput
           placeholder="Path, user name, probe…"
@@ -135,7 +135,6 @@ export function EventsScreen() {
         onRowClick={(row) => {
           navigate('addresses', { ip: row.ip })
         }}
-        height="calc(100dvh - var(--header-height) - var(--tabbar-height) - 110px)"
       />
     </Stack>
   )

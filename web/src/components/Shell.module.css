@@ -115,10 +115,21 @@
   }
 }
 
+/* At least as tall as the viewport below the header, so a screen can fill it (grids do: see .fill). */
 .main {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100dvh - var(--header-height));
   max-width: var(--content-width);
   margin: 0 auto;
   padding: 16px 16px calc(var(--tabbar-height) + 16px + env(safe-area-inset-bottom));
+}
+
+.content {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
 }
 
 .content[data-stale] {
@@ -170,6 +181,6 @@
   }
 
   .main {
-    padding-bottom: 32px;
+    padding-bottom: 20px;
   }
 }
