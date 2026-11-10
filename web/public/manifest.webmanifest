@@ -1,6 +1,6 @@
 {
-  "name": "barbican",
-  "short_name": "barbican",
+  "name": "Barbican",
+  "short_name": "Barbican",
   "start_url": "./",
   "display": "standalone",
   "background_color": "#101114",

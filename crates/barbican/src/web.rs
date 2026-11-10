@@ -7,7 +7,7 @@ mod assets {
     include!(concat!(env!("OUT_DIR"), "/assets.rs"));
 }
 
-const PLACEHOLDER: &str = "<!doctype html><title>barbican</title><p>The frontend wasn't built into this binary: \
+const PLACEHOLDER: &str = "<!doctype html><title>Barbican</title><p>The frontend wasn't built into this binary: \
     run <code>mise run web:build</code> and build again.";
 
 fn find(path: &str) -> Option<&'static [u8]> {
