@@ -527,8 +527,9 @@ fn events_where(qb: &mut QueryBuilder<Sqlite>, p: &EventsParams) -> Result<(), R
             .trim()
             .parse()
             .map_err(|_| bad(format!("{ip:?} is not an address")))?;
-        qb.push(" AND ip.addr = ");
+        qb.push(" AND event.ip = (SELECT id FROM ip WHERE addr = ");
         qb.push_bind(db::addr_bytes(ip));
+        qb.push(")");
     }
     if let Some(rule) = p.rule {
         qb.push(" AND event.rule = ");
@@ -557,7 +558,8 @@ async fn events(app: &Arc<App>, p: EventsParams) -> Result<Page<EventRow>, RpcEr
     );
     qb.push(FROM);
     events_where(&mut qb, &p)?;
-    qb.push(" ORDER BY event.hour DESC, event.ip, event.what LIMIT ");
+    // All descending: the order of event_hour_order read backwards, so a page needs no sort.
+    qb.push(" ORDER BY event.hour DESC, event.ip DESC, event.what DESC LIMIT ");
     qb.push_bind(limit(p.limit));
     qb.push(" OFFSET ");
     qb.push_bind(i64::from(p.offset));
