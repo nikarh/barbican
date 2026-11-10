@@ -1,0 +1,142 @@
+import { Group, Select, Stack, TextInput } from '@mantine/core'
+import { useDebouncedValue, useMediaQuery } from '@mantine/hooks'
+import { IconSearch } from '@tabler/icons-react'
+import type { ColDef } from 'ag-grid-community'
+import { useCallback, useMemo, useState } from 'react'
+
+import { useMeta, useRules } from '../api/hooks'
+import type { EventRow, Kind } from '../api/generated/model'
+import { rpc } from '../api/rpc'
+import { InfiniteGrid } from '../components/Grid'
+import { Country } from '../components/ui'
+import { count, dateTime, KIND_LABELS } from '../lib/format'
+import { navigate } from '../lib/router'
+
+export function EventsScreen() {
+  const [query, setQuery] = useState('')
+  const [debounced] = useDebouncedValue(query, 300)
+  const [kind, setKind] = useState<Kind | null>(null)
+  const [rule, setRule] = useState<string | null>(null)
+  const [source, setSource] = useState<string | null>(null)
+  const rules = useRules()
+  const meta = useMeta()
+  const wide = useMediaQuery('(min-width: 48em)', true)
+
+  const ruleName = useCallback(
+    (id: number) =>
+      id === 0 ? '—' : (rules.data?.find((r) => r.id === id)?.name ?? `#${String(id)}`),
+    [rules.data],
+  )
+
+  const columns = useMemo<ColDef<EventRow>[]>(() => {
+    const all: (ColDef<EventRow> & { phone?: boolean })[] = [
+      {
+        headerName: 'Hour',
+        field: 'hour',
+        width: 150,
+        valueFormatter: (p) => dateTime(Number(p.value ?? 0)),
+      },
+      { headerName: 'Address', field: 'ip', width: 150, cellClass: 'mono', phone: true },
+      {
+        headerName: '',
+        field: 'country',
+        width: 70,
+        cellRenderer: (p: { value: string | null }) => <Country code={p.value} />,
+      },
+      {
+        headerName: 'Kind',
+        field: 'kind',
+        width: 120,
+        valueFormatter: (p) => KIND_LABELS[p.value as Kind],
+      },
+      {
+        headerName: 'What',
+        field: 'what',
+        flex: 2,
+        minWidth: 220,
+        cellClass: 'mono',
+        phone: true,
+      },
+      {
+        headerName: 'Rule',
+        field: 'rule',
+        width: 150,
+        valueFormatter: (p) => ruleName(Number(p.value ?? 0)),
+      },
+      { headerName: 'Source', field: 'source', width: 100 },
+      {
+        headerName: 'Times',
+        field: 'count',
+        width: 80,
+        type: 'rightAligned',
+        valueFormatter: (p) => count(Number(p.value ?? 0)),
+        phone: true,
+      },
+    ]
+    return all.filter((c) => wide || c.phone === true).map(({ phone: _phone, ...c }) => c)
+  }, [wide, ruleName])
+
+  const fetch = useCallback(
+    (offset: number, limit: number) =>
+      rpc.call('events.list', {
+        ...(debounced.trim() === '' ? {} : { query: debounced }),
+        ...(kind === null ? {} : { kind }),
+        ...(rule === null ? {} : { rule: Number(rule) }),
+        ...(source === null ? {} : { source }),
+        offset,
+        limit,
+      }),
+    [debounced, kind, rule, source],
+  )
+
+  return (
+    <Stack gap="sm">
+      <Group gap="sm" wrap="wrap">
+        <TextInput
+          placeholder="Path, user name, probe…"
+          leftSection={<IconSearch size={16} />}
+          value={query}
+          onChange={(e) => {
+            setQuery(e.currentTarget.value)
+          }}
+          style={{ flex: '1 1 220px' }}
+        />
+        <Select
+          placeholder="Any kind"
+          data={Object.entries(KIND_LABELS).map(([value, label]) => ({ value, label }))}
+          value={kind}
+          onChange={(v) => {
+            setKind(v as Kind | null)
+          }}
+          clearable
+          w={150}
+        />
+        <Select
+          placeholder="Any rule"
+          data={(rules.data ?? []).map((r) => ({ value: String(r.id), label: r.name }))}
+          value={rule}
+          onChange={setRule}
+          clearable
+          w={180}
+        />
+        <Select
+          placeholder="Any source"
+          data={meta.data?.sources ?? []}
+          value={source}
+          onChange={setSource}
+          clearable
+          w={140}
+        />
+      </Group>
+      <InfiniteGrid<EventRow>
+        columns={columns}
+        fetch={fetch}
+        query={`${debounced}|${kind ?? ''}|${rule ?? ''}|${source ?? ''}`}
+        onRowClick={(row) => {
+          navigate('addresses', { ip: row.ip })
+        }}
+        height="calc(100dvh - var(--header-height) - var(--tabbar-height) - 110px)"
+      />
+    </Stack>
+  )
+}

@@ -180,6 +180,33 @@ async fn days(pool: &sqlx::SqlitePool, since: i64) -> Result<Vec<DayStat>, RpcEr
     Ok(days)
 }
 
+/// The sources' status, with their counters as they are now.
+fn sources(app: &App) -> Vec<crate::api::SourceStatus> {
+    use std::sync::atomic::Ordering;
+    let counters = app
+        .source_counters
+        .lock()
+        .map(|c| c.clone())
+        .unwrap_or_default();
+    app.sources
+        .lock()
+        .map(|s| {
+            s.values()
+                .map(|status| {
+                    let mut status = status.clone();
+                    if let Some(c) = counters.get(&status.name) {
+                        status.lines = c.lines.load(Ordering::Relaxed);
+                        status.parsed = c.parsed.load(Ordering::Relaxed);
+                        let last = c.last_line.load(Ordering::Relaxed);
+                        status.last_line = (last != 0).then_some(last);
+                    }
+                    status
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 async fn overview(app: &Arc<App>) -> Result<Overview, RpcError> {
     let pool = &app.db.pool;
     let now = now();
@@ -247,11 +274,7 @@ async fn overview(app: &Arc<App>) -> Result<Overview, RpcError> {
         ips,
         trusted,
         firewall: app.firewall.lock().map(|f| f.clone()).unwrap_or_default(),
-        sources: app
-            .sources
-            .lock()
-            .map(|s| s.values().cloned().collect())
-            .unwrap_or_default(),
+        sources: sources(app),
         edges: app
             .edges
             .lock()
