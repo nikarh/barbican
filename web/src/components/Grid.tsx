@@ -66,11 +66,17 @@ type FirstPage = { query: string } & (
   | { state: 'error'; message: string }
 )
 
+/** The order picked by a sortable column's header: the column (its field) and the direction. */
+export interface Sort {
+  column: string
+  descending: boolean
+}
+
 /** Rows shown before the first page is in: as many as a tall window shows. */
 const PLACEHOLDER_ROWS = 30
 
-/** A grid that loads its rows page by page as it scrolls (ag-grid's infinite row model). `fetch` gets an offset
- * and a limit; whenever `query` changes (filters), the grid starts over.
+/** A grid that loads its rows page by page as it scrolls (ag-grid's infinite row model). `fetch` gets an offset,
+ * a limit and the order picked by a sortable column's header (`null`: the default one); whenever `query` changes (filters), the grid starts over.
  * Until the first page is in, its rows are placeholders in the real columns, so nothing moves when the rows come;
  * then the rows, what `empty` says, or the error. It takes the height its parent (a `.fill` screen) has left, and
  * no less than a few rows. */
@@ -83,7 +89,7 @@ export function InfiniteGrid<T>({
   pageSize = 100,
 }: {
   columns: ColDef<T>[]
-  fetch: (offset: number, limit: number) => Promise<PageResult<T>>
+  fetch: (offset: number, limit: number, sort: Sort | null) => Promise<PageResult<T>>
   query: string
   empty: Empty
   onRowClick?: (row: T) => void
@@ -106,7 +112,9 @@ export function InfiniteGrid<T>({
         const report = (page: FirstPage) => {
           if (params.startRow === 0 && asked === queryRef.current) setFirst(page)
         }
-        fetchRef.current(params.startRow, limit).then(
+        const by = params.sortModel[0]
+        const sort = by === undefined ? null : { column: by.colId, descending: by.sort === 'desc' }
+        fetchRef.current(params.startRow, limit, sort).then(
           (page) => {
             const last = params.startRow + page.rows.length >= page.total ? page.total : -1
             params.successCallback(page.rows, last)
@@ -152,7 +160,13 @@ export function InfiniteGrid<T>({
   }
 
   const defaultColDef = useMemo<ColDef<T>>(
-    () => ({ sortable: false, resizable: true, suppressMovable: true }),
+    () => ({
+      sortable: false,
+      resizable: true,
+      suppressMovable: true,
+      // Lists start with the most (or the latest) first.
+      sortingOrder: ['desc', 'asc'],
+    }),
     [],
   )
   // Until a row has its data, each cell is a placeholder.

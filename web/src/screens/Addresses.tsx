@@ -162,6 +162,6 @@ function List() {
   )
 }
 
-export function AddressesScreen({ ip }: { ip: string | null }) {
-  return ip === null ? <List /> : <IpScreen ip={ip} />
+export function AddressesScreen({ ip, tab }: { ip: string | null; tab: string | null }) {
+  return ip === null ? <List /> : <IpScreen ip={ip} tab={tab} />
 }

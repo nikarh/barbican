@@ -35,7 +35,7 @@ export function App() {
   return (
     <Shell screen={route.screen}>
       {route.screen === 'overview' && <OverviewScreen />}
-      {route.screen === 'addresses' && <AddressesScreen ip={ip} />}
+      {route.screen === 'addresses' && <AddressesScreen ip={ip} tab={route.params.get('tab')} />}
       {route.screen === 'events' && <EventsScreen />}
       {route.screen === 'bans' && <BansScreen />}
       {route.screen === 'rules' && <RulesScreen />}

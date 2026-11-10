@@ -48,6 +48,9 @@ pub enum Call {
     /// Result: [`IpDetail`].
     #[serde(rename = "ip.get")]
     IpGet(IpParams),
+    /// Result: [`Page`] of [`Activity`]: what an address did, by what, source and rule.
+    #[serde(rename = "ip.activity")]
+    IpActivity(IpActivityParams),
     /// Result: [`Page`] of [`EventRow`].
     #[serde(rename = "events.list")]
     EventsList(EventsParams),
@@ -242,6 +245,31 @@ pub struct IpsParams {
     pub limit: Option<u32>,
 }
 
+/// The order of an address's activity.
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "rpc.ts"))]
+#[serde(rename_all = "camelCase")]
+pub enum ActivitySort {
+    #[default]
+    Last,
+    First,
+    Count,
+    What,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "rpc.ts"))]
+#[serde(rename_all = "camelCase", default)]
+pub struct IpActivityParams {
+    pub ip: String,
+    pub sort: ActivitySort,
+    /// Ascending instead of descending.
+    pub ascending: bool,
+    pub offset: u32,
+    #[cfg_attr(test, ts(optional))]
+    pub limit: Option<u32>,
+}
+
 #[derive(Debug, Deserialize, Default)]
 #[cfg_attr(test, derive(TS), ts(export, export_to = "rpc.ts"))]
 #[serde(rename_all = "camelCase", default)]
@@ -269,6 +297,9 @@ pub struct EventsParams {
 pub struct BansParams {
     /// Only bans in force.
     pub active: bool,
+    /// Only the bans this address's events made (or that were made by hand of it alone).
+    #[cfg_attr(test, ts(optional))]
+    pub ip: Option<String>,
     #[cfg_attr(test, ts(optional))]
     pub query: Option<String>,
     pub offset: u32,
@@ -519,8 +550,12 @@ pub struct IpDetail {
     pub allowed: bool,
     pub denied: bool,
     pub active_ban: Option<Ban>,
-    pub bans: Vec<Ban>,
-    pub activity: Vec<Activity>,
+    /// Its bans, in force or not (`bans.list` with `ip`).
+    #[cfg_attr(test, ts(type = "number"))]
+    pub ban_count: i64,
+    /// The rows of its activity (`ip.activity`): distinct whats, sources and rules.
+    #[cfg_attr(test, ts(type = "number"))]
+    pub activity_count: i64,
 }
 
 #[derive(Debug, Serialize, Clone)]

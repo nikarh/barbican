@@ -5,6 +5,7 @@
 
 import { diagnose, type Problem } from './diagnose'
 import type {
+  Activity,
   Ban,
   BlockCoverage,
   Entry,
@@ -33,6 +34,7 @@ interface Results {
   'overview.get': Overview
   'ips.list': Page<IpRow>
   'ip.get': IpDetail
+  'ip.activity': Page<Activity>
   'events.list': Page<EventRow>
   'bans.list': Page<Ban>
   'ban.create': Ban

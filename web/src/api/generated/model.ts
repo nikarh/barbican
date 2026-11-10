@@ -180,7 +180,15 @@ countryBlocked: boolean, trusted: TrustInfo | null,
 /**
  * On the allow list or exempt: no rule acts on it.
  */
-allowed: boolean, denied: boolean, activeBan: Ban | null, bans: Array<Ban>, activity: Array<Activity>, };
+allowed: boolean, denied: boolean, activeBan: Ban | null, 
+/**
+ * Its bans, in force or not (`bans.list` with `ip`).
+ */
+banCount: number, 
+/**
+ * The rows of its activity (`ip.activity`): distinct whats, sources and rules.
+ */
+activityCount: number, };
 
 export type IpRow = { ip: string, country: string | null, asn: number | null, asName: string | null, firstSeen: number, lastSeen: number, hits: number, 
 /**
