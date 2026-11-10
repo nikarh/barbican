@@ -33,54 +33,20 @@ It is what fail2ban, a log pipeline and a dashboard do together, in one process 
 
 ## Install
 
-### The agent
+| Where | Guide |
+| --- | --- |
+| Debian, Ubuntu | [docs/install/debian.md](docs/install/debian.md) |
+| Arch Linux | [docs/install/arch.md](docs/install/arch.md) |
+| Any other Linux (static binaries for x86_64 and aarch64) | [docs/install/linux.md](docs/install/linux.md) |
+| OpenWrt routers (`.apk`, `.ipk` and LuCI pages) | [docs/install/openwrt.md](docs/install/openwrt.md) |
+| Routers without nftables, such as Asuswrt-Merlin | [docs/install/iptables.md](docs/install/iptables.md) |
+| Connecting a router to an agent | [docs/install/README.md](docs/install/README.md#connecting-an-edge-to-an-agent) |
 
-Release files are on the [releases page](https://github.com/nikarh/barbican/releases) (static binaries, so any Linux
-with nftables): `barbican_amd64.deb` / `barbican_arm64.deb`, `barbican-x86_64.pkg.tar.zst` /
-`barbican-aarch64.pkg.tar.zst` for Arch Linux, and `barbican-<arch>-linux-musl.tar.gz` with the binary, the unit
-and an example configuration. `SHA256SUMS` is signed (`SHA256SUMS.asc`, key
-[`docs/signing-key.asc`](docs/signing-key.asc), `2DED94B14E12F49939656D6611E3B0A85A53607A`; how to check downloads:
-[`docs/releasing.md`](docs/releasing.md)). The `latest` pre-release is built from `main`.
-
-The packages install `/usr/bin/barbican`, the systemd unit and `/etc/barbican/config.toml`, and don't start
-anything. Edit the configuration (at least its sources), then:
-
-```sh
-systemctl enable --now barbican
-```
+Release files are signed: `SHA256SUMS.asc`, with the key [`docs/signing-key.asc`](docs/signing-key.asc)
+(`2DED94B14E12F49939656D6611E3B0A85A53607A`); [docs/releasing.md](docs/releasing.md) shows how to check them.
 
 Try it first without touching the firewall: `barbican --dry-run` (or `[firewall] enabled = false`) decides and
 records everything, and changes nothing.
-
-### The edge agent (OpenWrt)
-
-`barbican-edge-<arch>.apk` (OpenWrt 25.12 and later) or `.ipk` (24.10 and earlier), for x86_64, aarch64 or armv7
-(Cortex-A7/A9/A15 with an FPU), and `luci-app-barbican.apk`/`.ipk` for its LuCI pages:
-
-```sh
-apk add --allow-untrusted ./barbican-edge-armv7.apk ./luci-app-barbican.apk   # or: opkg install ./*.ipk
-```
-
-The package enables and starts it; add the agents it follows in LuCI (**Services → Barbican → Settings**) or in
-`/etc/config/barbican`, which upgrades keep. It needs nftables with JSON support (`nftables-json`, the default in
-OpenWrt's images). `barbican-edge-<arch>.tar.gz` has the same with an `install.sh`, for installing by hand.
-
-### The edge agent for Asuswrt-Merlin (`barbican-edge-ipset`)
-
-Merlin's kernels have no nftables: `barbican-edge-ipset` does the same with iptables and ipset (any kernel since
-2.6.36). `barbican-edge-ipset-armv7.tar.gz` is built without floating point instructions, so it runs on every ARM
-router Merlin supports. Turn on JFFS custom scripts (Administration → System), then:
-
-```sh
-scp barbican-edge-ipset-armv7.tar.gz admin@router:/tmp/
-ssh admin@router 'cd /tmp && tar -xzf barbican-edge-ipset-armv7.tar.gz && barbican-edge-ipset/install.sh'
-```
-
-Everything goes to `/jffs/barbican`: the binary, its configuration (`barbican.conf`, in the same format as on
-OpenWrt), its saved state, and `barbican.sh` (start, stop, restart, status), which `/jffs/scripts/services-start`
-runs at boot. `/jffs/scripts/firewall-start` puts the rules back whenever the router restarts its firewall.
-`uninstall.sh` takes it all away. ipset times elements out after at most 24.8 days: longer bans are renewed while the
-agent runs.
 
 ## Configuration
 
@@ -207,30 +173,15 @@ something changes, and every minute. Stopping barbican leaves the table in place
 **At boot** the unit runs before `network-pre.target` and Docker, and reports ready only once the table is back: no
 packet reaches a service before the blocks are in place.
 
-## The edge agent
+## The edge agents
 
-`barbican-edge` follows one or more agents' edge APIs and keeps its own table on the router equal to the union of
-what they block (with each agent's allow list). It polls with long polling, so a ban or a lift reaches the router
-within a second. Its configuration is `/etc/config/barbican`:
-
-```text
-config barbican 'main'
-	option enabled '1'
-	option lists '1'               # also the agents' country blocks and blocking lists
-	option persist_interval '3600'
-
-config upstream 'server'
-	option url 'https://192.168.1.10:7380'
-	option fingerprint '3F:A1:...'        # barbican edge-fingerprint, on the agent
-	option token_file '/etc/barbican/server.token'
-```
-
-The state is saved to `/etc/barbican/state.json` when it changed, at most once an hour (flash wears), and put back
-at boot by the init script before the firewall and the network start (`START=11`), so blocks hold across reboots and
-while agents are unreachable. A router without a clock that keeps time boots in the past: lengths are counted from
-when the state was saved.
-
-`barbican-edge status` prints its status; LuCI shows it (**Services → Barbican**).
+An edge agent follows one or more agents' edge APIs and keeps its router's firewall equal to the union of what they
+block (with their allow lists): `barbican-edge` with nftables on OpenWrt, `barbican-edge-ipset` with iptables and ipset
+where there is no nftables. It polls with long polling, so a ban or a lift reaches the router within a second. Its
+state is saved now and then (flash wears) and on a clean stop, and put back at boot before the network comes up, so
+blocks hold across reboots and while agents are unreachable. A router without a clock that keeps time boots in the
+past: lengths are counted from when the state was saved. Installing and configuring:
+[OpenWrt](docs/install/openwrt.md), [without nftables](docs/install/iptables.md).
 
 **Security**: edges only pull, nothing can push to them. The edge API is TLS only, and an edge accepts exactly the
 certificate whose fingerprint it is configured with (no CA, so it works with bare LAN addresses): nobody between an
