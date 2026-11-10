@@ -12,6 +12,7 @@ mod engine;
 mod feeds;
 mod firewall;
 mod geo;
+mod import;
 mod parse;
 mod proxy;
 mod replay;
@@ -39,6 +40,9 @@ Usage:
   barbican healthcheck [--address <address>]  exit 0 when the UI (or the proxy) answers [default: 127.0.0.1:8080]
   barbican edge-fingerprint [--config <path>]
                                              print the edge API certificate's fingerprint, for edges' configuration
+  barbican import [--config <path>] <source>:<file>...
+                                             old logs of configured sources into the database, judged at their
+                                             times (stop the agent first)
   barbican replay [--list] [--geoip <dir>] <parser>:<file>...
                                              run logs through the default rules and say what would be banned;
                                              each line starts with an RFC 3339 time (docker logs --timestamps)
@@ -65,6 +69,7 @@ fn main() -> ExitCode {
     match args.subcommand() {
         Ok(Some(command)) if command == "parse" => parse_command(args),
         Ok(Some(command)) if command == "replay" => replay_command(args),
+        Ok(Some(command)) if command == "import" => import_command(args),
         Ok(Some(command)) if command == "edge-fingerprint" => fingerprint_command(args),
         Ok(Some(command)) if command == "ui-proxy" => proxy_command(args),
         Ok(Some(command)) if command == "healthcheck" => {
@@ -284,6 +289,72 @@ fn proxy_command(mut args: pico_args::Arguments) -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             tracing::error!("{e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn import_command(mut args: pico_args::Arguments) -> ExitCode {
+    let mut err = std::io::stderr();
+    let path: std::path::PathBuf = args
+        .opt_value_from_str(["-c", "--config"])
+        .ok()
+        .flatten()
+        .or_else(|| std::env::var_os("BARBICAN_CONFIG").map(Into::into))
+        .unwrap_or_else(|| config::DEFAULT_PATH.into());
+    let mut inputs = Vec::new();
+    for arg in args.finish() {
+        let arg = arg.to_string_lossy();
+        let Some(input) = import::input(&arg) else {
+            let _ = writeln!(err, "import: {arg:?} isn't <source>:<file>");
+            return ExitCode::FAILURE;
+        };
+        inputs.push(input);
+    }
+    if inputs.is_empty() {
+        let _ = writeln!(err, "import: no files\n\n{HELP}");
+        return ExitCode::FAILURE;
+    }
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .init();
+    let config = match config::Config::load(&path) {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = writeln!(err, "import: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = writeln!(err, "{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match runtime.block_on(import::run(config, &inputs)) {
+        Ok(s) => {
+            let _ = writeln!(
+                err,
+                "{} lines ({} without a time, skipped), {} hits, {} new bans ({} active now)",
+                s.lines, s.untimed, s.hits, s.bans, s.active
+            );
+            for source in &s.cursors {
+                let _ = writeln!(
+                    err,
+                    "{source}: the agent goes on from the end of the import"
+                );
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            let _ = writeln!(err, "import: {e}");
             ExitCode::FAILURE
         }
     }

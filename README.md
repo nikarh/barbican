@@ -110,7 +110,7 @@ their addresses trusted, only at `debug`.
 (which is root on the host), give it a read-only socket proxy that allows container inspection and logs, and point
 `docker.socket` at it.
 
-### Trying it on old logs
+### Old logs
 
 ```sh
 barbican parse traefik access.log                 # what the parser makes of each line
@@ -120,6 +120,25 @@ barbican replay --list --geoip /var/lib/barbican \
 
 `replay` runs logs (each line starting with an RFC 3339 time, as `docker logs --timestamps` writes them) through the
 default rules in memory and says what would have been banned.
+
+To start with history, `import` puts old logs into the agent's database, through its rules, as though they had been
+read live at their times: events count in their hours, and bans start when their lines happened and end as they
+would have (most are long over; a year-long one from a month ago is still on). Each file is `<source>:<file>`, a
+source of the configuration, in the same timestamped format. Stop the agent first; a docker source the agent hasn't
+read yet then goes on from the end of the import, not an hour back.
+
+```sh
+systemctl stop barbican
+# From VictoriaLogs, for example. The agent's own directory is where its user can read them.
+mkdir -p /var/lib/private/barbican/import && cd /var/lib/private/barbican/import
+curl -s http://127.0.0.1:9428/select/logsql/query -d 'query=container_name:traefik' -d start=30d \
+  | jq -r '._time + " " + ._msg' > traefik.log
+# As the agent's user (the unit's DynamicUser).
+systemd-run --wait --pipe -p DynamicUser=yes -p User=barbican -p StateDirectory=barbican \
+  barbican import traefik:/var/lib/barbican/import/traefik.log
+rm -r /var/lib/private/barbican/import
+systemctl start barbican
+```
 
 ## Rules and policy
 

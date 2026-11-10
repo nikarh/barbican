@@ -129,6 +129,8 @@ pub struct Engine {
     /// ASNs whose names are in the database.
     asns: std::collections::HashSet<i64>,
     hits: u64,
+    /// The time of the newest hit so far: windows are pruned relative to it, so history keeps its counts.
+    latest: i64,
 }
 
 impl Engine {
@@ -148,6 +150,7 @@ impl Engine {
             geo_cache: HashMap::new(),
             asns: std::collections::HashSet::new(),
             hits: 0,
+            latest: i64::MIN,
         }
     }
 
@@ -218,7 +221,7 @@ impl Engine {
         }
         self.hits += batch.len() as u64;
         if self.hits % 4_096 < batch.len() as u64 {
-            self.prune(now);
+            self.prune(self.latest);
         }
         Ok(out.bans)
     }
@@ -246,6 +249,10 @@ impl Engine {
         let Some(set) = self.rule_set(hit.generation) else {
             return Ok(());
         };
+        // Everything about a hit is judged at its own time (a line read late, or history being imported): whether
+        // the address was banned or trusted then, and when a ban it brings starts and ends.
+        let now = hit.at.min(now);
+        self.latest = self.latest.max(now);
         // What the state says about the address, looked up without holding the lock across awaits.
         let (allowed, trusted, banned, trust_secs) = {
             let Ok(state) = self.app.state.read() else {
@@ -264,7 +271,7 @@ impl Engine {
         let banned = banned || out.bans.iter().any(|b| b.net.contains_ip(hit.ip));
         let info = self.geo(hit.ip);
         let asn = info.asn.map(i64::from);
-        let seen = hit.at.min(now);
+        let seen = now;
         let ip_id = if let Some((id, hits, last)) = out.ips.get_mut(&hit.ip) {
             *hits += 1;
             *last = (*last).max(seen);
@@ -538,6 +545,14 @@ mod tests {
             self.engine.process(&hits).await.unwrap()
         }
 
+        async fn feed_at(&mut self, source: usize, lines: &[&str], at: i64) -> Vec<BanRow> {
+            let hits: Vec<Hit> = lines
+                .iter()
+                .filter_map(|l| self.prefilters[source].line(l, at))
+                .collect();
+            self.engine.process(&hits).await.unwrap()
+        }
+
         fn banned(&self, ip: &str) -> bool {
             self.app
                 .state
@@ -585,6 +600,51 @@ mod tests {
             .await;
         assert_eq!(again, Vec::new());
         assert_eq!(t.events().await, 2);
+    }
+
+    #[tokio::test]
+    async fn history_is_judged_at_its_own_times() {
+        let mut t = setup().await;
+        let long_ago = now() - 400 * 86_400;
+        let bans = t
+            .feed_at(
+                SSH,
+                &[
+                    "Invalid user admin from 203.0.113.9 port 1",
+                    "Invalid user oracle from 203.0.113.9 port 2",
+                ],
+                long_ago,
+            )
+            .await;
+        // A year-long ban that started 400 days ago, and is over.
+        assert_eq!(bans.len(), 1);
+        assert_eq!(bans[0].created, long_ago);
+        assert_eq!(bans[0].until, Some(long_ago + 365 * 86_400));
+        assert!(!t.banned("203.0.113.9"));
+        // A day later the address was still banned then: no second ban, no longer one for a repeat.
+        let later = t
+            .feed_at(
+                SSH,
+                &[
+                    "Invalid user test from 203.0.113.9 port 3",
+                    "Invalid user guest from 203.0.113.9 port 4",
+                ],
+                long_ago + 86_400,
+            )
+            .await;
+        assert_eq!(later, Vec::new());
+        // A probe ten days ago: its ban is still on.
+        let recent = now() - 10 * 86_400;
+        let bans = t
+            .feed_at(
+                WEB,
+                &[&access("198.51.100.3", "/.env", 404, "app@docker")],
+                recent,
+            )
+            .await;
+        assert_eq!(bans.len(), 1);
+        assert_eq!(bans[0].created, recent);
+        assert!(t.banned("198.51.100.3"));
     }
 
     #[tokio::test]
