@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+# Not started or enabled on install: review /etc/barbican/config.toml (its sources) first, then
+#   systemctl enable --now barbican
+if [ -d /run/systemd/system ]; then
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  # An upgrade restarts a running agent; its blocks stay in place meanwhile.
+  if [ "$1" = configure ] && [ -n "$2" ] && systemctl is-active --quiet barbican; then
+    systemctl restart barbican || true
+  fi
+fi
