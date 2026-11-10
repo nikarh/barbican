@@ -8,6 +8,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -22,7 +23,8 @@ use crate::uci;
 pub const VERSION: &str = env!("BARBICAN_VERSION");
 /// How long an upstream holds a poll; the request times out a little later.
 const WAIT: u64 = 55;
-/// The firewall is reconciled at least this often (expired blocks, a flushed ruleset).
+/// How often the status (with the drop counters) is written, and how often a firewall nothing watches for changes
+/// is checked (a flushed ruleset, a restarted firewall).
 const TICK: Duration = Duration::from_secs(60);
 
 /// What tells the two edge agents apart, besides their backend.
@@ -49,7 +51,7 @@ fn help(d: &Defaults) -> String {
     )
 }
 
-fn log(level: &str, message: &str) {
+pub(crate) fn log(level: &str, message: &str) {
     let _ = writeln!(std::io::stderr(), "{level}: {message}");
 }
 
@@ -228,6 +230,8 @@ enum Message {
     Changes(usize, Changes),
     List(usize, String, Vec<Net>),
     Failed(usize, String),
+    /// Another program changed the firewall (or whether it did can't be known).
+    Drift,
 }
 
 /// Follows one upstream: long polls for changes, and fetches its list when the list's version changes.
@@ -302,29 +306,37 @@ struct Edge {
     firewall: Option<Box<dyn Backend>>,
     mirrors: Vec<Mirror>,
     lists: Vec<Vec<Net>>,
+    /// The upstreams' lists merged, made again only when one of them changes.
+    merged: Option<Arc<Vec<Net>>>,
     status: Status,
     dirty: bool,
     last_saved: Option<Instant>,
 }
 
 impl Edge {
-    fn desired(&self) -> Desired {
+    fn desired(&mut self) -> Desired {
         let (block, allow) = merge(self.mirrors.iter());
         let (lists, version) = if self.config.lists {
-            let all: Vec<Net> = self.lists.iter().flatten().copied().collect();
+            let lists = self
+                .merged
+                .get_or_insert_with(|| {
+                    let all: Vec<Net> = self.lists.iter().flatten().copied().collect();
+                    Arc::new(aggregate(&all))
+                })
+                .clone();
             let version: Vec<&str> = self
                 .mirrors
                 .iter()
                 .map(|m| m.list.version.as_str())
                 .collect();
-            (aggregate(&all), version.join(","))
+            (lists, version.join(","))
         } else {
-            (Vec::new(), String::new())
+            (Arc::default(), String::new())
         };
         Desired {
             allow,
             block,
-            lists: Arc::new(lists),
+            lists,
             lists_version: version,
         }
     }
@@ -354,6 +366,27 @@ impl Edge {
                     self.status.error = Some(e);
                 }
             }
+        }
+        self.write_status();
+    }
+
+    /// Once a minute: forgets blocks that ran out (the kernel lifted them already), and reconciles only when the
+    /// firewall may have changed and nothing watches it; otherwise only the counters are read.
+    fn tick(&mut self, watched: bool) {
+        let now = now();
+        for m in &mut self.mirrors {
+            m.expire(now);
+        }
+        let Some(fw) = &mut self.firewall else {
+            return;
+        };
+        if !watched && fw.check(now) {
+            self.apply();
+            return;
+        }
+        if let Some(c) = fw.counters() {
+            self.status.dropped_blocked = c.blocked.packets;
+            self.status.dropped_listed = c.listed.packets;
         }
         self.write_status();
     }
@@ -432,15 +465,18 @@ impl Edge {
         }
     }
 
-    fn handle(&mut self, message: Message) {
+    /// Takes in what a thread said. Returns whether the firewall has to be reconciled.
+    fn handle(&mut self, message: Message) -> bool {
         let now = now();
         match message {
-            Message::Stop => {}
+            Message::Stop => false,
+            Message::Drift => true,
             Message::Changes(i, changes) => {
                 let Some(mirror) = self.mirrors.get_mut(i) else {
-                    return;
+                    return false;
                 };
                 let first = mirror.epoch.is_empty();
+                let mut reset = false;
                 let changed = changes.full
                     || !changes.block.is_empty()
                     || !changes.unblock.is_empty()
@@ -458,6 +494,7 @@ impl Edge {
                         ),
                     );
                     *mirror = Mirror::default();
+                    reset = true;
                 }
                 if let Some(s) = self.status.upstreams.get_mut(i) {
                     s.connected = true;
@@ -471,12 +508,16 @@ impl Edge {
                 if first && changes.full {
                     self.persist(true);
                 }
+                // A long poll that ran out with nothing new changes nothing.
+                changed || first || reset
             }
             Message::List(i, _version, nets) => {
                 if let Some(list) = self.lists.get_mut(i) {
                     *list = nets;
                     self.dirty = true;
+                    self.merged = None;
                 }
+                true
             }
             Message::Failed(i, error) => {
                 if let Some(s) = self.status.upstreams.get_mut(i) {
@@ -486,6 +527,7 @@ impl Edge {
                     s.connected = false;
                     s.error = Some(error);
                 }
+                false
             }
         }
     }
@@ -532,6 +574,7 @@ impl Edge {
             firewall,
             mirrors,
             lists,
+            merged: None,
             dirty: false,
             last_saved: None,
             config,
@@ -611,6 +654,7 @@ fn run(config: Config, backend: Box<dyn Backend>) -> Result<(), String> {
 
     let (tx, rx) = mpsc::channel();
     spawn_upstreams(&edge, &tx)?;
+    let watched = watch(&edge, &tx);
 
     // A stop (procd's, at a reboot too) saves what changed since the last save.
     let stop = tx.clone();
@@ -629,7 +673,7 @@ fn run(config: Config, backend: Box<dyn Backend>) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     drop(tx);
 
-    let mut last_apply = Instant::now();
+    let mut last_tick = Instant::now();
     loop {
         match rx.recv_timeout(edge.next_wake()) {
             Ok(Message::Stop) => {
@@ -638,18 +682,20 @@ fn run(config: Config, backend: Box<dyn Backend>) -> Result<(), String> {
                 return Ok(());
             }
             Ok(message) => {
-                edge.handle(message);
-                // Whatever else arrived meanwhile, applied together.
-                std::thread::sleep(Duration::from_millis(300));
-                while let Ok(message) = rx.try_recv() {
-                    if matches!(message, Message::Stop) {
-                        edge.persist(true);
-                        return Ok(());
+                if edge.handle(message) {
+                    // Whatever else arrived meanwhile, applied together.
+                    std::thread::sleep(Duration::from_millis(300));
+                    while let Ok(message) = rx.try_recv() {
+                        if matches!(message, Message::Stop) {
+                            edge.persist(true);
+                            return Ok(());
+                        }
+                        edge.handle(message);
                     }
-                    edge.handle(message);
+                    edge.apply();
+                } else {
+                    edge.write_status();
                 }
-                edge.apply();
-                last_apply = Instant::now();
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => {
@@ -657,12 +703,56 @@ fn run(config: Config, backend: Box<dyn Backend>) -> Result<(), String> {
                 std::thread::sleep(TICK);
             }
         }
-        if last_apply.elapsed() >= TICK {
-            edge.apply();
-            last_apply = Instant::now();
+        if last_tick.elapsed() >= TICK {
+            edge.tick(watched.as_ref().is_some_and(|w| w.load(Ordering::Relaxed)));
+            last_tick = Instant::now();
         }
         edge.persist(false);
     }
+}
+
+/// Follows the firewall's notifications (nftables) in a thread of its own, which sends [`Message::Drift`] when
+/// another program changed it. What it returns stays true while it does.
+fn watch(edge: &Edge, tx: &mpsc::Sender<Message>) -> Option<Arc<AtomicBool>> {
+    let mut monitor = match edge.firewall.as_ref()?.monitor()? {
+        Ok(monitor) => monitor,
+        Err(e) => {
+            log(
+                "warning",
+                &format!(
+                    "can't follow the firewall's notifications, checking it every minute: {e}"
+                ),
+            );
+            return None;
+        }
+    };
+    let alive = Arc::new(AtomicBool::new(true));
+    let thread_alive = Arc::clone(&alive);
+    let thread_tx = tx.clone();
+    std::thread::Builder::new()
+        .name("monitor".to_owned())
+        .spawn(move || {
+            loop {
+                if let Err(e) = monitor.wait() {
+                    log(
+                        "warning",
+                        &format!(
+                            "following the firewall's notifications: {e}; checking it every minute"
+                        ),
+                    );
+                    break;
+                }
+                if thread_tx.send(Message::Drift).is_err() {
+                    break;
+                }
+            }
+            thread_alive.store(false, Ordering::Relaxed);
+            let _ = thread_tx.send(Message::Drift);
+        })
+        .ok()?;
+    // What changed before it started.
+    let _ = tx.send(Message::Drift);
+    Some(alive)
 }
 
 /// The command line of an edge agent: `make` builds its firewall backend from the configuration.

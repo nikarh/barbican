@@ -422,7 +422,7 @@ impl<E: Exec> Backend for Ipset<E> {
         Ok(())
     }
 
-    fn counters(&self) -> Option<Counters> {
+    fn counters(&mut self) -> Option<Counters> {
         let mut counters = Counters::default();
         for family in self.families() {
             let out = self

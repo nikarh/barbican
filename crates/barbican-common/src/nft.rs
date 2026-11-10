@@ -11,15 +11,37 @@
 //!    whose elements carry their remaining time, so the kernel lifts a ban on time even when no agent runs;
 //! 4. sources in the list sets (countries, blocklists) are dropped.
 //!
-//! Reconciling reads what the kernel has (`nft -j list set`) and changes only the difference, so expirations, a
-//! restart or someone flushing a set are all corrected the same way.
+//! The table and its chain are made with the `nft` program. Elements are changed over netlink, straight in the
+//! kernel's `nf_tables`: `nft` reads every element of every set into its cache before it changes anything, which takes
+//! seconds once a list set holds hundreds of thousands of prefixes. Over netlink a change is one small
+//! transaction whatever the lists hold.
+//!
+//! Reconciling changes only the difference between what should be blocked and what the kernel has. What the kernel
+//! has is read back (`NFT_MSG_GETSETELEM` of the ban and allow sets) at the start, and again only when someone else
+//! changed the table: a [`Monitor`] follows `nf_tables`' notifications and tells. Otherwise it is what this process
+//! wrote, less what timed out. So expirations, a restart, a flushed ruleset or a hand-edited set are all corrected,
+//! and an idle agent does nothing at all.
+//!
+//! The list sets are never read back as a rule: they change by the difference to what was written last, and a set
+//! of one element (`lists_version`, written in the same transaction) tells after a restart whether they hold the
+//! wanted version already.
+//!
+//! When netlink fails (an unexpected kernel), everything goes through `nft` as before: reads with `nft -j list set`
+//! on each reconcile, changes as an `nft -f` script.
 
+mod kernel;
+mod wire;
+
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 
 use serde_json::Value;
+
+pub use kernel::{Kernel, Monitor};
 
 use crate::net::{Family, Net, collapse};
 
@@ -40,6 +62,8 @@ pub enum Error {
     Nft(String),
     #[error("unexpected output of nft: {0}")]
     Output(String),
+    #[error("netlink: {0}")]
+    Netlink(String),
 }
 
 /// Runs nft. A trait so that tests can record the scripts instead.
@@ -48,23 +72,72 @@ pub trait Runner {
     fn run(&self, script: &str) -> Result<(), Error>;
     /// Lists a table or one of its objects in JSON (`nft -j list <what>`), e.g. `set inet barbican host4`.
     fn list(&self, what: &str) -> Result<String, Error>;
+    /// The kernel's `nf_tables` over netlink, when this runner reaches it.
+    fn netlink(&self) -> Option<&dyn Netlink> {
+        None
+    }
 }
 
-/// Runs the `nft` program.
+/// `nf_tables` over netlink. A trait so that tests can record the messages instead. Requests are built by a
+/// function of the first sequence number to use.
+pub trait Netlink {
+    /// Applies a transaction: a batch whose messages each ask for an acknowledgement. `bulk`: it changes many
+    /// elements (a flush counts), so notifications of it are better not made.
+    fn transact(&self, build: &dyn Fn(u32) -> Vec<u8>, bulk: bool) -> Result<(), Error>;
+    /// The messages a dump request answers with.
+    fn dump(&self, build: &dyn Fn(u32) -> Vec<u8>) -> Result<Vec<u8>, Error>;
+    /// The first of them only.
+    fn dump_first(&self, build: &dyn Fn(u32) -> Vec<u8>) -> Result<Vec<u8>, Error>;
+    /// Whether only this process changed the table since the last call (a monitor watched it).
+    fn unchanged(&self) -> bool;
+}
+
+impl Netlink for Kernel {
+    fn transact(&self, build: &dyn Fn(u32) -> Vec<u8>, bulk: bool) -> Result<(), Error> {
+        Kernel::transact(self, build, bulk)
+    }
+
+    fn dump(&self, build: &dyn Fn(u32) -> Vec<u8>) -> Result<Vec<u8>, Error> {
+        Kernel::dump(self, build)
+    }
+
+    fn dump_first(&self, build: &dyn Fn(u32) -> Vec<u8>) -> Result<Vec<u8>, Error> {
+        Kernel::dump_first(self, build)
+    }
+
+    fn unchanged(&self) -> bool {
+        Kernel::unchanged(self)
+    }
+}
+
+/// Runs the `nft` program, and changes elements over netlink.
 #[derive(Debug, Clone)]
 pub struct NftCommand {
-    pub program: String,
+    program: String,
+    kernel: Kernel,
 }
 
 impl Default for NftCommand {
     fn default() -> Self {
-        Self {
-            program: "nft".to_owned(),
-        }
+        Self::new("nft")
     }
 }
 
 impl NftCommand {
+    #[must_use]
+    pub fn new(program: &str) -> Self {
+        Self {
+            program: program.to_owned(),
+            kernel: Kernel::default(),
+        }
+    }
+
+    /// Follows `nf_tables`' notifications, to learn when another program changes `table`. Until one runs, each
+    /// reconcile reads the sets back.
+    pub fn monitor(&self, table: &str) -> Result<Monitor, Error> {
+        self.kernel.monitor(table)
+    }
+
     fn spawn_error(&self, source: std::io::Error) -> Error {
         Error::Spawn {
             program: self.program.clone(),
@@ -112,6 +185,10 @@ impl Runner for NftCommand {
             ))
         }
     }
+
+    fn netlink(&self) -> Option<&dyn Netlink> {
+        Some(&self.kernel)
+    }
 }
 
 /// A blocked address or prefix, and when it stops being blocked (unix seconds, `None` for never).
@@ -128,7 +205,7 @@ pub struct Desired {
     pub block: Vec<Block>,
     /// Countries and blocklists, all in one: replaced as a whole when `lists_version` changes. Shared, since it
     /// can be large and changes rarely.
-    pub lists: std::sync::Arc<Vec<Net>>,
+    pub lists: Arc<Vec<Net>>,
     /// Identifies the content of `lists`, e.g. a hash of it.
     pub lists_version: String,
 }
@@ -192,6 +269,10 @@ impl Set {
     fn has_timeout(self) -> bool {
         matches!(self, Self::Host | Self::Net)
     }
+
+    fn is_interval(self) -> bool {
+        !matches!(self, Self::Host)
+    }
 }
 
 const FAMILIES: [Family; 2] = [Family::V4, Family::V6];
@@ -210,10 +291,32 @@ fn saddr(family: Family) -> &'static str {
     }
 }
 
-/// An element as the kernel has it: its key in nft's syntax, and the seconds until it expires.
+/// What identifies an element of a set.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+enum Key {
+    /// An address or a prefix: what barbican puts in.
+    Net(Net),
+    /// Anything else (a range someone else added), as `nft -j` writes it: removed by `nft`.
+    Text(String),
+    /// Anything else, as the kernel's elements (key, interval end): removed over netlink.
+    Raw(Vec<(wire::Key, bool)>),
+}
+
+impl Key {
+    /// In nft's syntax, for a script. `None` for what only netlink can name.
+    fn text(&self) -> Option<String> {
+        match self {
+            Self::Net(net) => Some(net.to_string()),
+            Self::Text(text) => Some(text.clone()),
+            Self::Raw(_) => None,
+        }
+    }
+}
+
+/// An element as the kernel has it, and the seconds until it expires.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Element {
-    key: String,
+    key: Key,
     expires: Option<u64>,
 }
 
@@ -222,12 +325,105 @@ fn tolerance(remaining: u64) -> u64 {
     (remaining / 100).max(60)
 }
 
+/// What a set holds: each element and when it times out (unix seconds).
+type Have = HashMap<Key, Option<u64>>;
+
+/// What the kernel holds, as far as this process knows.
+type Model = HashMap<(Set, Family), Have>;
+
+/// The changes to one set.
+#[derive(Debug, Default)]
+struct SetChanges {
+    remove: Vec<Key>,
+    add: Vec<(Net, Option<u64>)>,
+    /// Emptied first (list sets).
+    flush: bool,
+}
+
+/// The changes of one reconcile.
+#[derive(Debug, Default)]
+struct Plan {
+    sets: Vec<((Set, Family), SetChanges)>,
+    /// The new mark of the lists, when they change.
+    lists: Option<u32>,
+}
+
+impl Plan {
+    fn is_empty(&self) -> bool {
+        self.sets.is_empty() && self.lists.is_none()
+    }
+}
+
+/// The set holding one element: a hash of the version of what the list sets hold, written in the same transaction
+/// as they are. Reading a large set back takes seconds; this tells whether it holds what it should already (after
+/// a restart), so that it isn't filled again.
+const LISTS_MARK: &str = "lists_version";
+
+/// The version of lists read back: no real one.
+const UNKNOWN_LISTS: &str = "\0read back";
+
+/// The mark of a version of the lists: its 32-bit FNV-1a hash.
+fn lists_mark(version: &str) -> u32 {
+    version.bytes().fold(0x811c_9dc5, |h, b| {
+        (h ^ u32::from(b)).wrapping_mul(0x0100_0193)
+    })
+}
+
+/// The prefixes of a family that go into its list set.
+fn listed(lists: &[Net], family: Family) -> impl Iterator<Item = Net> + '_ {
+    lists
+        .iter()
+        .filter(move |n| n.family() == family && !n.is_never_blocked())
+        .copied()
+}
+
+/// What is in `new` and not in `old`, and what is in `old` and not in `new`, both sorted.
+fn list_diff(old: &[Net], new: &[Net], family: Family) -> (Vec<Net>, Vec<Net>) {
+    let sorted = |l: &[Net]| {
+        let mut v: Vec<Net> = listed(l, family).collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    let (old, new) = (sorted(old), sorted(new));
+    let (mut add, mut remove) = (Vec::new(), Vec::new());
+    let (mut i, mut j) = (0, 0);
+    loop {
+        match (old.get(i), new.get(j)) {
+            (Some(o), Some(n)) if o == n => {
+                i += 1;
+                j += 1;
+            }
+            (Some(o), Some(n)) if o < n => {
+                remove.push(*o);
+                i += 1;
+            }
+            (_, Some(n)) => {
+                add.push(*n);
+                j += 1;
+            }
+            (Some(o), None) => {
+                remove.push(*o);
+                i += 1;
+            }
+            (None, None) => break,
+        }
+    }
+    (add, remove)
+}
+
 /// The table and the way to change it.
 pub struct Firewall<R: Runner> {
     runner: R,
     table: String,
     priority: i32,
-    lists_version: Option<String>,
+    /// The version and content the list sets hold, when known.
+    lists: Option<(String, Arc<Vec<Net>>)>,
+    /// What the kernel holds, while it is known (changes go over netlink and a monitor watches the table).
+    model: Option<Model>,
+    /// The last netlink failure reported, and one not reported yet.
+    netlink_failure: Option<String>,
+    notice: Option<String>,
 }
 
 impl<R: Runner> Firewall<R> {
@@ -236,12 +432,32 @@ impl<R: Runner> Firewall<R> {
             runner,
             table: table.to_owned(),
             priority,
-            lists_version: None,
+            lists: None,
+            model: None,
+            netlink_failure: None,
+            notice: None,
         }
     }
 
     pub fn table(&self) -> &str {
         &self.table
+    }
+
+    pub fn runner(&self) -> &R {
+        &self.runner
+    }
+
+    /// Why netlink failed and `nft` was used instead, once for each new reason.
+    pub fn take_notice(&mut self) -> Option<String> {
+        self.notice.take()
+    }
+
+    fn netlink_failed(&mut self, error: String) {
+        self.model = None;
+        if self.netlink_failure.as_deref() != Some(error.as_str()) {
+            self.notice = Some(error.clone());
+            self.netlink_failure = Some(error);
+        }
     }
 
     fn definition(&self) -> String {
@@ -258,6 +474,7 @@ impl<R: Runner> Firewall<R> {
                 );
             }
         }
+        let _ = writeln!(s, "  set {LISTS_MARK} {{ type mark; }}");
         let _ = writeln!(
             s,
             "  chain prerouting {{ type filter hook prerouting priority {}; policy accept; }}\n}}",
@@ -297,11 +514,12 @@ impl<R: Runner> Firewall<R> {
     /// Creates the table, or brings its chain up to date and keeps its sets. A table of another layout (or another
     /// priority) is replaced, and the next [`Self::reconcile`] fills it again.
     pub fn setup(&mut self) -> Result<(), Error> {
+        self.model = None;
         let definition = self.definition();
         match self.runner.run(&definition) {
             Ok(()) => Ok(()),
             Err(Error::Nft(_)) => {
-                self.lists_version = None;
+                self.lists = None;
                 self.runner.run(&format!(
                     "table inet {t}\ndelete table inet {t}\n{definition}",
                     t = self.table
@@ -313,18 +531,12 @@ impl<R: Runner> Firewall<R> {
 
     /// Removes the table, and with it every block.
     pub fn remove(&mut self) -> Result<(), Error> {
-        self.lists_version = None;
+        self.lists = None;
+        self.model = None;
         self.runner.run(&format!(
             "table inet {t}\ndelete table inet {t}\n",
             t = self.table
         ))
-    }
-
-    fn elements(&self, set: Set, family: Family) -> Result<Vec<Element>, Error> {
-        let json = self
-            .runner
-            .list(&format!("set inet {} {}", self.table, set.name(family)))?;
-        parse_elements(&json)
     }
 
     /// Changes the sets to hold what `desired` says, as one transaction. `now` is the current unix time, which the
@@ -342,74 +554,461 @@ impl<R: Runner> Firewall<R> {
 
     fn reconcile_once(&mut self, desired: &Desired, now: u64) -> Result<Changes, Error> {
         let wanted = wanted(desired, now);
-        let mut script = String::new();
+        if self.runner.netlink().is_some() {
+            match self.reconcile_netlink(&wanted, desired, now) {
+                Err(Error::Netlink(e)) => self.netlink_failed(e),
+                other => {
+                    if other.is_err() {
+                        self.model = None;
+                    }
+                    return other;
+                }
+            }
+        }
+        self.reconcile_cli(&wanted, desired, now)
+    }
+
+    /// What should change, given what the kernel has (`kernel`, per ban and allow set).
+    fn plan<'m>(
+        &self,
+        wanted: &Wanted,
+        desired: &Desired,
+        now: u64,
+        kernel: &dyn Fn(Set, Family) -> Result<Cow<'m, Have>, Error>,
+    ) -> Result<(Plan, Changes), Error> {
+        let mut plan = Plan::default();
         let mut changes = Changes::default();
-        let t = self.table.clone();
         for family in FAMILIES {
             for set in [Set::Allow, Set::Host, Set::Net] {
-                let name = set.name(family);
-                let kernel = self.elements(set, family)?;
+                let have = kernel(set, family)?;
                 let want = wanted.get(&(set, family));
                 let (add, remove) = diff(
                     want.map_or(&[][..], Vec::as_slice),
-                    &kernel,
+                    &have,
                     set.has_timeout(),
+                    now,
                 );
-                if !remove.is_empty() {
-                    let _ = writeln!(
-                        script,
-                        "destroy element inet {t} {name} {{ {} }}",
-                        remove.join(", ")
-                    );
-                }
-                if !add.is_empty() {
-                    let _ = writeln!(
-                        script,
-                        "add element inet {t} {name} {{ {} }}",
-                        add.join(", ")
-                    );
-                }
                 changes.added += add.len();
                 changes.removed += remove.len();
-            }
-        }
-        let lists_changed = self.lists_version.as_deref() != Some(desired.lists_version.as_str());
-        if lists_changed {
-            for family in FAMILIES {
-                let name = Set::List.name(family);
-                let _ = writeln!(script, "flush set inet {t} {name}");
-                let nets: Vec<String> = desired
-                    .lists
-                    .iter()
-                    .filter(|n| n.family() == family && !n.is_never_blocked())
-                    .map(ToString::to_string)
-                    .collect();
-                for chunk in nets.chunks(CHUNK) {
-                    let _ = writeln!(
-                        script,
-                        "add element inet {t} {name} {{ {} }}",
-                        chunk.join(", ")
-                    );
+                if !add.is_empty() || !remove.is_empty() {
+                    plan.sets.push((
+                        (set, family),
+                        SetChanges {
+                            remove,
+                            add,
+                            flush: false,
+                        },
+                    ));
                 }
             }
+        }
+        let applied = self.lists.as_ref();
+        if applied.map(|(version, _)| version) != Some(&desired.lists_version) {
+            for family in FAMILIES {
+                // From what they hold, only the difference; or else filled anew.
+                let set = match applied {
+                    Some((_, old)) => {
+                        let (add, remove) = list_diff(old, &desired.lists, family);
+                        SetChanges {
+                            remove: remove.into_iter().map(Key::Net).collect(),
+                            add: add.into_iter().map(|n| (n, None)).collect(),
+                            flush: false,
+                        }
+                    }
+                    None => SetChanges {
+                        remove: Vec::new(),
+                        add: listed(&desired.lists, family).map(|n| (n, None)).collect(),
+                        flush: true,
+                    },
+                };
+                if set.flush || !set.add.is_empty() || !set.remove.is_empty() {
+                    plan.sets.push(((Set::List, family), set));
+                }
+            }
+            plan.lists = Some(lists_mark(&desired.lists_version));
+            changes.lists = true;
+        }
+        Ok((plan, changes))
+    }
+
+    fn reconcile_cli(
+        &mut self,
+        wanted: &Wanted,
+        desired: &Desired,
+        now: u64,
+    ) -> Result<Changes, Error> {
+        let (plan, changes) = self.plan(wanted, desired, now, &|set, family| {
+            Ok(Cow::Owned(
+                self.elements(set, family)?
+                    .into_iter()
+                    .map(|e| (e.key, e.expires.map(|s| now + s)))
+                    .collect(),
+            ))
+        })?;
+        let t = &self.table;
+        let mut script = String::new();
+        for ((set, family), c) in &plan.sets {
+            let name = set.name(*family);
+            if c.flush {
+                let _ = writeln!(script, "flush set inet {t} {name}");
+            }
+            let remove: Vec<String> = c.remove.iter().filter_map(Key::text).collect();
+            for chunk in remove.chunks(CHUNK) {
+                let _ = writeln!(
+                    script,
+                    "destroy element inet {t} {name} {{ {} }}",
+                    chunk.join(", ")
+                );
+            }
+            let add: Vec<String> = c
+                .add
+                .iter()
+                .map(|(net, remaining)| element(net, *remaining))
+                .collect();
+            for chunk in add.chunks(CHUNK) {
+                let _ = writeln!(
+                    script,
+                    "add element inet {t} {name} {{ {} }}",
+                    chunk.join(", ")
+                );
+            }
+        }
+        if let Some(mark) = plan.lists {
+            let _ = writeln!(
+                script,
+                "flush set inet {t} {LISTS_MARK}\nadd element inet {t} {LISTS_MARK} {{ {mark} }}"
+            );
         }
         if !script.is_empty() {
             self.runner.run(&script)?;
         }
-        if lists_changed {
-            self.lists_version = Some(desired.lists_version.clone());
-            changes.lists = true;
+        if changes.lists {
+            self.lists = Some((desired.lists_version.clone(), Arc::clone(&desired.lists)));
+        }
+        Ok(changes)
+    }
+
+    fn elements(&self, set: Set, family: Family) -> Result<Vec<Element>, Error> {
+        let json = self
+            .runner
+            .list(&format!("set inet {} {}", self.table, set.name(family)))?;
+        parse_elements(&json)
+    }
+
+    fn netlink(&self) -> Result<&dyn Netlink, Error> {
+        self.runner
+            .netlink()
+            .ok_or_else(|| Error::Netlink("not available".to_owned()))
+    }
+
+    /// The elements of a set, read over netlink.
+    fn netlink_elements(&self, set: Set, family: Family) -> Result<Vec<Element>, Error> {
+        let name = set.name(family);
+        let dump = self.netlink()?.dump(&|seq| {
+            let mut w = wire::Writer::new(seq);
+            w.get_elements(&self.table, name);
+            w.into_bytes()
+        })?;
+        let elems = wire::parse_elements(&dump)
+            .ok_or_else(|| Error::Netlink(format!("unexpected elements of {name}")))?;
+        Ok(assemble(elems, set.is_interval()))
+    }
+
+    /// Reads back what the ban and allow sets hold, and whether the list sets hold what they should.
+    fn read_back(&mut self, desired: &Desired, now: u64) -> Result<Model, Error> {
+        let mut model = Model::new();
+        let mut has = Vec::new();
+        for family in FAMILIES {
+            for set in [Set::Allow, Set::Host, Set::Net] {
+                let elements = self.netlink_elements(set, family)?;
+                model.insert(
+                    (set, family),
+                    elements
+                        .into_iter()
+                        .map(|e| (e.key, e.expires.map(|s| now + s)))
+                        .collect(),
+                );
+            }
+            // A list set isn't read (that is what is slow), only whether it has elements at all.
+            let name = Set::List.name(family);
+            let first = self.netlink()?.dump_first(&|seq| {
+                let mut w = wire::Writer::new(seq);
+                w.get_elements(&self.table, name);
+                w.into_bytes()
+            })?;
+            has.push((
+                family,
+                wire::parse_elements(&first).is_some_and(|e| !e.is_empty()),
+            ));
+        }
+        // What the list sets hold is what the mark says was written with them, as long as they aren't empty when
+        // that wasn't (flushed, or in a table made again).
+        let dump = self.netlink()?.dump(&|seq| {
+            let mut w = wire::Writer::new(seq);
+            w.get_elements(&self.table, LISTS_MARK);
+            w.into_bytes()
+        });
+        let mark = match dump {
+            Ok(dump) => {
+                wire::parse_elements(&dump).and_then(|e| e.first().and_then(|e| e.key.as_u32()))
+            }
+            // A table made before the mark was: its lists are filled anew.
+            Err(Error::Nft(_)) => None,
+            Err(e) => return Err(e),
+        };
+        let holds = |version: &str, lists: &[Net]| {
+            mark == Some(lists_mark(version))
+                && has
+                    .iter()
+                    .all(|(family, has)| *has == listed(lists, *family).next().is_some())
+        };
+        self.lists = match self.lists.take() {
+            Some((version, lists)) if holds(&version, &lists) => Some((version, lists)),
+            _ if holds(&desired.lists_version, &desired.lists) => {
+                Some((desired.lists_version.clone(), Arc::clone(&desired.lists)))
+            }
+            _ => None,
+        };
+        // Lists of unknown content (written by an older version, or changed while not running) are read back, so
+        // that only the difference is written: replacing them as a whole, the kernel holds the old and the new
+        // elements and a record of each change until the end of the transaction, more memory than a small router
+        // has for a few hundred thousand prefixes. Slow (seconds), but only then.
+        if self.lists.is_none() && has.iter().any(|(_, has)| *has) {
+            let mut held = Vec::new();
+            for (family, has) in &has {
+                if *has {
+                    held.extend(
+                        self.netlink_elements(Set::List, *family)?
+                            .into_iter()
+                            .filter_map(|e| match e.key {
+                                Key::Net(net) => Some(net),
+                                _ => None,
+                            }),
+                    );
+                }
+            }
+            self.lists = Some((UNKNOWN_LISTS.to_owned(), Arc::new(held)));
+        }
+        Ok(model)
+    }
+
+    fn reconcile_netlink(
+        &mut self,
+        wanted: &Wanted,
+        desired: &Desired,
+        now: u64,
+    ) -> Result<Changes, Error> {
+        let unchanged = self.netlink()?.unchanged();
+        let mut model = match self.model.take() {
+            Some(model) if unchanged => model,
+            _ => self.read_back(desired, now)?,
+        };
+        let (plan, changes) = self.plan(wanted, desired, now, &|set, family| {
+            Ok(model
+                .get(&(set, family))
+                .map_or_else(|| Cow::Owned(Have::new()), Cow::Borrowed))
+        })?;
+        if !plan.is_empty() {
+            let table = self.table.clone();
+            let bulk = plan
+                .sets
+                .iter()
+                .any(|(_, c)| c.flush || c.add.len() + c.remove.len() > 1000);
+            self.netlink()?
+                .transact(&|seq| batch(&table, &plan, seq), bulk)?;
+        }
+        for ((set, family), c) in plan.sets {
+            if set == Set::List {
+                continue;
+            }
+            let entries = model.entry((set, family)).or_default();
+            for key in c.remove {
+                entries.remove(&key);
+            }
+            for (net, remaining) in c.add {
+                entries.insert(Key::Net(net), remaining.map(|r| now + r));
+            }
+        }
+        // Forget what timed out.
+        for entries in model.values_mut() {
+            entries.retain(|_, until| until.is_none_or(|u| u > now));
+        }
+        self.model = Some(model);
+        if changes.lists {
+            self.lists = Some((desired.lists_version.clone(), Arc::clone(&desired.lists)));
         }
         Ok(changes)
     }
 
     /// What the drop rules matched since the table was created.
-    pub fn counters(&self) -> Result<Counters, Error> {
+    pub fn counters(&mut self) -> Result<Counters, Error> {
+        if self.runner.netlink().is_some() {
+            match self.netlink_counters() {
+                Err(Error::Netlink(e)) => self.netlink_failed(e),
+                other => return other,
+            }
+        }
         let json = self
             .runner
             .list(&format!("chain inet {} prerouting", self.table))?;
         parse_counters(&json)
     }
+
+    fn netlink_counters(&self) -> Result<Counters, Error> {
+        let dump = self.netlink()?.dump(&|seq| {
+            let mut w = wire::Writer::new(seq);
+            w.get_rules(&self.table, "prerouting");
+            w.into_bytes()
+        })?;
+        let mut counters = Counters::default();
+        for (comment, packets, bytes) in wire::parse_rule_counters(&dump) {
+            let target = match comment.as_str() {
+                "blocked" => &mut counters.blocked,
+                "listed" => &mut counters.listed,
+                _ => continue,
+            };
+            target.packets += packets;
+            target.bytes += bytes;
+        }
+        Ok(counters)
+    }
+}
+
+/// The kernel's elements of a key, as nft writes them: a set of single addresses has one per address, an
+/// interval set two per prefix (see [`wire::interval`]).
+fn elems(
+    key: &Key,
+    interval: bool,
+    timeout: Option<u64>,
+) -> Option<(wire::Elem, Option<wire::Elem>)> {
+    let timeout_ms = timeout.map(|s| s.saturating_mul(1000));
+    match key {
+        Key::Net(net) if interval => Some(wire::interval(net, timeout_ms)),
+        Key::Net(net) => {
+            let mut e = wire::Elem::key(wire::Key::of(net.addr()));
+            e.timeout_ms = timeout_ms;
+            Some((e, None))
+        }
+        Key::Raw(raw) => {
+            let mut it = raw.iter().map(|(key, end)| {
+                let mut e = wire::Elem::key(*key);
+                e.end = *end;
+                e
+            });
+            Some((it.next()?, it.next()))
+        }
+        Key::Text(_) => None,
+    }
+}
+
+/// The transaction of a plan.
+fn batch(table: &str, plan: &Plan, seq: u32) -> Vec<u8> {
+    let mut w = wire::Writer::new(seq);
+    w.batch_begin();
+    for ((set, family), c) in &plan.sets {
+        let name = set.name(*family);
+        let interval = set.is_interval();
+        if c.flush {
+            w.flush(table, name);
+        }
+        // An element being added is destroyed first: one that timed out a moment ago may still be there, and
+        // adding what is there would keep its old timeout.
+        let renewed = c
+            .add
+            .iter()
+            .filter(|_| set.has_timeout())
+            .map(|(net, _)| Key::Net(*net));
+        let remove: Vec<_> = c
+            .remove
+            .iter()
+            .cloned()
+            .chain(renewed)
+            .filter_map(|key| elems(&key, interval, None))
+            .collect();
+        w.elements(false, table, name, &remove);
+        let mut add: Vec<_> = Vec::with_capacity(c.add.len() + 1);
+        // Like nft, an interval set filled from empty starts with the end of an interval below the first one.
+        if c.flush
+            && interval
+            && let Some((first, _)) = c.add.first()
+            && !first.addr().is_unspecified()
+        {
+            let zero = match family {
+                Family::V4 => std::net::IpAddr::from([0u8; 4]),
+                Family::V6 => std::net::IpAddr::from([0u8; 16]),
+            };
+            let mut e = wire::Elem::key(wire::Key::of(zero));
+            e.end = true;
+            add.push((e, None));
+        }
+        add.extend(
+            c.add
+                .iter()
+                .filter_map(|(net, remaining)| elems(&Key::Net(*net), interval, *remaining)),
+        );
+        w.elements(true, table, name, &add);
+    }
+    if let Some(mark) = plan.lists {
+        w.flush(table, LISTS_MARK);
+        let elem = wire::Elem::key(wire::Key::of_u32(mark));
+        w.elements(true, table, LISTS_MARK, &[(elem, None)]);
+    }
+    w.batch_end();
+    w.into_bytes()
+}
+
+/// Elements from the kernel's: in an interval set, each start with the end after it.
+fn assemble(mut elems: Vec<wire::Elem>, interval: bool) -> Vec<Element> {
+    let expires = |e: &wire::Elem| e.expires_ms.map(|ms| ms / 1000);
+    if !interval {
+        return elems
+            .iter()
+            .map(|e| Element {
+                key: Key::Net(Net::host(e.key.ip())),
+                expires: expires(e),
+            })
+            .collect();
+    }
+    // Ascending; of a start and an end at the same address (adjacent intervals) the end first.
+    elems.sort_by_key(|e| (e.key, !e.end));
+    let range = |start: &wire::Elem, end: Option<&wire::Elem>| Element {
+        key: match wire::interval_net(start.key, end.map(|e| e.key)) {
+            Ok(net) => Key::Net(net),
+            Err(_) => Key::Raw(
+                std::iter::once((start.key, false))
+                    .chain(end.map(|e| (e.key, true)))
+                    .collect(),
+            ),
+        },
+        expires: expires(start),
+    };
+    let mut out = Vec::new();
+    let mut start: Option<&wire::Elem> = None;
+    let mut iter = elems.iter().peekable();
+    while let Some(e) = iter.next() {
+        if e.end {
+            // An end without its start (nft's below the first interval, or one whose start timed out) is no
+            // element of its own.
+            if let Some(s) = start.take() {
+                out.push(range(s, Some(e)));
+            }
+        } else {
+            if let Some(s) = start.take() {
+                // Two starts in a row: the first is removed on its own.
+                out.push(Element {
+                    key: Key::Raw(vec![(s.key, false)]),
+                    expires: expires(s),
+                });
+            }
+            if iter.peek().is_none() {
+                // The last start without an end reaches the top of the address space.
+                out.push(range(e, None));
+            } else {
+                start = Some(e);
+            }
+        }
+    }
+    out
 }
 
 /// An element in nft's syntax, with its remaining time when it has one.
@@ -480,41 +1079,45 @@ fn wanted(desired: &Desired, now: u64) -> Wanted {
     out
 }
 
-/// The elements to add and the keys to remove so that the kernel's set holds `want`.
+/// The elements to add and the keys to remove so that the kernel's set (`have`, with when each element times out)
+/// holds `want` (sorted, with remaining seconds) at `now`.
 fn diff(
     want: &[(Net, Option<u64>)],
-    kernel: &[Element],
+    have: &Have,
     timeouts: bool,
-) -> (Vec<String>, Vec<String>) {
-    let have: HashMap<&str, Option<u64>> =
-        kernel.iter().map(|e| (e.key.as_str(), e.expires)).collect();
+    now: u64,
+) -> (Vec<(Net, Option<u64>)>, Vec<Key>) {
+    let live = |until: &Option<u64>| until.is_none_or(|u| u > now);
     let mut add = Vec::new();
     let mut remove = Vec::new();
-    let mut wanted_keys = std::collections::HashSet::new();
     for (net, remaining) in want {
-        let key = net.to_string();
+        let key = Key::Net(*net);
         let remaining = if timeouts { *remaining } else { None };
-        match have.get(key.as_str()) {
-            None => add.push(element(net, remaining)),
-            Some(expires) => {
-                let same = match (remaining, expires) {
+        match have.get(&key).filter(|until| live(until)) {
+            None => add.push((*net, remaining)),
+            Some(until) => {
+                let same = match (remaining, until) {
                     (None, None) => true,
-                    (Some(r), Some(e)) => r.abs_diff(*e) <= tolerance(r),
+                    (Some(r), Some(u)) => r.abs_diff(u - now) <= tolerance(r),
                     _ => false,
                 };
                 if !same {
-                    remove.push(key.clone());
-                    add.push(element(net, remaining));
+                    remove.push(key);
+                    add.push((*net, remaining));
                 }
             }
         }
-        wanted_keys.insert(key);
     }
-    for e in kernel {
-        if !wanted_keys.contains(&e.key) {
-            remove.push(e.key.clone());
+    for (key, until) in have {
+        let wanted = match key {
+            Key::Net(net) => want.binary_search_by_key(net, |(n, _)| *n).is_ok(),
+            _ => false,
+        };
+        if live(until) && !wanted {
+            remove.push(key.clone());
         }
     }
+    remove.sort();
     (add, remove)
 }
 
@@ -571,7 +1174,10 @@ fn parse_elements(json: &str) -> Result<Vec<Element>, Error> {
                 None => (elem, None),
             };
             match element_key(value) {
-                Some(key) => out.push(Element { key, expires }),
+                Some(key) => out.push(Element {
+                    key: key.parse().map_or(Key::Text(key), Key::Net),
+                    expires,
+                }),
                 None => return Err(Error::Output(format!("unknown set element {elem}"))),
             }
         }
@@ -881,6 +1487,395 @@ mod tests {
                 packets: 7,
                 bytes: 420
             }
+        );
+    }
+
+    /// `nf_tables` over netlink, faked: dumps answered from a map of set names to replies, transactions recorded.
+    #[derive(Default)]
+    struct FakeNetlink {
+        dumps: RefCell<HashMap<String, Vec<u8>>>,
+        dumped: RefCell<Vec<String>>,
+        batches: RefCell<Vec<Vec<u8>>>,
+        unchanged: std::cell::Cell<bool>,
+        fail: RefCell<Option<Error>>,
+    }
+
+    impl Netlink for FakeNetlink {
+        fn transact(&self, build: &dyn Fn(u32) -> Vec<u8>, _bulk: bool) -> Result<(), Error> {
+            if let Some(e) = self.fail.borrow_mut().take() {
+                return Err(e);
+            }
+            self.batches.borrow_mut().push(build(7));
+            Ok(())
+        }
+
+        fn dump(&self, build: &dyn Fn(u32) -> Vec<u8>) -> Result<Vec<u8>, Error> {
+            if let Some(e) = self.fail.borrow_mut().take() {
+                return Err(e);
+            }
+            let request = build(1);
+            let message = wire::Messages(&request).next().unwrap();
+            let set = String::from_utf8(wire::message_set(&message).unwrap().to_vec()).unwrap();
+            self.dumped.borrow_mut().push(set.clone());
+            Ok(self.dumps.borrow().get(&set).cloned().unwrap_or_default())
+        }
+
+        fn dump_first(&self, build: &dyn Fn(u32) -> Vec<u8>) -> Result<Vec<u8>, Error> {
+            self.dump(build)
+        }
+
+        fn unchanged(&self) -> bool {
+            self.unchanged.get()
+        }
+    }
+
+    #[derive(Default)]
+    struct WithNetlink {
+        cli: Fake,
+        nl: FakeNetlink,
+    }
+
+    impl Runner for &WithNetlink {
+        fn run(&self, script: &str) -> Result<(), Error> {
+            (&self.cli).run(script)
+        }
+
+        fn list(&self, what: &str) -> Result<String, Error> {
+            (&self.cli).list(what)
+        }
+
+        fn netlink(&self) -> Option<&dyn Netlink> {
+            Some(&self.nl)
+        }
+    }
+
+    /// `(message type, set, element)` of each element of a transaction, `"flush"` for a flush.
+    fn changes_of(batch: &[u8]) -> Vec<(u8, String, String)> {
+        let mut out = Vec::new();
+        for m in wire::Messages(batch) {
+            let Some(kind) = m.nft() else { continue };
+            let set = String::from_utf8(wire::message_set(&m).unwrap().to_vec()).unwrap();
+            let elems = wire::message_elements(&m).unwrap();
+            if elems.is_empty() {
+                out.push((kind, set.clone(), "flush".to_owned()));
+            }
+            for e in elems {
+                let mut text = e.key.ip().to_string();
+                if e.end {
+                    text.push_str(" end");
+                }
+                if e.open {
+                    text.push_str(" open");
+                }
+                if let Some(ms) = e.timeout_ms {
+                    let _ = write!(text, " {ms}ms");
+                }
+                out.push((kind, set.clone(), text));
+            }
+        }
+        out
+    }
+
+    const ADD: u8 = 12;
+    const DESTROY: u8 = 30;
+    const FLUSH: u8 = 14;
+
+    fn ch(kind: u8, set: &str, elem: &str) -> (u8, String, String) {
+        (kind, set.to_owned(), elem.to_owned())
+    }
+
+    #[test]
+    fn reconciles_over_netlink() {
+        let fake = WithNetlink::default();
+        // The kernel's net4 holds 198.51.100.0/25 (599 s left) and nft's end at 0.0.0.0.
+        fake.nl
+            .dumps
+            .borrow_mut()
+            .insert("net4".to_owned(), wire::tests::hex(wire::tests::NET4_DUMP));
+        let mut fw = Firewall::new(&fake, "barbican", -190);
+        let mut desired = Desired {
+            allow: vec![net("192.0.2.0/24")],
+            block: vec![
+                Block {
+                    net: net("198.51.100.0/25"),
+                    until: Some(10_000 + 600),
+                },
+                Block {
+                    net: net("2001:db8::1"),
+                    until: Some(10_000 + 60),
+                },
+            ],
+            lists: Arc::new(vec![net("203.0.113.0/24"), net("240.0.0.0/4")]),
+            lists_version: "v1".to_owned(),
+        };
+        let changes = fw.reconcile(&desired, 10_000).unwrap();
+        assert_eq!(
+            changes,
+            Changes {
+                added: 2,
+                removed: 0,
+                lists: true
+            }
+        );
+        // Everything was read back: the ban and allow sets, and whether the list sets have anything.
+        assert_eq!(
+            *fake.nl.dumped.borrow(),
+            [
+                "allow4",
+                "host4",
+                "net4",
+                "list4",
+                "allow6",
+                "host6",
+                "net6",
+                "list6",
+                "lists_version"
+            ]
+        );
+        assert!(fake.cli.scripts.borrow().is_empty());
+        let batch = fake.nl.batches.borrow()[0].clone();
+        assert_eq!(
+            changes_of(&batch),
+            [
+                ch(ADD, "allow4", "192.0.2.0"),
+                ch(ADD, "allow4", "192.0.3.0 end"),
+                // Destroyed first: one that timed out a moment ago may not be gone yet.
+                ch(DESTROY, "host6", "2001:db8::1"),
+                ch(ADD, "host6", "2001:db8::1 60000ms"),
+                ch(FLUSH, "list4", "flush"),
+                // nft's end below the first interval of a set filled from empty.
+                ch(ADD, "list4", "0.0.0.0 end"),
+                ch(ADD, "list4", "203.0.113.0"),
+                ch(ADD, "list4", "203.0.114.0 end"),
+                ch(ADD, "list4", "240.0.0.0 open"),
+                ch(FLUSH, "list6", "flush"),
+                // The mark of what the lists hold, a host-order u32 (here written as an address).
+                ch(FLUSH, "lists_version", "flush"),
+                ch(
+                    ADD,
+                    "lists_version",
+                    &std::net::IpAddr::from(lists_mark("v1").to_ne_bytes()).to_string()
+                ),
+            ]
+        );
+
+        // Nobody else changed the table: nothing is read, nothing written.
+        fake.nl.unchanged.set(true);
+        fake.nl.dumped.borrow_mut().clear();
+        let changes = fw.reconcile(&desired, 10_030).unwrap();
+        assert_eq!(changes, Changes::default());
+        assert!(fake.nl.dumped.borrow().is_empty());
+        assert_eq!(fake.nl.batches.borrow().len(), 1);
+
+        // A ban is one small transaction.
+        desired.block.push(Block {
+            net: net("198.51.100.7"),
+            until: Some(10_000 + 3_600),
+        });
+        fw.reconcile(&desired, 10_040).unwrap();
+        assert!(fake.nl.dumped.borrow().is_empty());
+        assert_eq!(
+            changes_of(&fake.nl.batches.borrow()[1]),
+            [
+                ch(DESTROY, "host4", "198.51.100.7"),
+                ch(ADD, "host4", "198.51.100.7 3560000ms")
+            ]
+        );
+
+        // Lifted, and the IPv6 ban timed out in the kernel meanwhile: only the lift is written.
+        desired.block.pop();
+        fw.reconcile(&desired, 10_100).unwrap();
+        assert_eq!(
+            changes_of(&fake.nl.batches.borrow()[2]),
+            [ch(DESTROY, "host4", "198.51.100.7")]
+        );
+
+        // Someone else changed the table: it is read back.
+        fake.nl.unchanged.set(false);
+        fw.reconcile(&desired, 10_100).unwrap();
+        assert_eq!(fake.nl.dumped.borrow().len(), 9);
+    }
+
+    /// A dump of the mark set holding the mark of `version`.
+    fn mark_dump(version: &str) -> Vec<u8> {
+        let mut w = wire::Writer::new(0);
+        let elem = wire::Elem::key(wire::Key::of_u32(lists_mark(version)));
+        w.elements(true, "barbican", LISTS_MARK, &[(elem, None)]);
+        w.into_bytes()
+    }
+
+    #[test]
+    fn lists_change_by_their_difference() {
+        let fake = WithNetlink::default();
+        let mut fw = Firewall::new(&fake, "barbican", -190);
+        let mut desired = Desired {
+            lists: Arc::new(vec![net("198.51.100.0/24"), net("203.0.113.0/24")]),
+            lists_version: "v1".to_owned(),
+            ..Desired::default()
+        };
+        fw.reconcile(&desired, 1_000).unwrap();
+        fake.nl.unchanged.set(true);
+        desired.lists = Arc::new(vec![net("192.0.2.0/24"), net("203.0.113.0/24")]);
+        desired.lists_version = "v2".to_owned();
+        let changes = fw.reconcile(&desired, 1_000).unwrap();
+        assert!(changes.lists);
+        let batch = fake.nl.batches.borrow()[1].clone();
+        let list4: Vec<_> = changes_of(&batch)
+            .into_iter()
+            .filter(|c| c.1 == "list4")
+            .collect();
+        assert_eq!(
+            list4,
+            [
+                ch(DESTROY, "list4", "198.51.100.0"),
+                ch(DESTROY, "list4", "198.51.101.0 end"),
+                ch(ADD, "list4", "192.0.2.0"),
+                ch(ADD, "list4", "192.0.3.0 end"),
+            ]
+        );
+    }
+
+    #[test]
+    fn lists_in_place_after_a_restart_are_kept() {
+        let desired = Desired {
+            lists: Arc::new(vec![net("198.51.100.0/24")]),
+            lists_version: "v1".to_owned(),
+            ..Desired::default()
+        };
+        let fake = WithNetlink::default();
+        let has = wire::tests::hex(wire::tests::NET4_DUMP);
+        fake.nl.dumps.borrow_mut().insert("list4".to_owned(), has);
+        fake.nl
+            .dumps
+            .borrow_mut()
+            .insert(LISTS_MARK.to_owned(), mark_dump("v1"));
+        let mut fw = Firewall::new(&fake, "barbican", -190);
+        let changes = fw.reconcile(&desired, 1_000).unwrap();
+        assert!(!changes.lists);
+        assert!(fake.nl.batches.borrow().is_empty());
+
+        // Another version: what the list sets hold is read back (here 198.51.100.0/25), and only the difference
+        // written.
+        fake.nl.dumped.borrow_mut().clear();
+        let mut fw = Firewall::new(&fake, "barbican", -190);
+        let other = Desired {
+            lists_version: "v2".to_owned(),
+            ..desired.clone()
+        };
+        assert!(fw.reconcile(&other, 1_000).unwrap().lists);
+        assert_eq!(
+            fake.nl
+                .dumped
+                .borrow()
+                .iter()
+                .filter(|s| *s == "list4")
+                .count(),
+            2
+        );
+        let batch = fake.nl.batches.borrow()[0].clone();
+        let list4: Vec<_> = changes_of(&batch)
+            .into_iter()
+            .filter(|c| c.1 == "list4")
+            .collect();
+        assert_eq!(
+            list4,
+            [
+                ch(DESTROY, "list4", "198.51.100.0"),
+                ch(DESTROY, "list4", "198.51.100.128 end"),
+                ch(ADD, "list4", "198.51.100.0"),
+                ch(ADD, "list4", "198.51.101.0 end"),
+            ]
+        );
+
+        // So is a list set that is empty while its mark says it isn't (flushed by hand).
+        fake.nl.dumps.borrow_mut().remove("list4");
+        let mut fw = Firewall::new(&fake, "barbican", -190);
+        assert!(fw.reconcile(&desired, 1_000).unwrap().lists);
+    }
+
+    #[test]
+    fn falls_back_to_nft_when_netlink_fails() {
+        let fake = WithNetlink::default();
+        *fake.nl.fail.borrow_mut() = Some(Error::Netlink(
+            "nf_tables refused: Invalid argument".to_owned(),
+        ));
+        let mut fw = Firewall::new(&fake, "barbican", -190);
+        let desired = Desired {
+            block: vec![Block {
+                net: net("198.51.100.7"),
+                until: None,
+            }],
+            ..Desired::default()
+        };
+        fw.reconcile(&desired, 1_000).unwrap();
+        assert!(
+            fake.cli.scripts.borrow()[0]
+                .contains("add element inet barbican host4 { 198.51.100.7 }")
+        );
+        assert_eq!(
+            fw.take_notice().as_deref(),
+            Some("nf_tables refused: Invalid argument")
+        );
+        assert_eq!(fw.take_notice(), None);
+        // The same failure again isn't told again.
+        *fake.nl.fail.borrow_mut() = Some(Error::Netlink(
+            "nf_tables refused: Invalid argument".to_owned(),
+        ));
+        fw.reconcile(&desired, 1_000).unwrap();
+        assert_eq!(fw.take_notice(), None);
+        // Netlink works again.
+        fw.reconcile(&desired, 1_000).unwrap();
+        assert_eq!(fake.nl.batches.borrow().len(), 1);
+    }
+
+    #[test]
+    fn sets_up_again_when_the_table_is_gone() {
+        let fake = WithNetlink::default();
+        *fake.nl.fail.borrow_mut() = Some(Error::Nft(
+            "nf_tables: No such file or directory".to_owned(),
+        ));
+        let mut fw = Firewall::new(&fake, "barbican", -190);
+        fw.reconcile(&Desired::default(), 1_000).unwrap();
+        assert!(fake.cli.scripts.borrow()[0].starts_with("table inet barbican {"));
+        assert_eq!(fw.take_notice(), None);
+    }
+
+    #[test]
+    fn assembles_intervals() {
+        let elems = wire::parse_elements(&wire::tests::hex(wire::tests::NET4_DUMP)).unwrap();
+        assert_eq!(
+            assemble(elems, true),
+            [Element {
+                key: Key::Net(net("198.51.100.0/25")),
+                expires: Some(599)
+            }]
+        );
+        let key = |s: &str| wire::Key::of(s.parse().unwrap());
+        let start = |s: &str| wire::Elem::key(key(s));
+        let end = |s: &str| {
+            let mut e = wire::Elem::key(key(s));
+            e.end = true;
+            e
+        };
+        // Adjacent intervals, a range that is no prefix, and one up to the top.
+        let elems = vec![
+            start("240.0.0.0"),
+            end("192.0.2.21"),
+            start("192.0.2.10"),
+            end("198.51.101.0"),
+            start("198.51.100.0"),
+            end("198.51.100.0"),
+            start("198.51.99.0"),
+        ];
+        let keys: Vec<Key> = assemble(elems, true).into_iter().map(|e| e.key).collect();
+        assert_eq!(
+            keys,
+            [
+                Key::Raw(vec![(key("192.0.2.10"), false), (key("192.0.2.21"), true)]),
+                Key::Net(net("198.51.99.0/24")),
+                Key::Net(net("198.51.100.0/24")),
+                Key::Net(net("240.0.0.0/4")),
+            ]
         );
     }
 
