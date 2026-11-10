@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE feed SET fetched = ?, succeeded = ?, error = NULL, etag = ?,\n                     changed = CASE WHEN ? IS NULL THEN changed ELSE ? END,\n                     count = coalesce(?, count), data = coalesce(?, data)\n                 WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": []
+  },
+  "hash": "48f3a2895584d4144514b24d4c62218a2f09c13234e6136b61ed51c27817157f"
+}

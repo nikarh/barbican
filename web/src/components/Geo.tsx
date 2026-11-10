@@ -156,15 +156,18 @@ export function GeoSummary({ geo, now }: { geo: GeoStatus; now: number }) {
       ).map(([label, db]) => {
         const s = state(db)
         return (
-          <div key={label} className={classes.line}>
+          <div key={label} className={classes.line} title={db.error ?? db.path ?? undefined}>
             <span className={classes.dot} data-ok={s.ok} />
-            <span className={classes.label}>{label}</span>
             <span className={classes.value}>
-              {db.kind === null ? s.label : databaseName(db.kind)}
+              {db.kind === null ? `${label}: ${s.label.toLowerCase()}` : databaseName(db.kind)}
               {db.built !== null && <span className={classes.faint}> · {month(db.built)}</span>}
             </span>
-            <span className={classes.when} title={db.error ?? undefined}>
-              {db.error !== null ? 'failing' : db.written === null ? '' : ago(db.written, now)}
+            <span className={classes.when} data-bad={db.error !== null}>
+              {db.error !== null
+                ? 'failing'
+                : db.written === null
+                  ? ''
+                  : `downloaded ${ago(db.written, now)}`}
             </span>
           </div>
         )

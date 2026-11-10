@@ -17,7 +17,12 @@ use crate::rules::{Policy, Rule};
 pub struct Feed {
     pub def: FeedDef,
     pub loaded: Arc<Loaded>,
+    /// The last attempt, failed or not.
     pub fetched: Option<i64>,
+    /// The last fetch without an error.
+    pub succeeded: Option<i64>,
+    /// When its list last changed.
+    pub changed: Option<i64>,
     pub error: Option<String>,
 }
 
@@ -369,6 +374,8 @@ mod tests {
             },
             loaded: Arc::new(Loaded::from_data("203.0.113.0/24\n")),
             fetched: None,
+            succeeded: None,
+            changed: None,
             error: None,
         });
         let b = state.lists();

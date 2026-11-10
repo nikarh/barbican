@@ -55,6 +55,10 @@
   background: var(--status-good);
 }
 
+.dot[data-off='true'] {
+  background: var(--ink-faint);
+}
+
 .label {
   flex: none;
   width: 74px;
@@ -74,4 +78,8 @@
   flex: none;
   color: var(--ink-faint);
   font-size: 12px;
+}
+
+.when[data-bad='true'] {
+  color: var(--status-bad);
 }

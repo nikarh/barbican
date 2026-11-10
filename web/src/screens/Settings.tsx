@@ -27,7 +27,7 @@ import {
   useMeta,
   usePolicy,
 } from '../api/hooks'
-import type { BlockCoverage, Extent, FeedDef, Policy } from '../api/generated/model'
+import type { BlockCoverage, Extent, Feed, FeedDef, Policy } from '../api/generated/model'
 import { AddPicker, EditableList } from '../components/EditableList'
 import { COUNTRY_SELECT } from '../components/countrySelect'
 import { GeoDatabases } from '../components/Geo'
@@ -39,6 +39,8 @@ import {
   count,
   COUNTRIES,
   countryName,
+  fromNow,
+  lengthInWords,
   remaining,
   share,
 } from '../lib/format'
@@ -792,6 +794,49 @@ function FeedEditor({ feed, onClose }: { feed: FeedDef; onClose: () => void }) {
   )
 }
 
+/** What a feed holds and how its fetches go: the list in use and from when, the last check, the next one, and
+ * the last attempt's error. */
+function FeedState({ feed: f, now }: { feed: Feed; now: number }) {
+  const every = `every ${lengthInWords(f.def.refreshSecs)}`
+  return (
+    <Stack gap={0} fz={12} mt={2}>
+      <Text fz={12} c="var(--ink-dim)">
+        {f.changed === null ? (
+          !f.def.enabled ? (
+            'Off: not fetched'
+          ) : f.error === null ? (
+            'Not fetched yet'
+          ) : (
+            'No list yet'
+          )
+        ) : (
+          <>
+            {count(f.count)} prefixes · list from {ago(f.changed, now)}
+            {f.succeeded !== null && f.succeeded !== f.changed && (
+              <>, unchanged when checked {ago(f.succeeded, now)}</>
+            )}
+          </>
+        )}
+      </Text>
+      <Text fz={12} c="var(--ink-faint)">
+        {f.next === null ? (
+          `Off (${every} when on)`
+        ) : (
+          <>
+            Fetched {every} · next {fromNow(f.next, now)}
+          </>
+        )}
+      </Text>
+      {f.error !== null && (
+        <Text fz={12} c="var(--status-bad)" style={{ overflowWrap: 'anywhere' }}>
+          Last attempt {ago(f.fetched, now)} failed: {f.error}
+          {f.changed !== null && ' · the list from before stays in use'}
+        </Text>
+      )}
+    </Stack>
+  )
+}
+
 function FeedsTab() {
   const feeds = useFeeds()
   const presets = useFeedPresets()
@@ -857,21 +902,20 @@ function FeedsTab() {
               <Text fz={12} c="var(--ink-faint)" className="mono" truncate>
                 {f.def.url}
               </Text>
-              <Text fz={12} c={f.error === null ? 'var(--ink-dim)' : 'var(--status-bad)'}>
-                {count(f.count)} prefixes · fetched {ago(f.fetched, now)}
-                {f.error !== null && ` · ${f.error}`}
-              </Text>
+              <FeedState feed={f} now={now} />
             </div>
             <Group gap={2} wrap="nowrap">
-              <ActionIcon
-                loading={refresh.isPending && refresh.variables.id === f.def.id}
-                onClick={() => {
-                  refresh.mutate({ id: f.def.id })
-                }}
-                aria-label="Fetch now"
-              >
-                <IconRefresh size={16} />
-              </ActionIcon>
+              <Tooltip label="Fetch now" openDelay={300}>
+                <ActionIcon
+                  loading={refresh.isPending && refresh.variables.id === f.def.id}
+                  onClick={() => {
+                    refresh.mutate({ id: f.def.id })
+                  }}
+                  aria-label="Fetch now"
+                >
+                  <IconRefresh size={16} />
+                </ActionIcon>
+              </Tooltip>
               <ActionIcon
                 color="red"
                 onClick={() => {

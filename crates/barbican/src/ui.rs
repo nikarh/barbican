@@ -1057,6 +1057,9 @@ fn feed(f: &StateFeed) -> Feed {
     Feed {
         def,
         fetched: f.fetched,
+        succeeded: f.succeeded,
+        changed: f.changed,
+        next: crate::run::feed_due(f).map(|due| due.max(now())),
         count: i64::try_from(f.loaded.nets.len()).unwrap_or(0),
         error: f.error.clone(),
     }
@@ -1079,7 +1082,7 @@ async fn feed_save(app: &Arc<App>, mut def: FeedDef) -> Result<Feed, RpcError> {
         return Err(bad("the URL must be http or https"));
     }
     def.url = url.to_string();
-    def.refresh_secs = def.refresh_secs.max(600);
+    def.refresh_secs = def.refresh_secs.max(crate::run::FEED_MIN_REFRESH);
     let previous = app.state.read().ok().and_then(|s| {
         s.feeds
             .iter()
@@ -1124,6 +1127,8 @@ async fn feed_save(app: &Arc<App>, mut def: FeedDef) -> Result<Feed, RpcError> {
             if !same_source {
                 existing.loaded = Arc::default();
                 existing.fetched = None;
+                existing.succeeded = None;
+                existing.changed = None;
                 existing.error = None;
             }
             feed(existing)
@@ -1132,6 +1137,8 @@ async fn feed_save(app: &Arc<App>, mut def: FeedDef) -> Result<Feed, RpcError> {
                 def: def.clone(),
                 loaded: Arc::default(),
                 fetched: None,
+                succeeded: None,
+                changed: None,
                 error: None,
             };
             let shown = feed(&new);

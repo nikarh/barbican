@@ -74,6 +74,8 @@ pub async fn load_feeds(db: &Db) -> Result<Vec<Feed>, db::Error> {
             def,
             loaded: Arc::new(loaded),
             fetched: row.fetched,
+            succeeded: row.succeeded,
+            changed: row.changed,
             error: row.error,
         });
     }
@@ -196,7 +198,7 @@ pub async fn fetch_feed(app: &Arc<App>, id: i64) {
     let result = crate::feeds::fetch(&app.http, &def, etag.as_deref()).await;
     let (loaded, error) = match result {
         Ok(crate::feeds::Fetched::NotModified) => {
-            let _ = db::feed_fetched(&app.db.pool, id, now, Ok((None, -1, etag.as_deref()))).await;
+            let _ = db::feed_fetched(&app.db.pool, id, now, Ok((None, etag.as_deref()))).await;
             (None, None)
         }
         Ok(crate::feeds::Fetched::New { body, etag }) => {
@@ -213,7 +215,7 @@ pub async fn fetch_feed(app: &Arc<App>, id: i64) {
                 &app.db.pool,
                 id,
                 now,
-                Ok((Some(&body), count, etag.as_deref())),
+                Ok((Some((&body, count)), etag.as_deref())),
             )
             .await;
             tracing::info!(feed = %def.name, prefixes = count, "Feed fetched");
@@ -229,13 +231,34 @@ pub async fn fetch_feed(app: &Arc<App>, id: i64) {
         && let Some(feed) = state.feeds.iter_mut().find(|f| f.def.id == id)
     {
         feed.fetched = Some(now);
+        if error.is_none() {
+            feed.succeeded = Some(now);
+        }
         feed.error = error;
         if let Some(loaded) = loaded {
             feed.loaded = Arc::new(loaded);
+            feed.changed = Some(now);
         }
     }
     firewall::rebuild_rules(app);
     firewall::refresh_lists(app);
+}
+
+/// The shortest time between two fetches of a feed.
+pub const FEED_MIN_REFRESH: u64 = 600;
+
+/// How often the agent looks for feeds due a fetch (it also does when one is added or changed).
+pub const FEED_CHECK_EVERY: Duration = Duration::from_mins(5);
+
+/// When a feed is due its next fetch (`None`: it is off): its refresh interval after its last attempt, failed or
+/// not, and right away when it was never fetched. The fetch happens at the next look for due feeds.
+#[must_use]
+pub fn feed_due(feed: &Feed) -> Option<i64> {
+    if !feed.def.enabled {
+        return None;
+    }
+    let every = i64::try_from(feed.def.refresh_secs.max(FEED_MIN_REFRESH)).unwrap_or(i64::MAX);
+    Some(feed.fetched.map_or(0, |t| t.saturating_add(every)))
 }
 
 /// Fetches feeds when they are due (and when one is added or changed).
@@ -249,12 +272,7 @@ async fn feed_updates(app: Arc<App>) {
                 s.feeds
                     .iter()
                     .filter(|f| f.def.enabled)
-                    .filter(|f| {
-                        f.fetched.is_none_or(|t| {
-                            now - t
-                                >= i64::try_from(f.def.refresh_secs.max(600)).unwrap_or(i64::MAX)
-                        })
-                    })
+                    .filter(|f| feed_due(f).is_some_and(|due| now >= due))
                     .map(|f| f.def.id)
                     .collect()
             })
@@ -264,7 +282,7 @@ async fn feed_updates(app: Arc<App>) {
         }
         tokio::select! {
             () = app.feeds_wake.notified() => {}
-            () = tokio::time::sleep(Duration::from_mins(5)) => {}
+            () = tokio::time::sleep(FEED_CHECK_EVERY) => {}
         }
     }
 }
