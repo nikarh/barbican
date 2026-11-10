@@ -1,0 +1,18 @@
+{
+	"admin/services/barbican": {
+		"title": "Barbican",
+		"order": 60,
+		"action": { "type": "firstchild" },
+		"depends": { "acl": [ "luci-app-barbican" ], "uci": { "barbican": true } }
+	},
+	"admin/services/barbican/status": {
+		"title": "Status",
+		"order": 1,
+		"action": { "type": "view", "path": "barbican/status" }
+	},
+	"admin/services/barbican/settings": {
+		"title": "Settings",
+		"order": 2,
+		"action": { "type": "view", "path": "barbican/settings" }
+	}
+}
