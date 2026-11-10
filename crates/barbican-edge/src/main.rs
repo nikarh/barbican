@@ -207,6 +207,8 @@ struct StatusBlock {
 }
 
 enum Message {
+    /// SIGTERM or SIGINT: save the state, and stop.
+    Stop,
     Changes(usize, Changes),
     List(usize, String, Vec<Net>),
     Failed(usize, String),
@@ -383,6 +385,17 @@ impl Edge {
         }
     }
 
+    /// How long the main loop may sleep: until the next tick, or until a pending save is due.
+    fn next_wake(&self) -> Duration {
+        if !self.dirty {
+            return TICK;
+        }
+        let due = self.last_saved.map_or(Duration::ZERO, |t| {
+            self.config.persist_every.saturating_sub(t.elapsed())
+        });
+        due.clamp(Duration::from_millis(100), TICK)
+    }
+
     fn persist(&mut self, force: bool) {
         let due = self
             .last_saved
@@ -419,6 +432,7 @@ impl Edge {
     fn handle(&mut self, message: Message) {
         let now = now();
         match message {
+            Message::Stop => {}
             Message::Changes(i, changes) => {
                 let Some(mirror) = self.mirrors.get_mut(i) else {
                     return;
@@ -600,16 +614,41 @@ fn run(config: Config) -> Result<(), String> {
 
     let (tx, rx) = mpsc::channel();
     spawn_upstreams(&edge, &tx)?;
+
+    // A stop (procd's, at a reboot too) saves what changed since the last save.
+    let stop = tx.clone();
+    let mut signals = signal_hook::iterator::Signals::new([
+        signal_hook::consts::SIGTERM,
+        signal_hook::consts::SIGINT,
+    ])
+    .map_err(|e| e.to_string())?;
+    std::thread::Builder::new()
+        .name("signals".to_owned())
+        .spawn(move || {
+            if signals.forever().next().is_some() {
+                let _ = stop.send(Message::Stop);
+            }
+        })
+        .map_err(|e| e.to_string())?;
     drop(tx);
 
     let mut last_apply = Instant::now();
     loop {
-        match rx.recv_timeout(TICK) {
+        match rx.recv_timeout(edge.next_wake()) {
+            Ok(Message::Stop) => {
+                edge.persist(true);
+                log("info", "stopping; the blocks stay in place");
+                return Ok(());
+            }
             Ok(message) => {
                 edge.handle(message);
                 // Whatever else arrived meanwhile, applied together.
                 std::thread::sleep(Duration::from_millis(300));
                 while let Ok(message) = rx.try_recv() {
+                    if matches!(message, Message::Stop) {
+                        edge.persist(true);
+                        return Ok(());
+                    }
                     edge.handle(message);
                 }
                 edge.apply();
