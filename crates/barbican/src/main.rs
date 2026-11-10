@@ -13,6 +13,7 @@ mod feeds;
 mod firewall;
 mod geo;
 mod parse;
+mod proxy;
 mod replay;
 mod rpc;
 mod rules;
@@ -32,6 +33,10 @@ barbican: bans addresses that abuse services, from their logs
 Usage:
   barbican [--config <path>] [--dry-run]     run the agent
   barbican parse <parser> [<file>]           print what a parser makes of each line (of stdin without a file)
+  barbican ui-proxy [--socket <path>] [--listen <address>]
+                                             serve the UI (in a container) for an agent whose UI is on a unix
+                                             socket [default: /run/barbican-ui/ui.sock, 0.0.0.0:8080]
+  barbican healthcheck [--address <address>]  exit 0 when the UI (or the proxy) answers [default: 127.0.0.1:8080]
   barbican edge-fingerprint [--config <path>]
                                              print the edge API certificate's fingerprint, for edges' configuration
   barbican replay [--list] [--geoip <dir>] <parser>:<file>...
@@ -61,6 +66,19 @@ fn main() -> ExitCode {
         Ok(Some(command)) if command == "parse" => parse_command(args),
         Ok(Some(command)) if command == "replay" => replay_command(args),
         Ok(Some(command)) if command == "edge-fingerprint" => fingerprint_command(args),
+        Ok(Some(command)) if command == "ui-proxy" => proxy_command(args),
+        Ok(Some(command)) if command == "healthcheck" => {
+            let address = args
+                .opt_value_from_str("--address")
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| std::net::SocketAddr::from(([127, 0, 0, 1], 8080)));
+            if proxy::healthcheck(address, "/healthz") {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
+        }
         Ok(Some(other)) => {
             let _ = writeln!(std::io::stderr(), "unknown command {other:?}\n\n{HELP}");
             ExitCode::FAILURE
@@ -229,6 +247,43 @@ fn fingerprint_command(mut args: pico_args::Arguments) -> ExitCode {
         }
         Err(e) => {
             let _ = writeln!(err, "{e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn proxy_command(mut args: pico_args::Arguments) -> ExitCode {
+    let socket: std::path::PathBuf = args
+        .opt_value_from_str("--socket")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "/run/barbican-ui/ui.sock".into());
+    let listen: std::net::SocketAddr = args
+        .opt_value_from_str("--listen")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| std::net::SocketAddr::from(([0, 0, 0, 0], 8080)));
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .init();
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match runtime.block_on(proxy::run(socket, listen)) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            tracing::error!("{e}");
             ExitCode::FAILURE
         }
     }

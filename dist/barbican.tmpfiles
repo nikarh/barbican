@@ -1,0 +1,3 @@
+# Where the agent's ui.socket goes (/usr/lib/tmpfiles.d/barbican.conf): only barbican-ui's members may enter, and
+# what is made in it belongs to that group (setgid).
+d /run/barbican-ui 2770 root barbican-ui -

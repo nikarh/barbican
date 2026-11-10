@@ -8,6 +8,9 @@ path = "/var/lib/barbican/barbican.db"
 # a reverse proxy with authentication.
 [ui]
 listen = "127.0.0.1:7381"
+# Or, for the UI in a container (the ghcr.io/nikarh/barbican image), a unix socket only members of a group may use:
+# socket = "/run/barbican-ui/ui.sock"
+# socket_group = "barbican-ui"
 
 # The API edge agents (barbican-edge, on a router) follow, over TLS only. Each edge agent has its own token, and
 # pins this agent's certificate by its fingerprint (barbican edge-fingerprint prints it). Without cert and key, a

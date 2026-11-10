@@ -4,7 +4,7 @@ Documentation=https://github.com/nikarh/barbican
 # The blocks are put back in place, and barbican reports itself ready, before the network is configured
 # (network-pre.target) and before Docker starts: nothing reaches a service unfiltered at boot.
 DefaultDependencies=no
-After=local-fs.target systemd-journald.socket
+After=local-fs.target systemd-journald.socket systemd-tmpfiles-setup.service
 Before=network-pre.target docker.service shutdown.target
 Wants=network-pre.target
 Conflicts=shutdown.target
@@ -24,14 +24,19 @@ DynamicUser=yes
 StateDirectory=barbican
 StateDirectoryMode=0700
 ConfigurationDirectory=barbican
+# /run/barbican-ui (made by barbican.tmpfiles: root:barbican-ui, 2770) is where ui.socket goes, for the UI in a
+# container (barbican ui-proxy). Not a RuntimeDirectory: systemd id-maps those of a DynamicUser, so their files can't
+# belong to another group; and this one stays the same directory across restarts, for a container that mounts it.
+ReadWritePaths=-/run/barbican-ui
 AmbientCapabilities=CAP_NET_ADMIN
 CapabilityBoundingSet=CAP_NET_ADMIN
-# Reading the journal (journald sources).
-SupplementaryGroups=systemd-journal
+# Reading the journal (journald sources); barbican-ui (made by barbican.sysusers) for ui.socket: who is in it may
+# use the UI.
+SupplementaryGroups=systemd-journal barbican-ui
 # Docker sources read the Docker API's socket. Membership of the docker group gives root on the host, so prefer
 # a read-only socket proxy that only allows container inspection and logs (see the README), and point
 # docker.socket in the configuration at it; it then needs read access to that socket only.
-# SupplementaryGroups=systemd-journal docker
+# SupplementaryGroups=systemd-journal barbican-ui docker
 
 NoNewPrivileges=yes
 ProtectSystem=strict
