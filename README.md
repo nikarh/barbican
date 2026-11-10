@@ -189,8 +189,14 @@ forwarded:
    kernel lifts bans on time even when barbican isn't running;
 4. country and blocklist prefixes drop.
 
-The sets are reconciled with the state (what the kernel has is read back, and only the difference applied) whenever
-something changes, and every minute. Stopping barbican leaves the table in place.
+The table and its chain are made with `nft`; elements are changed straight over netlink, each change one small
+transaction whatever the lists hold (`nft` itself reads every element of every set before it changes anything,
+seconds with a large blocklist loaded). Only what changed is written: a ban, a lift, an edit of the allow or deny
+list, new lists (only the prefixes that changed; a restart doesn't load unchanged lists again). The kernel times bans
+out by itself. What the kernel has is read back at the start and when another program changed the table (barbican
+follows nftables' notifications, as `nft monitor` does), so a flushed ruleset or a hand-edited set is put right at
+once, and an idle agent costs nothing. Should netlink fail, everything goes through `nft` instead, reading the sets
+back every minute. Stopping barbican leaves the table in place.
 
 **At boot** the unit runs before `network-pre.target` and Docker, and reports ready only once the table is back: no
 packet reaches a service before the blocks are in place.

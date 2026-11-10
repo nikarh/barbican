@@ -1,8 +1,8 @@
 //! The firewall an edge agent keeps equal to what its upstreams block.
 
-use barbican_common::nft::{Counters, Desired, Firewall, NftCommand, Runner};
+use barbican_common::nft::{Counters, Desired, Firewall, Monitor, NftCommand, Runner};
 
-use crate::daemon::Config;
+use crate::daemon::{Config, log};
 
 pub trait Backend: Send {
     /// What it changes, for the status: `nftables table inet barbican`.
@@ -12,15 +12,46 @@ pub trait Backend: Send {
     /// Changes the sets to hold what `desired` says. `now` is the current unix time.
     fn reconcile(&mut self, desired: &Desired, now: u64) -> Result<(), String>;
     /// What the drop rules matched.
-    fn counters(&self) -> Option<Counters>;
+    fn counters(&mut self) -> Option<Counters>;
     /// Removes its rules and sets.
     fn remove(&mut self) -> Result<(), String>;
+    /// Something that blocks until another program changed the firewall, so that it is only reconciled then.
+    fn monitor(&self) -> Option<Result<Monitor, String>> {
+        None
+    }
+    /// Without a monitor: whether the firewall may need reconciling (as cheaply as that can be told). `now` is
+    /// the current unix time.
+    fn check(&mut self, _now: u64) -> bool {
+        true
+    }
+}
+
+/// What can tell that the table changed: nftables' notifications.
+pub trait Watch {
+    fn monitor(&self, table: &str) -> Option<Result<Monitor, String>>;
+}
+
+impl Watch for NftCommand {
+    fn monitor(&self, table: &str) -> Option<Result<Monitor, String>> {
+        Some(NftCommand::monitor(self, table).map_err(|e| e.to_string()))
+    }
 }
 
 /// nftables: the table of `barbican_common::nft`, as on the agent.
-pub struct Nft<R: Runner + Send>(pub Firewall<R>);
+pub struct Nft<R: Runner + Watch + Send>(pub Firewall<R>);
 
-impl<R: Runner + Send> Backend for Nft<R> {
+impl<R: Runner + Watch + Send> Nft<R> {
+    fn notice(&mut self) {
+        if let Some(e) = self.0.take_notice() {
+            log(
+                "warning",
+                &format!("nftables over netlink failed, using nft instead: {e}"),
+            );
+        }
+    }
+}
+
+impl<R: Runner + Watch + Send> Backend for Nft<R> {
     fn describe(&self) -> String {
         format!("nftables table inet {}", self.0.table())
     }
@@ -30,18 +61,27 @@ impl<R: Runner + Send> Backend for Nft<R> {
     }
 
     fn reconcile(&mut self, desired: &Desired, now: u64) -> Result<(), String> {
-        self.0
+        let result = self
+            .0
             .reconcile(desired, now)
             .map(|_| ())
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string());
+        self.notice();
+        result
     }
 
-    fn counters(&self) -> Option<Counters> {
-        self.0.counters().ok()
+    fn counters(&mut self) -> Option<Counters> {
+        let counters = self.0.counters().ok();
+        self.notice();
+        counters
     }
 
     fn remove(&mut self) -> Result<(), String> {
         self.0.remove().map_err(|e| e.to_string())
+    }
+
+    fn monitor(&self) -> Option<Result<Monitor, String>> {
+        self.0.runner().monitor(self.0.table())
     }
 }
 
@@ -70,7 +110,7 @@ pub fn nft(config: &Config) -> Result<Box<dyn Backend>, String> {
     };
     let program = config.main.option("nft").unwrap_or("nft").to_owned();
     Ok(Box::new(Nft(Firewall::new(
-        NftCommand { program },
+        NftCommand::new(&program),
         &table,
         priority,
     ))))

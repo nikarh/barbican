@@ -80,6 +80,13 @@ else
   fail "status: ${status}"
 fi
 
+say "another program changes the table"
+# nftables tells of it (the notifications `nft monitor` shows): the edge puts it right then, it doesn't poll.
+router 'nft delete element inet barbican host4 "{ 203.0.113.77 }"'
+if wait_until 5 in_set; then pass "a block removed by hand is put back"; else fail "a block removed by hand stays removed"; fi
+router 'nft delete table inet barbican'
+if wait_until 5 in_set && attacker_blocked; then pass "a deleted table comes back with its blocks"; else fail "not repaired after deleting the table"; fi
+
 say "lifting on the agent"
 start=${SECONDS}
 lift_all

@@ -1,7 +1,7 @@
 //! Keeping nftables, and the edges' journal, equal to the state; and the parts of the state derived from others:
 //! the rule set sources match with, and the list sets (blocked countries and blocking feeds).
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -11,7 +11,8 @@ use barbican_common::nft::{Firewall, NftCommand};
 use crate::app::{App, now};
 use crate::rules::RuleSet;
 
-/// How often the state is applied even when nothing asked for it (expired bans, a flushed table).
+/// How often the drop counters are read, and, when nothing watches the table for changes by others, how often the
+/// state is applied anyway (a flushed table).
 const TICK: Duration = Duration::from_secs(60);
 /// Changes coming in a burst are applied together.
 const DEBOUNCE: Duration = Duration::from_millis(200);
@@ -22,9 +23,7 @@ pub fn new(app: &App) -> Option<Nft> {
     let config = &app.config.firewall;
     (config.enabled && !app.dry_run).then(|| {
         Arc::new(Mutex::new(Firewall::new(
-            NftCommand {
-                program: config.nft.clone(),
-            },
+            NftCommand::new(&config.nft),
             &config.table,
             config.priority,
         )))
@@ -139,9 +138,12 @@ pub async fn apply(app: &Arc<App>, nft: Option<&Nft>) {
                     .lock()
                     .map_err(|_| "the firewall's lock is poisoned".to_owned())?;
                 let unix = u64::try_from(now).unwrap_or(0);
-                let changes = fw.reconcile(&desired, unix).map_err(|e| e.to_string())?;
+                let changes = fw.reconcile(&desired, unix).map_err(|e| e.to_string());
                 let counters = fw.counters().ok();
-                Ok::<_, String>(Some((changes, counters)))
+                if let Some(e) = fw.take_notice() {
+                    tracing::warn!(error = %e, "nftables over netlink failed; using the nft program instead");
+                }
+                Ok::<_, String>(Some((changes?, counters)))
             })
             .await
             .unwrap_or_else(|e| Err(e.to_string()))
@@ -198,13 +200,91 @@ pub async fn setup(app: &Arc<App>, nft: Option<&Nft>) -> Result<(), String> {
     }
 }
 
-/// Applies the state whenever something changed, and every minute.
-pub async fn run(app: Arc<App>, nft: Option<Nft>) {
-    loop {
-        tokio::select! {
-            () = app.firewall_wake.notified() => tokio::time::sleep(DEBOUNCE).await,
-            () = tokio::time::sleep(TICK) => {}
+/// Reads the drop counters, and expires bans in the state (the kernel lifts them by itself), when nothing changed.
+async fn idle(app: &Arc<App>, nft: Option<&Nft>) {
+    let now = now();
+    if let Ok(mut state) = app.state.write() {
+        state.expire_bans(now);
+    }
+    let Some(nft) = nft else { return };
+    let nft = Arc::clone(nft);
+    let counters = tokio::task::spawn_blocking(move || nft.lock().ok()?.counters().ok())
+        .await
+        .ok()
+        .flatten();
+    if let Ok(mut status) = app.firewall.lock()
+        && status.error.is_none()
+    {
+        status.applied = Some(now);
+        if let Some(c) = counters {
+            status.dropped_blocked = c.blocked.packets;
+            status.dropped_listed = c.listed.packets;
         }
-        apply(&app, nft.as_ref()).await;
+    }
+}
+
+/// Follows nftables' notifications in a thread of its own, and wakes the firewall when another program changed the
+/// table. What it returns stays true while it does.
+fn watch(app: &Arc<App>, nft: &Nft) -> Option<Arc<AtomicBool>> {
+    let monitor = {
+        let fw = nft.lock().ok()?;
+        fw.runner().monitor(fw.table())
+    };
+    let mut monitor = match monitor {
+        Ok(monitor) => monitor,
+        Err(e) => {
+            tracing::warn!(error = %e, "Can't follow nftables' notifications; the sets are read back every minute");
+            return None;
+        }
+    };
+    let alive = Arc::new(AtomicBool::new(true));
+    let thread_alive = Arc::clone(&alive);
+    let app = Arc::clone(app);
+    let spawned = std::thread::Builder::new()
+        .name("nft-monitor".to_owned())
+        .spawn(move || {
+            loop {
+                if let Err(e) = monitor.wait() {
+                    tracing::warn!(error = %e, "Following nftables' notifications failed; the sets are read back every minute");
+                    break;
+                }
+                tracing::debug!("The table changed, or notifications were lost: reading it back");
+                app.firewall_wake.notify_one();
+            }
+            thread_alive.store(false, Ordering::Relaxed);
+            app.firewall_wake.notify_one();
+        });
+    spawned.is_ok().then_some(alive)
+}
+
+/// Applies the state whenever something changed, when another program changed the table, and when an allow entry
+/// runs out (the kernel times bans out by itself). Without notifications to follow, every minute too.
+pub async fn run(app: Arc<App>, nft: Option<Nft>) {
+    let watched = nft.as_ref().and_then(|nft| watch(&app, nft));
+    // What changed before the monitor started.
+    app.firewall_wake.notify_one();
+    loop {
+        let periodic =
+            nft.is_some() && !watched.as_ref().is_some_and(|w| w.load(Ordering::Relaxed));
+        let due = app
+            .state
+            .read()
+            .ok()
+            .and_then(|state| state.next_due(now()));
+        let wait = due.map_or(TICK, |at| {
+            Duration::from_secs(u64::try_from(at - now() + 1).unwrap_or(1)).min(TICK)
+        });
+        let woken = tokio::select! {
+            () = app.firewall_wake.notified() => {
+                tokio::time::sleep(DEBOUNCE).await;
+                true
+            }
+            () = tokio::time::sleep(wait) => false,
+        };
+        if woken || periodic || due.is_some_and(|at| at <= now()) {
+            apply(&app, nft.as_ref()).await;
+        } else {
+            idle(&app, nft.as_ref()).await;
+        }
     }
 }

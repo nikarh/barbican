@@ -36,6 +36,9 @@ container's log. It checks that:
 - lifting works, and the allow list beats the rules;
 - thresholds count (one unknown user from the journal isn't enough, two are), and a container's log is read;
 - a blocked country is dropped (thousands of prefixes) and unblocking works;
+- with a list of 300 000 prefixes loaded, a ban and a lift are in place within half a second, a ban removed by hand
+  and a deleted table are put right on their own (the agent follows nftables' notifications), and nothing falls
+  back to the `nft` program;
 - bans run out in the kernel with the agent stopped;
 - after a reboot (the table deleted), the blocks are back by the time the agent reports ready;
 - the edge API refuses requests without a token, and gives an edge the whole state;
@@ -47,6 +50,6 @@ container's log. It checks that:
 
 Runs from the host after the server suite: barbican-edge and its LuCI pages are installed in the OpenWrt VM and
 follow the server's agent. The attacker is 203.0.113.77 on the server's link to the router; probes are pings to the
-router's WAN address. It checks that a ban reaches the router and is dropped there for that address only, that a lift
-reaches it within the long poll, that after a reboot with the agent down the blocks are back, and that it follows
-the agent again once it returns. It checks that the LuCI views are served too.
+router's WAN address. It checks that a ban reaches the router and is dropped there for that address only, that a
+block removed by hand and a deleted table are put back, that a lift reaches it within the long poll, that after a
+reboot with the agent down the blocks are back, and that it follows the agent again once it returns. It checks that the LuCI views are served too.

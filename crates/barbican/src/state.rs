@@ -198,6 +198,23 @@ impl State {
     }
 
     /// Drops bans and entries that ran out, and trust that expired.
+    /// Forgets bans that ran out (the kernel lifted them already).
+    pub fn expire_bans(&mut self, now: i64) {
+        self.bans.retain(|b| b.until.is_none_or(|u| u > now));
+        self.trust.retain(|_, t| t.until > now);
+    }
+
+    /// When the next allow entry runs out: the firewall has to drop it then, nothing times it out.
+    #[must_use]
+    pub fn next_due(&self, now: i64) -> Option<i64> {
+        self.entries
+            .iter()
+            .filter(|e| e.allow)
+            .filter_map(|e| e.until)
+            .filter(|u| *u > now)
+            .min()
+    }
+
     pub fn expire(&mut self, now: i64) {
         self.bans.retain(|b| b.until.is_none_or(|u| u > now));
         self.entries.retain(|e| e.until.is_none_or(|u| u > now));

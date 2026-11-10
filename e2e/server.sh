@@ -210,6 +210,59 @@ policy=$(${RPC} policy.get | python3 -c 'import json,sys; p=json.load(sys.stdin)
 ${RPC} policy.update "${policy}" >/dev/null
 if wait_until 30 cn; then pass "unblocked"; else fail "still blocked after unblocking the country"; fi
 
+say "a large list loaded"
+# 300 000 prefixes, 1.0.1.0/24 among them: changing a set must not cost more for it (nft alone reads every set's
+# elements before any change, seconds with a list this size).
+mkdir -p /tmp/biglist
+python3 -c '
+print("1.0.1.0/24")
+for i in range(299999):
+    n = (11 << 16) + 2 * i
+    print(f"{n >> 16}.{(n >> 8) & 255}.{n & 255}.0/24")' >/tmp/biglist/list.txt
+setsid -f sh -c 'cd /tmp/biglist && exec python3 -m http.server 8098 --bind 127.0.0.1' </dev/null >/dev/null 2>&1
+wait_until 5 curl -fs -o /dev/null http://127.0.0.1:8098/list.txt
+big=$(${RPC} feed.save '{"id": 0, "name": "e2e large", "url": "http://127.0.0.1:8098/list.txt", "enabled": true, "block": true, "refreshSecs": 86400, "username": null, "password": null}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["def"]["id"])')
+if wait_until 60 cn_blocked; then pass "a list of 300000 prefixes is loaded"; else fail "the large list isn't loaded"; fi
+# How long from asking until packets are dropped (or pass again): each probe that gets through takes a moment, the
+# first one dropped is when the change was in place.
+time_until() { # <check>
+  local start now
+  start=$(date +%s%N)
+  while :; do
+    now=$(date +%s%N)
+    "$@" && break
+    ((now - start < 10000000000)) || break
+  done
+  echo $(((now - start) / 1000000))
+}
+${RPC} ban.create '{"net": "203.0.113.10", "secs": 600, "reason": "e2e"}' >/dev/null &
+ms=$(time_until att_blocked)
+wait
+if ((ms < 500)); then pass "a ban is in place within ${ms} ms"; else fail "a ban took ${ms} ms with the large list loaded"; fi
+# Whether it passes, at once: over a veth an answer takes well under a millisecond.
+att_now() { ip netns exec att curl -s -o /dev/null --connect-timeout 0.05 -m 1 --interface 203.0.113.10 http://203.0.113.1:8080/; }
+id=$(active_ban_id 203.0.113.10)
+${RPC} ban.lift "{\"id\": ${id}}" >/dev/null &
+ms=$(time_until att_now)
+wait
+if ((ms < 500)); then pass "lifted within ${ms} ms"; else fail "lifting took ${ms} ms with the large list loaded"; fi
+# Another program changing the table while the agent runs: it is put right, without waiting for a timer.
+${RPC} ban.create '{"net": "203.0.113.10", "secs": 600, "reason": "e2e"}' >/dev/null
+wait_until 5 att_blocked || true
+nft delete element inet barbican host4 '{ 203.0.113.10 }'
+if wait_until 5 att_blocked; then pass "a ban removed by hand is put back"; else fail "a ban removed by hand stays removed"; fi
+nft delete table inet barbican
+if wait_until 10 att_blocked && cn_blocked; then pass "a deleted table comes back, bans and lists in it"; else fail "not repaired after deleting the table"; fi
+lift 203.0.113.10
+${RPC} feed.delete "{\"id\": ${big}}" >/dev/null
+if wait_until 30 cn; then pass "removing the list unblocks"; else fail "still blocked after removing the large list"; fi
+pkill -f 'http.server 8098' || true
+if journalctl -u barbican --since "${started_at}" | grep -q "using the nft program instead"; then
+  fail "netlink failed: $(journalctl -u barbican --since "${started_at}" | grep "using the nft program instead" | head -1)"
+else
+  pass "elements changed over netlink throughout"
+fi
+
 say "bans run out in the kernel"
 ${RPC} ban.create '{"net": "203.0.113.10", "secs": 5, "reason": "e2e"}' >/dev/null
 if wait_until 5 att_blocked; then pass "a ban by hand blocks"; else fail "a ban by hand doesn't block"; fi
