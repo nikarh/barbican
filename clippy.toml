@@ -4,3 +4,5 @@ allow-expect-in-consts = true
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-indexing-slicing-in-tests = true
+# Product names in docs, not code.
+doc-valid-idents = ["MaxMind", "GeoLite2", "VictoriaLogs", "OpenWrt", "OpenSSH", "CrowdSec", "WebSocket", "DB-IP", ".."]

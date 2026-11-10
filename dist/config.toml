@@ -1,0 +1,71 @@
+# barbican's configuration. Rules, ban durations, country blocks, blocklists and the allow and deny lists are
+# edited in the UI and kept in the database; this file only says where logs come from and where things listen.
+
+[database]
+path = "/var/lib/barbican/barbican.db"
+
+# The web UI. It has no login of its own: listen on localhost (or a Docker bridge address) and put it behind
+# a reverse proxy with authentication.
+[ui]
+listen = "127.0.0.1:7381"
+
+# The API edge agents (barbican-edge, on a router) follow. Each edge agent has its own token.
+# [edge]
+# listen = "0.0.0.0:7380"
+# [[edge.client]]
+# name = "router"
+# token_file = "/etc/barbican/edge-router.token"
+
+[firewall]
+# false: decide and record everything, but leave nftables alone.
+enabled = true
+table = "barbican"
+priority = -190
+nft = "nft"
+
+# Country and ASN databases in the MaxMind DB format. With download = true, DB-IP's free "Lite" databases
+# (CC BY 4.0, https://db-ip.com) are downloaded to these paths when missing, and again once a month.
+[geoip]
+country = "/var/lib/barbican/dbip-country-lite.mmdb"
+asn = "/var/lib/barbican/dbip-asn-lite.mmdb"
+download = true
+
+[docker]
+socket = "/run/docker.sock"
+
+# Never acted on and never blocked (the UI's allow list adds to these).
+[exempt]
+nets = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7"]
+
+# Logs to read. Each source has a name, a parser (traefik, sshd, authelia or regex) and one input:
+# docker = { container = "..." }, file = { path = "..." }, journald = { unit = "..." } or
+# victorialogs = { url = "...", query = "..." }.
+
+[[source]]
+name = "traefik"
+parser = "traefik"
+docker = { container = "traefik" }
+
+[[source]]
+name = "sftp"
+parser = "sshd"
+docker = { container = "sftpd" }
+
+[[source]]
+name = "authelia"
+parser = "authelia"
+docker = { container = "authelia" }
+
+[[source]]
+name = "ssh"
+parser = "sshd"
+journald = { unit = "sshd.service" }
+
+# A log barbican has no parser for: a regular expression with the named group `ip`, and others depending on
+# `kind` (http: method, path, status, host; auth_failure, auth_success, invalid_user: user; probe: what).
+# [[source]]
+# name = "app"
+# parser = "regex"
+# kind = "auth_failure"
+# pattern = 'Failed login for (?P<user>\S+) from (?P<ip>[0-9a-f.:]+)'
+# file = { path = "/var/log/app/app.log" }
