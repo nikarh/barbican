@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM ip WHERE NOT EXISTS (SELECT 1 FROM event WHERE event.ip = ip.id)\n           AND NOT EXISTS (SELECT 1 FROM ban WHERE ban.ip = ip.id)\n           AND NOT EXISTS (SELECT 1 FROM trust WHERE trust.ip = ip.id)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "4abe2bc7271acb136e4f222ac8714bcdbb5ad5b03bbb64c7111289790cd5a6f5"
+}

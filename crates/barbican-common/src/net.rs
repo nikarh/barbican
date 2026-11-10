@@ -218,6 +218,64 @@ pub fn collapse<T>(
     kept
 }
 
+/// A set of prefixes to look addresses up in quickly: merged into sorted, disjoint ranges.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NetSet {
+    v4: Vec<(u32, u32)>,
+    v6: Vec<(u128, u128)>,
+}
+
+fn ranges<T: Copy + Ord>(mut ranges: Vec<(T, T)>, next: impl Fn(T) -> Option<T>) -> Vec<(T, T)> {
+    ranges.sort_unstable();
+    let mut merged: Vec<(T, T)> = Vec::with_capacity(ranges.len());
+    for (start, end) in ranges {
+        if let Some(last) = merged.last_mut()
+            && next(last.1).is_none_or(|after| start <= after)
+        {
+            last.1 = last.1.max(end);
+            continue;
+        }
+        merged.push((start, end));
+    }
+    merged
+}
+
+fn find<T: Copy + Ord>(ranges: &[(T, T)], x: T) -> bool {
+    let i = ranges.partition_point(|(start, _)| *start <= x);
+    i > 0 && ranges.get(i - 1).is_some_and(|(_, end)| x <= *end)
+}
+
+impl NetSet {
+    #[must_use]
+    pub fn new(nets: &[Net]) -> Self {
+        let mut v4 = Vec::new();
+        let mut v6 = Vec::new();
+        for net in nets {
+            match net.0 {
+                IpNet::V4(n) => v4.push((u32::from(n.network()), u32::from(n.broadcast()))),
+                IpNet::V6(n) => v6.push((u128::from(n.network()), u128::from(n.broadcast()))),
+            }
+        }
+        Self {
+            v4: ranges(v4, |x: u32| x.checked_add(1)),
+            v6: ranges(v6, |x: u128| x.checked_add(1)),
+        }
+    }
+
+    #[must_use]
+    pub fn contains(&self, ip: IpAddr) -> bool {
+        match canonical(ip) {
+            IpAddr::V4(v4) => find(&self.v4, u32::from(v4)),
+            IpAddr::V6(v6) => find(&self.v6, u128::from(v6)),
+        }
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.v4.is_empty() && self.v6.is_empty()
+    }
+}
+
 /// Merges prefixes into the fewest that cover the same addresses (adjacent ones joined, contained ones dropped).
 #[must_use]
 pub fn aggregate(nets: &[Net]) -> Vec<Net> {
@@ -324,6 +382,39 @@ mod tests {
                 (net("2001:db8::/64"), 5),
             ]
         );
+    }
+
+    #[test]
+    fn net_set() {
+        let set = NetSet::new(&[
+            net("198.51.100.0/25"),
+            net("198.51.100.128/25"),
+            net("203.0.113.7"),
+            net("2001:db8::/32"),
+            net("255.255.255.255"),
+        ]);
+        for ip in [
+            "198.51.100.0",
+            "198.51.100.200",
+            "198.51.100.255",
+            "203.0.113.7",
+            "2001:db8:ffff::1",
+            "::ffff:203.0.113.7",
+            "255.255.255.255",
+        ] {
+            assert!(set.contains(ip.parse().unwrap()), "{ip}");
+        }
+        for ip in [
+            "198.51.101.0",
+            "203.0.113.6",
+            "203.0.113.8",
+            "2001:db9::1",
+            "0.0.0.0",
+        ] {
+            assert!(!set.contains(ip.parse().unwrap()), "{ip}");
+        }
+        assert!(NetSet::new(&[]).is_empty());
+        assert_eq!(set.v4.len(), 3);
     }
 
     #[test]

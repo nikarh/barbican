@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO entry (net, kind, note, created, until) VALUES (?, ?, ?, ?, ?)\n         ON CONFLICT (net, kind) DO UPDATE SET note = excluded.note, until = excluded.until RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "entry",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "6d206fc00c355933e65374493c05b9318bb0d3a3075a0795751cfaa7110c3712"
+}

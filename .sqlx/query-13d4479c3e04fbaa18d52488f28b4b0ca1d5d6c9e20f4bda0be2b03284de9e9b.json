@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE rule SET definition = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "13d4479c3e04fbaa18d52488f28b4b0ca1d5d6c9e20f4bda0be2b03284de9e9b"
+}

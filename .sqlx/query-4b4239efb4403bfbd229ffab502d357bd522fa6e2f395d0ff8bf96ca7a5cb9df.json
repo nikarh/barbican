@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT ip.addr, trust.user, trust.since, trust.until FROM trust JOIN ip ON ip.id = trust.ip\n         WHERE trust.until > ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "addr",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "ip",
+            "name": "addr"
+          }
+        }
+      },
+      {
+        "name": "user",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "trust",
+            "name": "user"
+          }
+        }
+      },
+      {
+        "name": "since",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "trust",
+            "name": "since"
+          }
+        }
+      },
+      {
+        "name": "until",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "trust",
+            "name": "until"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "4b4239efb4403bfbd229ffab502d357bd522fa6e2f395d0ff8bf96ca7a5cb9df"
+}

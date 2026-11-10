@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM what WHERE NOT EXISTS (SELECT 1 FROM event WHERE event.what = what.id)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "fe643aaa5c25b5d77fac694aa24fad5b359e47a55a395c5f26e02274678f48d5"
+}

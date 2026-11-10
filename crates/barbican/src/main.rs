@@ -3,11 +3,15 @@
 use std::io::{BufRead, Write};
 use std::process::ExitCode;
 
+mod api;
 mod config;
+mod db;
+mod feeds;
 mod geo;
 mod parse;
 mod rules;
 mod signal;
+mod state;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -53,10 +57,10 @@ fn main() -> ExitCode {
 
 fn parse_command(mut args: pico_args::Arguments) -> ExitCode {
     let mut err = std::io::stderr();
-    let parser = match args.free_from_str::<String>().as_deref() {
-        Ok("traefik") => parse::Parser::Traefik,
-        Ok("sshd") => parse::Parser::Sshd,
-        Ok("authelia") => parse::Parser::Authelia,
+    let kind = match args.free_from_str::<String>().as_deref() {
+        Ok("traefik") => config::ParserKind::Traefik,
+        Ok("sshd") => config::ParserKind::Sshd,
+        Ok("authelia") => config::ParserKind::Authelia,
         _ => {
             let _ = writeln!(err, "parse: name a parser: traefik, sshd or authelia");
             return ExitCode::FAILURE;
@@ -72,21 +76,20 @@ fn parse_command(mut args: pico_args::Arguments) -> ExitCode {
         },
         _ => Box::new(std::io::stdin().lock()),
     };
+    let Some(mut parser) = parse::Parser::builtin(kind) else {
+        return ExitCode::FAILURE;
+    };
     let mut out = std::io::stdout().lock();
+    let mut what = String::new();
     let (mut lines, mut matched) = (0u64, 0u64);
     for line in input.lines() {
         let Ok(line) = line else { break };
         lines += 1;
         if let Some((ip, event)) = parser.parse(&line) {
             matched += 1;
-            let kind = event.kind().map_or("session", |k| match k {
-                signal::Kind::Http => "http",
-                signal::Kind::AuthFailure => "auth_failure",
-                signal::Kind::AuthSuccess => "auth_success",
-                signal::Kind::InvalidUser => "invalid_user",
-                signal::Kind::Probe => "probe",
-            });
-            let _ = writeln!(out, "{ip}\t{kind}\t{}", event.what());
+            event.write_what(&mut what);
+            let kind = event.kind().map_or("session", signal::Kind::name);
+            let _ = writeln!(out, "{ip}	{kind}	{what}");
         }
     }
     let _ = writeln!(err, "{matched} of {lines} lines matched");

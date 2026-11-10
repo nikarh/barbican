@@ -1,0 +1,580 @@
+//! Types of the UI's WebSocket RPC protocol, shared with the frontend.
+//!
+//! `cargo test` exports them as TypeScript into `web/src/api/generated/` (see `mise run bindings`).
+//!
+//! # Protocol
+//!
+//! The client sends text frames that are either a single [`Request`] or a JSON array of them. Every request carries
+//! a client-chosen `id`, and the requests of one frame run concurrently: each gets its own response, a
+//! [`ServerMessage::Result`] or [`ServerMessage::Error`] with the same `id`, as soon as it completes.
+//!
+//! A `*.subscribe` call answers with a `null` result and then pushes [`ServerMessage::Event`]s tagged with the
+//! subscribing request's `id` until the client sends `unsubscribe` with that id, or disconnects.
+//!
+//! Times are unix seconds.
+
+use serde::{Deserialize, Serialize};
+
+#[cfg(test)]
+use ts_rs::TS;
+
+use crate::feeds::FeedDef;
+use crate::rules::{Policy, Rule};
+use crate::signal::Kind;
+
+/// One call from the client: a method and its parameters.
+#[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "rpc.ts"))]
+pub struct Request {
+    pub id: String,
+    #[serde(flatten)]
+    pub call: Call,
+}
+
+/// Every method the server implements, with its parameters.
+#[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "rpc.ts"))]
+#[serde(tag = "method", content = "params")]
+pub enum Call {
+    /// Result: [`Meta`].
+    #[serde(rename = "meta.get")]
+    MetaGet,
+    /// Result: [`Overview`].
+    #[serde(rename = "overview.get")]
+    OverviewGet,
+    /// Result: [`Page`] of [`IpRow`].
+    #[serde(rename = "ips.list")]
+    IpsList(IpsParams),
+    /// Result: [`IpDetail`].
+    #[serde(rename = "ip.get")]
+    IpGet(IpParams),
+    /// Result: [`Page`] of [`EventRow`].
+    #[serde(rename = "events.list")]
+    EventsList(EventsParams),
+    /// Result: [`Page`] of [`Ban`].
+    #[serde(rename = "bans.list")]
+    BansList(BansParams),
+    /// Result: [`Ban`].
+    #[serde(rename = "ban.create")]
+    BanCreate(BanCreateParams),
+    /// Result: `null`.
+    #[serde(rename = "ban.lift")]
+    BanLift(IdParams),
+    /// Result: `Entry[]`.
+    #[serde(rename = "entries.list")]
+    EntriesList,
+    /// Result: [`Entry`].
+    #[serde(rename = "entry.save")]
+    EntrySave(EntrySaveParams),
+    /// Result: `null`.
+    #[serde(rename = "entry.delete")]
+    EntryDelete(IdParams),
+    /// Result: `null`. Stops trusting an address someone logged in from.
+    #[serde(rename = "trust.remove")]
+    TrustRemove(IpParams),
+    /// Result: `Rule[]`, in the order they are tried.
+    #[serde(rename = "rules.list")]
+    RulesList,
+    /// Result: `Rule[]`, the rules a new database starts with.
+    #[serde(rename = "rules.defaults")]
+    RulesDefaults,
+    /// Result: [`Rule`], as saved (with its id when it was new).
+    #[serde(rename = "rule.save")]
+    RuleSave(Rule),
+    /// Result: `null`.
+    #[serde(rename = "rule.delete")]
+    RuleDelete(IdParams),
+    /// Result: `null`.
+    #[serde(rename = "rules.order")]
+    RulesOrder(OrderParams),
+    /// Result: [`Policy`].
+    #[serde(rename = "policy.get")]
+    PolicyGet,
+    /// Result: [`Policy`], as saved.
+    #[serde(rename = "policy.update")]
+    PolicyUpdate(Policy),
+    /// Result: `Feed[]`.
+    #[serde(rename = "feeds.list")]
+    FeedsList,
+    /// Result: `FeedDef[]`, well-known lists to add.
+    #[serde(rename = "feeds.presets")]
+    FeedsPresets,
+    /// Result: [`Feed`], as saved.
+    #[serde(rename = "feed.save")]
+    FeedSave(FeedDef),
+    /// Result: `null`.
+    #[serde(rename = "feed.delete")]
+    FeedDelete(IdParams),
+    /// Result: `null`, once the feed was fetched (or failed to be).
+    #[serde(rename = "feed.refresh")]
+    FeedRefresh(IdParams),
+    /// Result: `null`, then [`Live`] events.
+    #[serde(rename = "live.subscribe")]
+    LiveSubscribe,
+    /// Result: `null`. Ends the subscription started by the request with this id.
+    #[serde(rename = "unsubscribe")]
+    Unsubscribe(UnsubscribeParams),
+}
+
+/// A message from the server.
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "rpc.ts"))]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ServerMessage {
+    Result {
+        id: String,
+        #[cfg_attr(test, ts(type = "unknown"))]
+        result: serde_json::Value,
+    },
+    Error {
+        /// `null` when the frame couldn't be parsed far enough to know the request's id.
+        id: Option<String>,
+        error: RpcError,
+    },
+    Event {
+        id: String,
+        #[cfg_attr(test, ts(type = "unknown"))]
+        event: serde_json::Value,
+    },
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "rpc.ts"))]
+pub struct RpcError {
+    pub code: ErrorCode,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "rpc.ts"))]
+#[serde(rename_all = "camelCase")]
+pub enum ErrorCode {
+    /// The frame or the parameters are malformed.
+    BadRequest,
+    NotFound,
+    Internal,
+}
+
+#[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "rpc.ts"))]
+pub struct IdParams {
+    #[cfg_attr(test, ts(type = "number"))]
+    pub id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "rpc.ts"))]
+pub struct IpParams {
+    pub ip: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "rpc.ts"))]
+pub struct UnsubscribeParams {
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "rpc.ts"))]
+pub struct OrderParams {
+    #[cfg_attr(test, ts(type = "Array<number>"))]
+    pub ids: Vec<i64>,
+}
+
+/// A slice of a long list.
+#[derive(Debug, Serialize)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct Page<T> {
+    pub rows: Vec<T>,
+    /// How many rows match in all.
+    #[cfg_attr(test, ts(type = "number"))]
+    pub total: i64,
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "rpc.ts"))]
+#[serde(rename_all = "camelCase")]
+pub enum IpFilter {
+    #[default]
+    All,
+    Banned,
+    Trusted,
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "rpc.ts"))]
+#[serde(rename_all = "camelCase")]
+pub enum IpSort {
+    #[default]
+    LastSeen,
+    FirstSeen,
+    Hits,
+    Country,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "rpc.ts"))]
+#[serde(rename_all = "camelCase", default)]
+pub struct IpsParams {
+    /// The start of an address, a country code, or part of a network's name.
+    #[cfg_attr(test, ts(optional))]
+    pub query: Option<String>,
+    pub filter: IpFilter,
+    pub sort: IpSort,
+    /// Ascending instead of descending.
+    pub ascending: bool,
+    pub offset: u32,
+    #[cfg_attr(test, ts(optional))]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "rpc.ts"))]
+#[serde(rename_all = "camelCase", default)]
+pub struct EventsParams {
+    /// Only this address's.
+    #[cfg_attr(test, ts(optional))]
+    pub ip: Option<String>,
+    #[cfg_attr(test, ts(optional, type = "number"))]
+    pub rule: Option<i64>,
+    #[cfg_attr(test, ts(optional))]
+    pub source: Option<String>,
+    #[cfg_attr(test, ts(optional))]
+    pub kind: Option<Kind>,
+    /// Part of what happened (`/.env`, a user name).
+    #[cfg_attr(test, ts(optional))]
+    pub query: Option<String>,
+    pub offset: u32,
+    #[cfg_attr(test, ts(optional))]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "rpc.ts"))]
+#[serde(rename_all = "camelCase", default)]
+pub struct BansParams {
+    /// Only bans in force.
+    pub active: bool,
+    #[cfg_attr(test, ts(optional))]
+    pub query: Option<String>,
+    pub offset: u32,
+    #[cfg_attr(test, ts(optional))]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "rpc.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct BanCreateParams {
+    /// An address or a prefix.
+    pub net: String,
+    /// How long; `null` until lifted.
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub secs: Option<i64>,
+    pub reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "rpc.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct EntrySaveParams {
+    pub net: String,
+    /// The allow list; otherwise the deny list.
+    pub allow: bool,
+    #[serde(default)]
+    pub note: String,
+    /// How long it stays; `null` until removed.
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub secs: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "a message, not a state machine"
+)]
+pub struct Meta {
+    pub version: String,
+    pub dry_run: bool,
+    pub sources: Vec<String>,
+    pub has_countries: bool,
+    pub has_asns: bool,
+    /// The edge API is enabled.
+    pub edge_api: bool,
+}
+
+#[derive(Debug, Serialize, Clone, Default)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct FirewallStatus {
+    /// Off: decisions are only recorded.
+    pub enabled: bool,
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub applied: Option<i64>,
+    pub error: Option<String>,
+    /// Addresses and prefixes blocked by bans and the deny list.
+    #[cfg_attr(test, ts(type = "number"))]
+    pub blocks: u64,
+    /// Prefixes in the list sets (countries and blocking feeds).
+    #[cfg_attr(test, ts(type = "number"))]
+    pub listed: u64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub dropped_blocked: u64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub dropped_listed: u64,
+}
+
+#[derive(Debug, Serialize, Clone, Default)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct SourceStatus {
+    pub name: String,
+    pub parser: String,
+    /// Where it reads from, e.g. `docker: traefik`.
+    pub input: String,
+    pub connected: bool,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub lines: u64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub parsed: u64,
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub last_line: Option<i64>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone, Default)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct EdgeStatus {
+    pub name: String,
+    pub address: String,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub last_poll: i64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub seq: u64,
+    pub agent: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct DayStat {
+    /// Unix time of the day's start (UTC).
+    #[cfg_attr(test, ts(type = "number"))]
+    pub day: i64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub events: i64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub bans: i64,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct Count {
+    pub key: String,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub count: i64,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct Overview {
+    #[cfg_attr(test, ts(type = "number"))]
+    pub bans_active: i64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub bans_today: i64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub events_today: i64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub ips: i64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub trusted: i64,
+    pub firewall: FirewallStatus,
+    pub sources: Vec<SourceStatus>,
+    pub edges: Vec<EdgeStatus>,
+    /// The last 30 days, oldest first.
+    pub days: Vec<DayStat>,
+    /// Countries of the addresses banned in the last 30 days.
+    pub countries: Vec<Count>,
+    /// Rules by events in the last 30 days.
+    pub rules: Vec<Count>,
+    pub recent: Vec<Ban>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct Ban {
+    #[cfg_attr(test, ts(type = "number"))]
+    pub id: i64,
+    /// What is blocked: the address, or a prefix.
+    pub net: String,
+    /// The address that made a rule ban.
+    pub ip: Option<String>,
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub rule: Option<i64>,
+    pub reason: String,
+    pub country: Option<String>,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub created: i64,
+    /// `null`: until lifted.
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub until: Option<i64>,
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub lifted: Option<i64>,
+    pub lifted_by: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct IpRow {
+    pub ip: String,
+    pub country: Option<String>,
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub asn: Option<i64>,
+    pub as_name: Option<String>,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub first_seen: i64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub last_seen: i64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub hits: i64,
+    /// When the ban in force ends; `null` with `banned` set: never.
+    pub banned: bool,
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub ban_until: Option<i64>,
+    pub trusted: bool,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct Activity {
+    pub kind: Kind,
+    pub what: String,
+    pub source: String,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub rule: i64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub count: i64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub first: i64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub last: i64,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct TrustInfo {
+    pub user: String,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub until: i64,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct IpDetail {
+    pub ip: String,
+    pub country: Option<String>,
+    pub continent: Option<String>,
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub asn: Option<i64>,
+    pub as_name: Option<String>,
+    /// `null`: never seen doing anything a rule matched.
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub first_seen: Option<i64>,
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub last_seen: Option<i64>,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub hits: i64,
+    /// Feeds that list the address.
+    pub listed: Vec<String>,
+    /// Whether its country or continent is blocked.
+    pub country_blocked: bool,
+    pub trusted: Option<TrustInfo>,
+    /// On the allow list or exempt: no rule acts on it.
+    pub allowed: bool,
+    pub denied: bool,
+    pub active_ban: Option<Ban>,
+    pub bans: Vec<Ban>,
+    pub activity: Vec<Activity>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct EventRow {
+    /// The hour (unix time of its start).
+    #[cfg_attr(test, ts(type = "number"))]
+    pub hour: i64,
+    pub ip: String,
+    pub country: Option<String>,
+    pub kind: Kind,
+    pub what: String,
+    pub source: String,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub rule: i64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub count: i64,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct Entry {
+    #[cfg_attr(test, ts(type = "number"))]
+    pub id: i64,
+    pub net: String,
+    pub allow: bool,
+    pub note: String,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub created: i64,
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub until: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct Feed {
+    pub def: FeedDef,
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub fetched: Option<i64>,
+    /// Prefixes in the last good copy.
+    #[cfg_attr(test, ts(type = "number"))]
+    pub count: i64,
+    pub error: Option<String>,
+}
+
+/// Pushed to `live.subscribe` subscribers.
+#[derive(Debug, Serialize, Clone)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum Live {
+    /// Something a rule matched (or a login).
+    Event {
+        #[cfg_attr(test, ts(type = "number"))]
+        at: i64,
+        ip: String,
+        country: Option<String>,
+        source: String,
+        kind: Kind,
+        what: String,
+        rule: Option<String>,
+    },
+    Ban {
+        ban: Ban,
+    },
+    Lift {
+        #[cfg_attr(test, ts(type = "number"))]
+        id: i64,
+    },
+}

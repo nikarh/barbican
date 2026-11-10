@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE ban SET lifted = ?, lifted_by = ? WHERE id = ? AND lifted IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "10df5ca7a846f6bfe28351924280713595a7cc87d65233beb82a6b82f8bde876"
+}

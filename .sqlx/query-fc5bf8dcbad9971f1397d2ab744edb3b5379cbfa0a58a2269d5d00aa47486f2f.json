@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE feed SET definition = ?,\n             data = CASE WHEN ? THEN data END, etag = CASE WHEN ? THEN etag END, fetched = CASE WHEN ? THEN fetched END\n         WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "fc5bf8dcbad9971f1397d2ab744edb3b5379cbfa0a58a2269d5d00aa47486f2f"
+}

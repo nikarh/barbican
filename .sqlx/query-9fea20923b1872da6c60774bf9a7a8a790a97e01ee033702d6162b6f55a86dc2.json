@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO trust (ip, user, since, until) VALUES (?, ?, ?, ?)\n         ON CONFLICT (ip) DO UPDATE SET user = excluded.user, until = max(until, excluded.until)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "9fea20923b1872da6c60774bf9a7a8a790a97e01ee033702d6162b6f55a86dc2"
+}

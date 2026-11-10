@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM trust WHERE ip = (SELECT id FROM ip WHERE addr = ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "5d7584c5226cc2a39b008df219caee8743d08c94bd580c4f9d8ce1f22de669c5"
+}

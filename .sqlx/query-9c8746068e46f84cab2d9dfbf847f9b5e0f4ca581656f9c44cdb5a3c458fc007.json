@@ -1,0 +1,28 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT (SELECT count(*) FROM ip) AS ips, (SELECT count(*) FROM what) AS whats",
+  "describe": {
+    "columns": [
+      {
+        "name": "ips",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "whats",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "9c8746068e46f84cab2d9dfbf847f9b5e0f4ca581656f9c44cdb5a3c458fc007"
+}

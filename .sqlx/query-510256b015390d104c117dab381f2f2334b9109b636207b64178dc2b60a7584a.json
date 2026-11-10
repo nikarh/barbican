@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT sum(count) AS n FROM event",
+  "describe": {
+    "columns": [
+      {
+        "name": "n",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "510256b015390d104c117dab381f2f2334b9109b636207b64178dc2b60a7584a"
+}
