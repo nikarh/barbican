@@ -38,8 +38,9 @@ It is what fail2ban, a log pipeline and a dashboard do together, in one process 
 Release files are on the [releases page](https://github.com/nikarh/barbican/releases) (static binaries, so any Linux
 with nftables): `barbican_amd64.deb` / `barbican_arm64.deb`, `barbican-x86_64.pkg.tar.zst` /
 `barbican-aarch64.pkg.tar.zst` for Arch Linux, and `barbican-<arch>-linux-musl.tar.gz` with the binary, the unit
-and an example configuration. `SHA256SUMS` is signed (`SHA256SUMS.asc`). The `latest` pre-release is built from
-`main`.
+and an example configuration. `SHA256SUMS` is signed (`SHA256SUMS.asc`, key
+[`docs/signing-key.asc`](docs/signing-key.asc), `2DED94B14E12F49939656D6611E3B0A85A53607A`; how to check downloads:
+[`docs/releasing.md`](docs/releasing.md)). The `latest` pre-release is built from `main`.
 
 The packages install `/usr/bin/barbican`, the systemd unit and `/etc/barbican/config.toml`, and don't start
 anything. Edit the configuration (at least its sources), then:
