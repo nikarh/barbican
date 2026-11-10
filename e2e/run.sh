@@ -17,12 +17,23 @@ vm=e2e/vm.sh
 log() { printf '[e2e] %s\n' "$*" >&2; }
 
 cleanup() {
+  # The boots, if the build failed.
+  jobs -p | xargs -r kill 2>/dev/null || true
   if [[ -z "${KEEP_VM:-}" ]]; then
     "${vm}" router down || true
     "${vm}" server down || true
   fi
 }
 trap cleanup EXIT
+
+# The VMs boot while the binaries build.
+"${vm}" server up &
+server_up=$!
+router_up=
+if [[ " ${suites[*]} " == *" router "* ]]; then
+  "${vm}" router up &
+  router_up=$!
+fi
 
 log "building static binaries"
 mise x -- cargo zigbuild --locked --release --target "${TARGET}" -p barbican -p barbican-edge
@@ -39,21 +50,20 @@ if [[ ! -f "${geo}" ]] || [[ -n $(find "${geo}" -mtime +31) ]]; then
   mv "${geo}.part" "${geo}"
 fi
 
-"${vm}" server up &
-server_up=$!
-if [[ " ${suites[*]} " == *" router "* ]]; then
-  "${vm}" router up
+if [[ -n "${router_up}" ]]; then
+  log "packaging the edge agent for OpenWrt"
+  scripts/package-openwrt.sh x86_64 "${bin}/barbican-edge" target/e2e-packages >/dev/null
 fi
+
 wait "${server_up}"
+[[ -z "${router_up}" ]] || wait "${router_up}"
 "${vm}" server ssh 'sudo ip addr replace 10.99.0.1/24 dev enp0s3 && sudo ip link set enp0s3 up'
 
 log "copying into the server VM"
-"${vm}" server ssh 'sudo mkdir -p /opt/barbican && sudo chown debian /opt/barbican'
-for f in "${bin}/barbican" "${bin}/barbican-edge-ipset" e2e/rpc.py e2e/server.sh dist/barbican.service dist/barbican.sysusers dist/barbican.tmpfiles \
-  Dockerfile.ci "${geo}"; do
-  "${vm}" server put "${f}" "/opt/barbican/$(basename "${f}")"
-done
-"${vm}" server ssh 'chmod +x /opt/barbican/barbican /opt/barbican/barbican-edge-ipset /opt/barbican/server.sh'
+# In one stream, flat (each file under its own name).
+tar -c --transform 's#.*/##' "${bin}/barbican" "${bin}/barbican-edge-ipset" e2e/rpc.py e2e/server.sh \
+  dist/barbican.service dist/barbican.sysusers dist/barbican.tmpfiles Dockerfile.ci -C "$(dirname "${geo}")" "$(basename "${geo}")" |
+  "${vm}" server ssh 'sudo mkdir -p /opt/barbican && sudo chown debian /opt/barbican && tar -x -C /opt/barbican'
 
 status=0
 for suite in "${suites[@]}"; do
@@ -64,7 +74,6 @@ for suite in "${suites[@]}"; do
       ;;
     router)
       log "router suite"
-      scripts/package-openwrt.sh x86_64 "${bin}/barbican-edge" target/e2e-packages >/dev/null
       e2e/router.sh target/e2e-packages || status=1
       ;;
     *)
