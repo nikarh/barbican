@@ -98,6 +98,7 @@ packages:
   - conntrack
   - curl
   - iproute2
+  - ipset
   - jq
   - nftables
   - python3
