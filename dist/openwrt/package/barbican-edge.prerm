@@ -1,0 +1,7 @@
+#!/bin/sh
+# Before removing barbican-edge (not on an upgrade, which runs the new package's postinst after): stopped and its
+# table removed. The configuration and the saved state stay.
+[ -n "${IPKG_INSTROOT}" ] && exit 0
+/etc/init.d/barbican-edge stop
+/etc/init.d/barbican-edge disable
+exit 0
