@@ -1,4 +1,5 @@
 import type { ComboboxItem, ComboboxParsedItem } from '@mantine/core'
+import { IconWorld } from '@tabler/icons-react'
 
 import { flag } from '../lib/format'
 
@@ -21,16 +22,18 @@ export const COUNTRY_SELECT = {
       return items.length === 0 ? [] : [{ ...o, items }]
     })
   },
-  renderOption: ({ option }: { option: ComboboxItem }) =>
-    option.value.length === 2 ? (
+  renderOption: ({ option }: { option: ComboboxItem }) => {
+    const continent = option.value.startsWith('continent:')
+    if (!continent && option.value.length !== 2) return option.label
+    const code = continent ? option.value.slice(10) : option.value
+    return (
       <span className="place">
         <span className="place-flag" aria-hidden="true">
-          {flag(option.value)}
+          {continent ? <IconWorld size={17} stroke={1.6} /> : flag(code)}
         </span>
         <span className="place-title">{option.label}</span>
-        <span className="place-code mono">{option.value}</span>
+        <span className="place-code mono">{code}</span>
       </span>
-    ) : (
-      option.label
-    ),
+    )
+  },
 } as const
