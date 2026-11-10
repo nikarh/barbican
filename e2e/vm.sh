@@ -232,7 +232,11 @@ wait_exit() { # <seconds>: until QEMU has exited
 
 up() {
   mkdir -p "${DIR}"
-  [[ -f "${KEY}" ]] || ssh-keygen -q -t ed25519 -N '' -f "${KEY}"
+  # Both VMs may boot at once.
+  (
+    flock 9
+    [[ -f "${KEY}" ]] || ssh-keygen -q -t ed25519 -N '' -f "${KEY}"
+  ) 9>"${STATE_DIR}/.key.lock"
   if is_running; then
     log "already running"
   else
