@@ -8,6 +8,11 @@
 //! The kernel times elements out, as with nftables, but at most after 2147483 seconds (24.8 days): longer bans get
 //! that, and reconciling renews them while the agent runs. List sets are filled in a new set and swapped in, so there
 //! is no moment without them.
+//!
+//! The sets are read (`ipset save`) once, after they are set up; afterwards what they hold is what this agent wrote
+//! less what timed out, and only changes are written. There are no notifications of changes by others, so once a
+//! minute the cheapest telling check runs: whether the jump to the chain is still there (`iptables -C`), which a
+//! firewall restart, the usual way the rules go, removes. The sets can't go while the chain's rules use them.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
@@ -107,6 +112,10 @@ pub struct Ipset<E: Exec> {
     prefix: String,
     chain: String,
     lists_version: Option<String>,
+    /// What the ban and allow sets hold, per set: each element and when it times out (unix seconds).
+    model: Option<HashMap<String, HashMap<String, Option<u64>>>>,
+    /// When elements whose ban is longer than the longest timeout must be renewed.
+    renew_at: Option<u64>,
 }
 
 impl<E: Exec> Ipset<E> {
@@ -126,6 +135,8 @@ impl<E: Exec> Ipset<E> {
             prefix: prefix.to_owned(),
             chain: chain.to_owned(),
             lists_version: None,
+            model: None,
+            renew_at: None,
         }
     }
 
@@ -257,23 +268,27 @@ fn tolerance(remaining: u64) -> u64 {
     (remaining / 100).max(60)
 }
 
-/// Adds and removes so that a set holds `want` (elements with their remaining seconds).
+/// Adds and removes so that a set holds `want` (elements with their remaining seconds), given what it has (with
+/// remaining seconds). Returns the number of changes, and what the set holds after (with when each times out).
 fn diff(
     script: &mut String,
     set: &str,
     want: &BTreeMap<Net, Option<u64>>,
     have: &HashMap<String, Option<u64>>,
-) -> usize {
+    now: u64,
+) -> (usize, HashMap<String, Option<u64>>) {
     let mut changes = 0;
-    let mut wanted = std::collections::HashSet::new();
+    let mut after = HashMap::new();
     for (net, remaining) in want {
         let key = net.to_string();
-        let same = match (remaining, have.get(&key)) {
-            (None, Some(None)) => true,
-            (Some(r), Some(Some(e))) => r.abs_diff(*e) <= tolerance(*r),
-            _ => false,
+        let kept = match (remaining, have.get(&key)) {
+            (None, Some(None)) => Some(None),
+            (Some(r), Some(Some(e))) if r.abs_diff(*e) <= tolerance(*r) => Some(Some(*e)),
+            _ => None,
         };
-        if !same {
+        let left = if let Some(left) = kept {
+            left
+        } else {
             // With -exist, adding what is there replaces its timeout.
             match remaining {
                 Some(r) => {
@@ -284,16 +299,17 @@ fn diff(
                 }
             }
             changes += 1;
-        }
-        wanted.insert(key);
+            *remaining
+        };
+        after.insert(key, left.map(|r| now + r));
     }
     for key in have.keys() {
-        if !wanted.contains(key) {
+        if !after.contains_key(key) {
             let _ = writeln!(script, "del {set} {key}");
             changes += 1;
         }
     }
-    changes
+    (changes, after)
 }
 
 impl<E: Exec> Backend for Ipset<E> {
@@ -306,6 +322,7 @@ impl<E: Exec> Backend for Ipset<E> {
 
     fn setup(&mut self) -> Result<(), String> {
         self.lists_version = None;
+        self.model = None;
         if self.create_sets().is_err() {
             // Sets of another type (an older version of this agent): replaced.
             for family in self.families() {
@@ -358,13 +375,17 @@ impl<E: Exec> Backend for Ipset<E> {
         }
         let mut hosts: BTreeMap<Net, Option<u64>> = BTreeMap::new();
         let mut nets: BTreeMap<Net, Option<u64>> = BTreeMap::new();
+        let mut capped = false;
         for block in &desired.block {
             if block.net.is_never_blocked() {
                 continue;
             }
             let remaining = match block.until {
                 Some(until) if until <= now => continue,
-                Some(until) => Some((until - now).min(MAX_TIMEOUT)),
+                Some(until) => {
+                    capped |= until - now > MAX_TIMEOUT;
+                    Some((until - now).min(MAX_TIMEOUT))
+                }
                 None => None,
             };
             let target = if block.net.is_host() {
@@ -380,6 +401,7 @@ impl<E: Exec> Backend for Ipset<E> {
         }
         let allows: BTreeMap<Net, Option<u64>> = desired.allow.iter().map(|n| (*n, None)).collect();
         let mut script = String::new();
+        let mut model = HashMap::new();
         for family in self.families() {
             let of = |m: &BTreeMap<Net, Option<u64>>| -> BTreeMap<Net, Option<u64>> {
                 m.iter()
@@ -393,8 +415,17 @@ impl<E: Exec> Backend for Ipset<E> {
                 (Kind::Net, of(&nets)),
             ] {
                 let set = self.set(kind, family);
-                let have = self.elements(&set)?;
-                diff(&mut script, &set, &want, &have);
+                let have = match self.model.as_ref().and_then(|m| m.get(&set)) {
+                    // What is left of what was written.
+                    Some(known) => known
+                        .iter()
+                        .filter(|(_, until)| until.is_none_or(|u| u > now))
+                        .map(|(k, until)| (k.clone(), until.map(|u| u - now)))
+                        .collect(),
+                    None => self.elements(&set)?,
+                };
+                let (_, after) = diff(&mut script, &set, &want, &have, now);
+                model.insert(set, after);
             }
         }
         if self.lists_version.as_deref() != Some(desired.lists_version.as_str()) {
@@ -415,11 +446,20 @@ impl<E: Exec> Backend for Ipset<E> {
             }
         }
         if !script.is_empty() {
+            self.model = None;
             self.exec
                 .run(&self.ipset, &["restore", "-exist"], Some(&script))?;
         }
+        self.model = Some(model);
+        self.renew_at = capped.then_some(now + MAX_TIMEOUT / 2);
         self.lists_version = Some(desired.lists_version.clone());
         Ok(())
+    }
+
+    fn check(&mut self, now: u64) -> bool {
+        self.model.is_none()
+            || self.renew_at.is_some_and(|at| at <= now)
+            || self.families().into_iter().any(|f| !self.hooked(f))
     }
 
     fn counters(&mut self) -> Option<Counters> {
@@ -463,6 +503,7 @@ impl<E: Exec> Backend for Ipset<E> {
         }
         self.destroy_sets();
         self.lists_version = None;
+        self.model = None;
         Ok(())
     }
 }
@@ -665,6 +706,59 @@ mod tests {
         fake.log.lock().unwrap().clear();
         b.reconcile(&desired, 10_000).unwrap();
         assert!(!fake.log.lock().unwrap().join("\n").contains("swap"));
+    }
+
+    #[test]
+    fn reads_the_sets_only_once() {
+        let fake = Fake::default();
+        *fake.hooked.lock().unwrap() = true;
+        let mut b = ipset(&fake);
+        let mut desired = Desired {
+            block: vec![Block {
+                net: n("198.51.100.1"),
+                until: Some(10_000 + 3_600),
+            }],
+            ..Desired::default()
+        };
+        b.reconcile(&desired, 10_000).unwrap();
+        assert!(
+            fake.log
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|l| l.starts_with("ipset save"))
+        );
+        fake.log.lock().unwrap().clear();
+
+        // Only the change is written, from what was written before.
+        desired.block.push(Block {
+            net: n("198.51.100.2"),
+            until: None,
+        });
+        b.reconcile(&desired, 10_100).unwrap();
+        let log = fake.log.lock().unwrap().join("\n");
+        assert!(!log.contains("ipset save"), "{log}");
+        assert!(
+            log.ends_with("ipset restore -exist <<\nadd barbican-host4 198.51.100.2\n"),
+            "{log}"
+        );
+
+        // Checking costs one iptables -C; it tells when the jump is gone.
+        fake.log.lock().unwrap().clear();
+        assert!(!b.check(10_200));
+        assert_eq!(fake.log.lock().unwrap().len(), 1);
+        *fake.hooked.lock().unwrap() = false;
+        assert!(b.check(10_200));
+
+        // Bans longer than the longest timeout are renewed in time.
+        *fake.hooked.lock().unwrap() = true;
+        desired.block.push(Block {
+            net: n("198.51.100.3"),
+            until: Some(10_000 + 365 * 86_400),
+        });
+        b.reconcile(&desired, 10_300).unwrap();
+        assert!(!b.check(10_300 + MAX_TIMEOUT / 2 - 1));
+        assert!(b.check(10_300 + MAX_TIMEOUT / 2));
     }
 
     #[test]
