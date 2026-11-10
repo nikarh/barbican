@@ -3,7 +3,8 @@
 #
 #   scripts/package.sh <x86_64|aarch64> <binary> <output dir>
 #
-# The version is the binary's own (barbican --version). A build of main (0.1.0-dev+abc1234) is packaged with the
+# The version is the workspace's, with BARBICAN_VERSION_SUFFIX appended as in the build (checked against the binary's
+# --version when it runs here). A build of main (0.1.0-dev+abc1234) is packaged with the
 # number of commits up to it, so each build of main is newer than the one before, and after the release of its base
 # version if that is out already, or before (deb: 0.1.0+dev205.abc1234 or 0.1.0~dev205.abc1234; Arch:
 # 0.1.0.dev205.abc1234 or 0.1.0dev205.abc1234). Counting the commits needs the whole history.
@@ -28,7 +29,14 @@ mkdir -p "${stage}"
 install -m 0755 "${binary}" "${stage}/barbican"
 grep -q '^ExecStart=/usr/bin/barbican$' dist/barbican.service
 
-version=$("${stage}/barbican" --version | awk '{print $2}')
+version="$(cargo pkgid -p barbican | sed 's/.*[#@]//')${BARBICAN_VERSION_SUFFIX:-}"
+if [[ "${arch}" == "$(uname -m)" ]]; then
+  reported=$("${stage}/barbican" --version | awk '{print $2}')
+  if [[ "${reported}" != "${version}" ]]; then
+    echo "the binary is ${reported}, expected ${version}" >&2
+    exit 1
+  fi
+fi
 if [[ "${version}" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-dev\+([0-9a-f]+)$ ]]; then
   base=${BASH_REMATCH[1]} commit=${BASH_REMATCH[2]}
   if [[ "$(git rev-parse --is-shallow-repository)" == true ]]; then
