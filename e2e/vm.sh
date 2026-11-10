@@ -71,6 +71,8 @@ ssh_opts=(
 )
 
 log() { printf '[vm %s] %s\n' "${vm}" "$*" >&2; }
+# Exiting on a failed command (`set -e`) says which one, rather than silently.
+trap 'status=$?; ((status == 0)) || log "exited with status ${status} after: ${BASH_COMMAND}"' EXIT
 
 is_running() {
   [[ -f "${PIDFILE}" ]] && kill -0 "$(cat "${PIDFILE}")" 2>/dev/null
@@ -317,7 +319,8 @@ destroy() {
 
 case "${cmd}" in
   up) up ;;
-  ssh) shift 2; vm_ssh "$@" ;;
+  # The remote command's status is the result, not a failure of this script.
+  ssh) shift 2; trap - EXIT; vm_ssh "$@" ;;
   put) put "$3" "$4" ;;
   down) down ;;
   destroy) destroy ;;
