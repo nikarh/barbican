@@ -103,6 +103,14 @@ export function BansScreen() {
         columns={columns}
         fetch={fetch}
         query={`${String(active)}|${debounced}`}
+        empty={
+          debounced.trim() === ''
+            ? {
+                title: active ? 'No bans in force' : 'No bans yet',
+                hint: 'Bans start when a rule’s threshold is reached, or by hand with “Ban”.',
+              }
+            : { title: 'No bans', hint: 'None match the search.' }
+        }
         onRowClick={(row) => {
           navigate('addresses', { ip: row.ip ?? row.net.split('/')[0] ?? row.net })
         }}

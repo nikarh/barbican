@@ -132,6 +132,14 @@ export function EventsScreen() {
         columns={columns}
         fetch={fetch}
         query={`${debounced}|${kind ?? ''}|${rule ?? ''}|${source ?? ''}`}
+        empty={
+          debounced.trim() === '' && kind === null && rule === null && source === null
+            ? {
+                title: 'No events yet',
+                hint: 'What the sources’ logs say addresses did shows up here as it is read.',
+              }
+            : { title: 'No events', hint: 'None match the search and filters.' }
+        }
         onRowClick={(row) => {
           navigate('addresses', { ip: row.ip })
         }}

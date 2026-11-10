@@ -135,6 +135,20 @@ function List() {
         columns={columns}
         fetch={fetch}
         query={`${debounced}|${filter}|${sort}`}
+        empty={
+          debounced.trim() === '' && filter === 'all'
+            ? {
+                title: 'No addresses yet',
+                hint: 'Every address the sources see doing something shows up here.',
+              }
+            : {
+                title: 'No addresses',
+                hint:
+                  debounced.trim() === ''
+                    ? `None is ${filter} now.`
+                    : 'None match the search. It takes an address, a prefix, a country code, AS1234 or a network’s name.',
+              }
+        }
         onRowClick={(row) => {
           navigate('addresses', { ip: row.ip })
         }}
