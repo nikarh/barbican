@@ -53,17 +53,33 @@ records everything, and changes nothing.
 
 ### The edge agent (OpenWrt)
 
-`barbican-edge-<arch>.tar.gz` (x86_64, aarch64, armv7) has the static binary, its init script and UCI configuration,
-the LuCI pages, and an installer to run on the router:
+`barbican-edge-<arch>.apk` (OpenWrt 25.12 and later) or `.ipk` (24.10 and earlier), for x86_64, aarch64 or armv7
+(Cortex-A7/A9/A15 with an FPU), and `luci-app-barbican.apk`/`.ipk` for its LuCI pages:
 
 ```sh
-scp -O barbican-edge-armv7.tar.gz root@router:/tmp/   # or: ssh root@router 'cat > /tmp/x.tar.gz' < ...
-ssh root@router 'cd /tmp && tar -xzf barbican-edge-armv7.tar.gz && barbican-edge/install.sh'
+apk add --allow-untrusted ./barbican-edge-armv7.apk ./luci-app-barbican.apk   # or: opkg install ./*.ipk
 ```
 
-Then add the agents it follows in LuCI (**Services → Barbican → Settings**) or in `/etc/config/barbican`. It needs
-nftables with JSON support (`nftables-json`, the default in OpenWrt's images). The files are added to
-`/etc/sysupgrade.conf`, so they survive an upgrade.
+The package enables and starts it; add the agents it follows in LuCI (**Services → Barbican → Settings**) or in
+`/etc/config/barbican`, which upgrades keep. It needs nftables with JSON support (`nftables-json`, the default in
+OpenWrt's images). `barbican-edge-<arch>.tar.gz` has the same with an `install.sh`, for installing by hand.
+
+### The edge agent for Asuswrt-Merlin (`barbican-edge-ipset`)
+
+Merlin's kernels have no nftables: `barbican-edge-ipset` does the same with iptables and ipset (any kernel since
+2.6.36). `barbican-edge-ipset-armv7.tar.gz` is built without floating point instructions, so it runs on every ARM
+router Merlin supports. Turn on JFFS custom scripts (Administration → System), then:
+
+```sh
+scp barbican-edge-ipset-armv7.tar.gz admin@router:/tmp/
+ssh admin@router 'cd /tmp && tar -xzf barbican-edge-ipset-armv7.tar.gz && barbican-edge-ipset/install.sh'
+```
+
+Everything goes to `/jffs/barbican`: the binary, its configuration (`barbican.conf`, in the same format as on
+OpenWrt), its saved state, and `barbican.sh` (start, stop, restart, status), which `/jffs/scripts/services-start`
+runs at boot. `/jffs/scripts/firewall-start` puts the rules back whenever the router restarts its firewall.
+`uninstall.sh` takes it all away. ipset times elements out after at most 24.8 days: longer bans are renewed while the
+agent runs.
 
 ## Configuration
 
