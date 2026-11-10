@@ -76,8 +76,7 @@ pub async fn run(mut feeder: Feeder, base: String, query: String) {
                 let (Some(time), Some(msg)) = (&line.time, &line.msg) else {
                     continue;
                 };
-                let nanos = crate::time::rfc3339(time)
-                    .map(|s| i128::from(s) * 1_000_000_000 + fraction(time));
+                let nanos = barbican_common::time::rfc3339_nanos(time);
                 if let (Some(n), Some(l)) = (nanos, last)
                     && n <= l
                 {
@@ -102,20 +101,6 @@ pub async fn run(mut feeder: Feeder, base: String, query: String) {
     }
 }
 
-/// The nanoseconds of an RFC 3339 time's fraction.
-fn fraction(time: &str) -> i128 {
-    let Some((_, rest)) = time.split_once('.') else {
-        return 0;
-    };
-    let digits: String = rest
-        .chars()
-        .take_while(char::is_ascii_digit)
-        .take(9)
-        .collect();
-    let padded = format!("{digits:0<9}");
-    padded.parse().unwrap_or(0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,12 +114,5 @@ mod tests {
         );
         let url = tail_url("https://logs.example.com/vl/", "a b", "15m").unwrap();
         assert_eq!(url.path(), "/vl/select/logsql/tail");
-    }
-
-    #[test]
-    fn fractions() {
-        assert_eq!(fraction("2026-11-10T15:42:51.995856621Z"), 995_856_621);
-        assert_eq!(fraction("2026-11-10T15:42:51.5Z"), 500_000_000);
-        assert_eq!(fraction("2026-11-10T15:42:51Z"), 0);
     }
 }
