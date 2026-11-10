@@ -57,12 +57,14 @@ jobs:
           # scripts/package.sh numbers a build of main by the commits up to it.
           fetch-depth: 0
       - run: rustup toolchain install && rustup target add x86_64-unknown-linux-musl armv7-unknown-linux-musleabihf
+      # cargo-zigbuild's linker wrappers are in every crate's fingerprint, and their path changes with the tools in
+      # mise.toml: a cache from other tools would be restored as a full match, rebuilt from scratch and never saved.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          key: musl
+          key: musl-${{ hashFiles('mise.toml') }}
       - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
-          install_args: zig cargo:cargo-zigbuild nfpm
+          install_args: zig github:rust-cross/cargo-zigbuild nfpm
       - run: cargo zigbuild --locked --release --target x86_64-unknown-linux-musl -p barbican
         env:
           BARBICAN_VERSION_SUFFIX: -dev+${{ github.sha }}
@@ -94,12 +96,14 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - run: rustup toolchain install && rustup target add x86_64-unknown-linux-musl
+      # cargo-zigbuild's linker wrappers are in every crate's fingerprint, and their path changes with the tools in
+      # mise.toml: a cache from other tools would be restored as a full match, rebuilt from scratch and never saved.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          key: musl
+          key: musl-${{ hashFiles('mise.toml') }}
       - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
-          install_args: zig cargo:cargo-zigbuild
+          install_args: zig github:rust-cross/cargo-zigbuild
       - name: Cache the VM images and the country database
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

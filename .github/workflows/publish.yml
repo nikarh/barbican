@@ -51,7 +51,7 @@ jobs:
       - run: rustup toolchain install && rustup target add ${{ matrix.arch }}-unknown-linux-musl
       - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
-          install_args: node zig cargo:cargo-zigbuild nfpm
+          install_args: node zig github:rust-cross/cargo-zigbuild nfpm
       - name: Check the tag matches the version
         if: startsWith(env.TAG, 'v')
         run: test "$TAG" = "v$(cargo pkgid -p barbican | sed 's/.*[#@]//')"
@@ -171,7 +171,7 @@ jobs:
       - run: rustup toolchain install
       - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
-          install_args: zig cargo:cargo-zigbuild
+          install_args: zig github:rust-cross/cargo-zigbuild
       - run: scripts/build-edge.sh
         env:
           BARBICAN_VERSION_SUFFIX: ${{ inputs.version-suffix }}
