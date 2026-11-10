@@ -1,4 +1,7 @@
 //! What parsers make of log lines: who did what.
+//!
+//! Parsing and matching rules happen for every line, so events borrow from the line ([`Event`]); only lines that
+//! matched a rule (or are logins) become owned [`Hit`]s for the engine.
 
 use std::net::IpAddr;
 
@@ -7,50 +10,42 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use ts_rs::TS;
 
-/// One thing an address did, from one log line.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Signal {
-    /// Unix seconds.
-    pub at: u64,
-    pub ip: IpAddr,
-    pub event: Event,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Event {
-    Http(Http),
+/// What one log line says an address did. Borrows from the line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Event<'a> {
+    Http(Http<'a>),
     /// A wrong password, or a login that gave up halfway.
     AuthFailure {
-        user: Option<String>,
+        user: Option<&'a str>,
     },
     /// A login that worked: the address is someone's.
     AuthSuccess {
-        user: String,
+        user: &'a str,
     },
     /// A request of someone signed in (no login, but as good a sign).
     Session {
-        user: String,
+        user: &'a str,
     },
     /// A login as a user that doesn't exist.
     InvalidUser {
-        user: String,
+        user: &'a str,
     },
     /// Something only scanners send: garbage instead of a protocol, ancient algorithms, ...
     Probe {
-        what: String,
+        what: &'a str,
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct Http {
-    pub method: String,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Http<'a> {
+    pub method: &'a str,
     /// With the query.
-    pub path: String,
+    pub path: &'a str,
     pub status: u16,
-    pub host: Option<String>,
+    pub host: Option<&'a str>,
     /// Whether the proxy found a route (a known host) for the request; `None` when the log doesn't say.
     pub routed: Option<bool>,
-    pub user_agent: Option<String>,
+    pub user_agent: Option<&'a str>,
 }
 
 /// The kinds of events, as rules and the UI name them.
@@ -90,12 +85,23 @@ impl Kind {
     pub fn from_code(code: i64) -> Option<Self> {
         Self::ALL.into_iter().find(|k| k.code() == code)
     }
+
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Http => "http",
+            Self::AuthFailure => "auth_failure",
+            Self::AuthSuccess => "auth_success",
+            Self::InvalidUser => "invalid_user",
+            Self::Probe => "probe",
+        }
+    }
 }
 
 /// The longest description of an event that is stored.
 const MAX_WHAT: usize = 300;
 
-impl Event {
+impl<'a> Event<'a> {
     /// `None` for sessions, which only keep an address trusted.
     #[must_use]
     pub fn kind(&self) -> Option<Kind> {
@@ -109,47 +115,78 @@ impl Event {
         }
     }
 
-    /// What happened, in a few words, as stored and shown: `GET example.com/.env → 404`, `root`, ...
-    #[must_use]
-    pub fn what(&self) -> String {
-        let mut what = match self {
-            Self::Http(h) => {
-                let host = h.host.as_deref().unwrap_or("");
-                let route = if h.routed == Some(false) {
-                    " (no route)"
-                } else {
-                    ""
-                };
-                format!("{} {host}{} → {}{route}", h.method, h.path, h.status)
-            }
-            Self::AuthFailure { user } => user.clone().unwrap_or_default(),
-            Self::AuthSuccess { user } | Self::Session { user } | Self::InvalidUser { user } => {
-                user.clone()
-            }
-            Self::Probe { what } => what.clone(),
-        };
-        if what.len() > MAX_WHAT {
-            let mut end = MAX_WHAT;
-            while !what.is_char_boundary(end) {
-                end -= 1;
-            }
-            what.truncate(end);
-            what.push('…');
-        }
-        what
-    }
-
     /// The user name a login event names.
     #[must_use]
-    pub fn user(&self) -> Option<&str> {
-        match self {
-            Self::AuthFailure { user } => user.as_deref(),
+    pub fn user(&self) -> Option<&'a str> {
+        match *self {
+            Self::AuthFailure { user } => user,
             Self::AuthSuccess { user } | Self::Session { user } | Self::InvalidUser { user } => {
                 Some(user)
             }
             Self::Http(_) | Self::Probe { .. } => None,
         }
     }
+
+    /// Writes what happened, in a few words, as stored and shown (`GET example.com/.env → 404`, `root`, ...), into
+    /// `out` (cleared first), so a caller can reuse one buffer for every line.
+    pub fn write_what(&self, out: &mut String) {
+        use std::fmt::Write as _;
+        out.clear();
+        match self {
+            Self::Http(h) => {
+                let _ = write!(
+                    out,
+                    "{} {}{} → {}",
+                    h.method,
+                    h.host.unwrap_or(""),
+                    h.path,
+                    h.status
+                );
+                if h.routed == Some(false) {
+                    out.push_str(" (no route)");
+                }
+            }
+            Self::AuthFailure { user } => out.push_str(user.unwrap_or("")),
+            Self::AuthSuccess { user } | Self::Session { user } | Self::InvalidUser { user } => {
+                out.push_str(user);
+            }
+            Self::Probe { what } => out.push_str(what),
+        }
+        if out.len() > MAX_WHAT {
+            let mut end = MAX_WHAT;
+            while !out.is_char_boundary(end) {
+                end -= 1;
+            }
+            out.truncate(end);
+            out.push('…');
+        }
+    }
+
+    #[must_use]
+    pub fn what(&self) -> String {
+        let mut out = String::new();
+        self.write_what(&mut out);
+        out
+    }
+}
+
+/// A line that matters, owned, on its way to the engine: the rules it matched (bits of the rule set it was
+/// matched against), or a login.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hit {
+    /// Unix seconds.
+    pub at: i64,
+    pub ip: IpAddr,
+    /// The source's index in the configuration.
+    pub source: u16,
+    /// `None` for a session (it only keeps an address trusted).
+    pub kind: Option<Kind>,
+    pub what: Box<str>,
+    /// For logins and sessions: the user.
+    pub user: Option<Box<str>>,
+    /// Bit `i`: rule `i` of the rule set with this generation matched.
+    pub matched: u64,
+    pub generation: u64,
 }
 
 #[cfg(test)]
@@ -159,19 +196,19 @@ mod tests {
     #[test]
     fn what() {
         let http = Event::Http(Http {
-            method: "GET".into(),
-            path: "/.env".into(),
+            method: "GET",
+            path: "/.env",
             status: 404,
-            host: Some("example.com".into()),
+            host: Some("example.com"),
             routed: Some(false),
             user_agent: None,
         });
         assert_eq!(http.what(), "GET example.com/.env → 404 (no route)");
-        let long = Event::Probe {
-            what: "é".repeat(400),
-        };
-        assert!(long.what().len() <= MAX_WHAT + "…".len());
-        assert_eq!(Event::Session { user: "a".into() }.kind(), None);
+        let long = "é".repeat(400);
+        let mut buf = String::from("old");
+        Event::Probe { what: &long }.write_what(&mut buf);
+        assert!(buf.len() <= MAX_WHAT + "…".len() && buf.starts_with('é'));
+        assert_eq!(Event::Session { user: "a" }.kind(), None);
         for kind in Kind::ALL {
             assert_eq!(Kind::from_code(kind.code()), Some(kind));
         }

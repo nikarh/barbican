@@ -1,0 +1,122 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, net, ip, rule, reason, created, until, lifted, lifted_by FROM ban\n         WHERE lifted IS NULL AND (until IS NULL OR until > ?) ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "ban",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "net",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "ban",
+            "name": "net"
+          }
+        }
+      },
+      {
+        "name": "ip",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "ban",
+            "name": "ip"
+          }
+        }
+      },
+      {
+        "name": "rule",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "ban",
+            "name": "rule"
+          }
+        }
+      },
+      {
+        "name": "reason",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "ban",
+            "name": "reason"
+          }
+        }
+      },
+      {
+        "name": "created",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "ban",
+            "name": "created"
+          }
+        }
+      },
+      {
+        "name": "until",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "ban",
+            "name": "until"
+          }
+        }
+      },
+      {
+        "name": "lifted",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "ban",
+            "name": "lifted"
+          }
+        }
+      },
+      {
+        "name": "lifted_by",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "ban",
+            "name": "lifted_by"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "46cb99be6cff2a93146e723fb3eaa22262004d1849697d3caef86fab05ff3e06"
+}

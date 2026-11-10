@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO ip (addr, country, asn, first_seen, last_seen, hits) VALUES (?, ?, ?, ?, ?, 1)\n         ON CONFLICT (addr) DO UPDATE SET last_seen = max(last_seen, excluded.last_seen), hits = hits + 1,\n             country = coalesce(excluded.country, country), asn = coalesce(excluded.asn, asn)\n         RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "ip",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "05c88c9b644ae9be30f08a37d09d73258968777e7937dbf4690332277be05616"
+}

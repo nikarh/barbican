@@ -1,3 +1,5 @@
 [env]
-# The query! macros check against .sqlx/ (mise run db:prepare refreshes it).
+# Queries are checked against the committed .sqlx/ data; `mise run db:prepare` refreshes it.
 SQLX_OFFLINE = "true"
+# Where `cargo test` writes the TypeScript bindings of crates/barbican/src/api.rs.
+TS_RS_EXPORT_DIR = { value = "web/src/api/generated", relative = true }

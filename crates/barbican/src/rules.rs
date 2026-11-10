@@ -288,16 +288,8 @@ pub fn defaults() -> Vec<Rule> {
     ]
 }
 
-/// A rule ready to match events.
-#[derive(Debug)]
-pub struct Compiled {
-    pub rule: Rule,
-    path: Option<Matcher>,
-    method: Option<Matcher>,
-    user_agent: Option<Matcher>,
-    user: Option<Matcher>,
-    what: Option<Matcher>,
-}
+/// The most rules a rule set holds: which ones matched a line is a 64-bit mask.
+pub const MAX_RULES: usize = 64;
 
 /// A condition's pattern: a regular expression, or with `!` before it, its negation.
 #[derive(Debug)]
@@ -323,6 +315,19 @@ impl Matcher {
     }
 }
 
+/// A rule ready to match events.
+#[derive(Debug)]
+pub struct Compiled {
+    pub rule: Rule,
+    path: Option<Matcher>,
+    method: Option<Matcher>,
+    user_agent: Option<Matcher>,
+    user: Option<Matcher>,
+    what: Option<Matcher>,
+    /// Bits of the rule set's feeds the `listed` condition names; 0 without the condition.
+    listed: u64,
+}
+
 #[derive(Debug, thiserror::Error)]
 #[error("rule {rule:?}, {field}: {message}")]
 pub struct InvalidRule {
@@ -332,67 +337,70 @@ pub struct InvalidRule {
 }
 
 impl Compiled {
-    pub fn new(rule: Rule) -> Result<Self, InvalidRule> {
+    /// `feeds` are the names of the rule set's feeds, in bit order.
+    pub fn new(rule: Rule, feeds: &[&str]) -> Result<Self, InvalidRule> {
+        let invalid = |field: &'static str, message: String| InvalidRule {
+            rule: rule.name.clone(),
+            field,
+            message,
+        };
         let compile = |field: &'static str, pattern: &Option<String>| {
             pattern
                 .as_deref()
                 .filter(|p| !p.is_empty())
                 .map(Matcher::new)
                 .transpose()
-                .map_err(|e| InvalidRule {
-                    rule: rule.name.clone(),
-                    field,
-                    message: e.to_string(),
-                })
+                .map_err(|e| invalid(field, e.to_string()))
         };
         let c = &rule.conditions;
-        let compiled = Self {
+        if rule.threshold == 0 {
+            return Err(invalid("threshold", "must be at least 1".to_owned()));
+        }
+        if !(8..=32).contains(&rule.prefix_v4) || !(16..=128).contains(&rule.prefix_v6) {
+            return Err(invalid(
+                "prefix",
+                "IPv4 prefixes from 8 to 32, IPv6 from 16 to 128".to_owned(),
+            ));
+        }
+        let http_only = c.path.is_some()
+            || c.method.is_some()
+            || c.user_agent.is_some()
+            || !c.status.is_empty()
+            || c.routed.is_some();
+        if http_only && rule.kind != Kind::Http {
+            return Err(invalid(
+                "conditions",
+                "path, method, status, route and user agent are for HTTP rules".to_owned(),
+            ));
+        }
+        // A feed that doesn't exist (any more) matches nothing; the rule then never fires.
+        let mut listed = 0;
+        for name in &c.listed {
+            if let Some(i) = feeds.iter().position(|f| f == name) {
+                listed |= 1u64 << i.min(63);
+            }
+        }
+        Ok(Self {
             path: compile("path", &c.path)?,
             method: compile("method", &c.method)?,
             user_agent: compile("userAgent", &c.user_agent)?,
             user: compile("user", &c.user)?,
             what: compile("what", &c.what)?,
+            listed,
             rule,
-        };
-        if compiled.rule.threshold == 0 {
-            return Err(InvalidRule {
-                rule: compiled.rule.name,
-                field: "threshold",
-                message: "must be at least 1".to_owned(),
-            });
-        }
-        if compiled.rule.prefix_v4 > 32
-            || compiled.rule.prefix_v6 > 128
-            || compiled.rule.prefix_v4 < 8
-            || compiled.rule.prefix_v6 < 16
-        {
-            return Err(InvalidRule {
-                rule: compiled.rule.name,
-                field: "prefix",
-                message: "IPv4 prefixes from 8 to 32, IPv6 from 16 to 128".to_owned(),
-            });
-        }
-        Ok(compiled)
+        })
     }
 
-    /// Whether the rule counts this event from this source. `listed` names the blocklists the address is in.
-    #[must_use]
-    pub fn matches(&self, source: &str, event: &Event, listed: &[&str]) -> bool {
-        let r = &self.rule;
-        if !r.enabled || event.kind() != Some(r.kind) {
+    /// Whether the rule counts this event, given the bits of the feeds that list its address. `what` writes the
+    /// event's description, for rules with a `what` condition (into a buffer the caller reuses).
+    fn matches(&self, event: &Event<'_>, listed: u64, what: &mut String) -> bool {
+        let c = &self.rule.conditions;
+        if !c.listed.is_empty() && self.listed & listed == 0 {
             return false;
         }
-        if !r.sources.is_empty() && !r.sources.iter().any(|s| s == source) {
-            return false;
-        }
-        let c = &r.conditions;
-        if !c.listed.is_empty() && !c.listed.iter().any(|l| listed.contains(&l.as_str())) {
-            return false;
-        }
-        let test = |regex: &Option<Matcher>, text: Option<&str>| {
-            regex
-                .as_ref()
-                .is_none_or(|re| text.is_some_and(|t| re.is_match(t)))
+        let test = |m: &Option<Matcher>, text: Option<&str>| {
+            m.as_ref()
+                .is_none_or(|m| text.is_some_and(|t| m.is_match(t)))
         };
         if let Event::Http(h) = event {
             if !c.status.is_empty() && !c.status.contains(&h.status) {
@@ -401,22 +409,148 @@ impl Compiled {
             if c.routed.is_some_and(|routed| h.routed != Some(routed)) {
                 return false;
             }
-            if !test(&self.path, Some(&h.path)) || !test(&self.method, Some(&h.method)) {
+            if !test(&self.path, Some(h.path))
+                || !test(&self.method, Some(h.method))
+                || !test(&self.user_agent, h.user_agent)
+            {
                 return false;
             }
-            if !test(&self.user_agent, h.user_agent.as_deref()) {
-                return false;
-            }
-        } else if self.path.is_some()
-            || self.method.is_some()
-            || self.user_agent.is_some()
-            || !c.status.is_empty()
-            || c.routed.is_some()
-        {
+        }
+        if !test(&self.user, event.user()) {
             return false;
         }
-        test(&self.user, event.user())
-            && (self.what.is_none() || test(&self.what, Some(&event.what())))
+        if let Some(m) = &self.what {
+            if what.is_empty() {
+                event.write_what(what);
+            }
+            return m.is_match(what);
+        }
+        true
+    }
+}
+
+/// Everything that decides, line by line, whether a line matters: the rules, what they apply to, and the addresses
+/// no rule acts on. Immutable: a new one replaces it when rules, feeds or lists change, and log sources share it.
+#[derive(Debug, Default)]
+pub struct RuleSet {
+    /// Changes with every new rule set, so the engine knows which rules a hit's bits refer to.
+    pub generation: u64,
+    pub rules: Vec<Compiled>,
+    /// Per source index: the bits of the rules that look at that source.
+    by_source: Vec<u64>,
+    /// Per kind (by `Kind::code`): the bits of the enabled rules of that kind.
+    by_kind: [u64; 6],
+    /// Exempt addresses and the allow list.
+    allowed: barbican_common::net::NetSet,
+    /// Feeds, in bit order, for `listed` conditions.
+    feeds: Vec<std::sync::Arc<barbican_common::net::NetSet>>,
+    /// Whether any rule has a `listed` condition (otherwise feeds aren't looked up at all).
+    any_listed: bool,
+}
+
+impl RuleSet {
+    /// `sources` are the configured sources' names in index order; `feeds` the enabled feeds' names and contents.
+    pub fn new(
+        generation: u64,
+        rules: Vec<Rule>,
+        sources: &[&str],
+        feeds: &[(&str, std::sync::Arc<barbican_common::net::NetSet>)],
+        allowed: barbican_common::net::NetSet,
+    ) -> Result<Self, InvalidRule> {
+        let feed_names: Vec<&str> = feeds.iter().take(MAX_RULES).map(|(n, _)| *n).collect();
+        let compiled = rules
+            .into_iter()
+            .take(MAX_RULES)
+            .map(|r| Compiled::new(r, &feed_names))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut by_source = vec![0u64; sources.len()];
+        let mut by_kind = [0u64; 6];
+        for (i, c) in compiled.iter().enumerate() {
+            if !c.rule.enabled {
+                continue;
+            }
+            let bit = 1u64 << i;
+            if let Some(k) = usize::try_from(c.rule.kind.code())
+                .ok()
+                .and_then(|k| by_kind.get_mut(k))
+            {
+                *k |= bit;
+            }
+            for (s, name) in by_source.iter_mut().zip(sources) {
+                if c.rule.sources.is_empty() || c.rule.sources.iter().any(|r| r == name) {
+                    *s |= bit;
+                }
+            }
+        }
+        Ok(Self {
+            generation,
+            any_listed: compiled
+                .iter()
+                .any(|c| !c.rule.conditions.listed.is_empty()),
+            rules: compiled,
+            by_source,
+            by_kind,
+            allowed,
+            feeds: feeds
+                .iter()
+                .take(MAX_RULES)
+                .map(|(_, set)| std::sync::Arc::clone(set))
+                .collect(),
+        })
+    }
+
+    /// Whether no rule acts on the address (exempt, or on the allow list).
+    #[must_use]
+    pub fn allowed(&self, ip: std::net::IpAddr) -> bool {
+        self.allowed.contains(ip)
+    }
+
+    /// The bits of the rules that count this event from source `source`. `what` is a buffer for the event's
+    /// description, reused across lines; it is cleared first, and holds the description if a rule needed it.
+    #[must_use]
+    pub fn matches(
+        &self,
+        source: u16,
+        ip: std::net::IpAddr,
+        event: &Event<'_>,
+        what: &mut String,
+    ) -> u64 {
+        what.clear();
+        let Some(kind) = event.kind() else { return 0 };
+        let by_kind = usize::try_from(kind.code())
+            .ok()
+            .and_then(|k| self.by_kind.get(k))
+            .copied()
+            .unwrap_or(0);
+        let mut candidates = by_kind
+            & self
+                .by_source
+                .get(usize::from(source))
+                .copied()
+                .unwrap_or(0);
+        if candidates == 0 || self.allowed.contains(ip) {
+            return 0;
+        }
+        let listed = if self.any_listed {
+            self.feeds
+                .iter()
+                .enumerate()
+                .filter(|(_, set)| set.contains(ip))
+                .fold(0u64, |mask, (i, _)| mask | 1u64 << i)
+        } else {
+            0
+        };
+        let mut matched = 0;
+        while candidates != 0 {
+            let i = candidates.trailing_zeros();
+            candidates &= candidates - 1;
+            if let Some(rule) = self.rules.get(i as usize)
+                && rule.matches(event, listed, what)
+            {
+                matched |= 1u64 << i;
+            }
+        }
+        matched
     }
 }
 
@@ -432,33 +566,55 @@ pub fn country_lengths(policy: &Policy) -> BTreeMap<String, u64> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use barbican_common::net::NetSet;
+
     use super::*;
     use crate::signal::Http;
 
-    fn http(method: &str, path: &str, status: u16, routed: Option<bool>) -> Event {
+    fn http<'a>(method: &'a str, path: &'a str, status: u16, routed: Option<bool>) -> Event<'a> {
         Event::Http(Http {
-            method: method.into(),
-            path: path.into(),
+            method,
+            path,
             status,
             routed,
             ..Http::default()
         })
     }
 
-    fn by_name(name: &str) -> Compiled {
-        Compiled::new(defaults().into_iter().find(|r| r.name == name).unwrap()).unwrap()
+    fn default_rule(name: &str) -> Rule {
+        defaults().into_iter().find(|r| r.name == name).unwrap()
     }
+
+    /// A rule set of one rule over sources `web` and `ssh`.
+    fn set(rule: Rule) -> RuleSet {
+        let feeds = [(
+            "tor",
+            Arc::new(NetSet::new(&["203.0.113.0/24".parse().unwrap()])),
+        )];
+        let allowed = NetSet::new(&["10.0.0.0/8".parse().unwrap()]);
+        RuleSet::new(1, vec![rule], &["web", "ssh"], &feeds, allowed).unwrap()
+    }
+
+    fn hit(set: &RuleSet, source: u16, ip: &str, event: &Event<'_>) -> bool {
+        let mut what = String::new();
+        set.matches(source, ip.parse().unwrap(), event, &mut what) != 0
+    }
+
+    const WEB: u16 = 0;
+    const SSH: u16 = 1;
+    const IP: &str = "198.51.100.1";
 
     #[test]
     fn defaults_compile() {
-        for rule in defaults() {
-            Compiled::new(rule).unwrap();
-        }
+        let set = RuleSet::new(1, defaults(), &["a"], &[], NetSet::default()).unwrap();
+        assert_eq!(set.rules.len(), defaults().len());
     }
 
     #[test]
     fn exploit_probes() {
-        let r = by_name("Exploit probes");
+        let r = set(default_rule("Exploit probes"));
         for path in [
             "/.env",
             "/.env.production",
@@ -476,7 +632,7 @@ mod tests {
             "/x?${jndi:ldap://x}",
         ] {
             assert!(
-                r.matches("web", &http("GET", path, 404, Some(true)), &[]),
+                hit(&r, WEB, IP, &http("GET", path, 404, Some(true))),
                 "{path}"
             );
         }
@@ -491,7 +647,7 @@ mod tests {
             "/photos/2024/IMG.jpg",
         ] {
             assert!(
-                !r.matches("web", &http("GET", path, 200, Some(true)), &[]),
+                !hit(&r, WEB, IP, &http("GET", path, 200, Some(true))),
                 "{path}"
             );
         }
@@ -499,7 +655,7 @@ mod tests {
 
     #[test]
     fn unusual_methods() {
-        let r = by_name("Unusual methods");
+        let r = set(default_rule("Unusual methods"));
         for m in [
             "CONNECT",
             "CFKQ",
@@ -511,73 +667,125 @@ mod tests {
             "TOLQ",
             "WEWP",
         ] {
-            assert!(r.matches("web", &http(m, "/", 405, Some(true)), &[]), "{m}");
+            assert!(hit(&r, WEB, IP, &http(m, "/", 405, Some(true))), "{m}");
         }
         for m in [
             "GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "PROPFIND", "MKCOL",
             "REPORT", "UNLOCK",
         ] {
-            assert!(
-                !r.matches("web", &http(m, "/", 200, Some(true)), &[]),
-                "{m}"
-            );
+            assert!(!hit(&r, WEB, IP, &http(m, "/", 200, Some(true))), "{m}");
         }
     }
 
     #[test]
     fn conditions() {
-        let r = by_name("No known host");
-        assert!(r.matches("web", &http("GET", "/", 404, Some(false)), &[]));
-        assert!(!r.matches("web", &http("GET", "/", 404, Some(true)), &[]));
-        assert!(!r.matches("web", &http("GET", "/", 404, None), &[]));
-        assert!(!r.matches("web", &Event::Probe { what: "x".into() }, &[]));
-
-        let root = by_name("Root logins");
-        assert!(root.matches(
-            "ssh",
-            &Event::AuthFailure {
-                user: Some("root".into())
-            },
-            &[]
+        let r = set(default_rule("No known host"));
+        assert!(hit(&r, WEB, IP, &http("GET", "/", 404, Some(false))));
+        assert!(!hit(&r, WEB, IP, &http("GET", "/", 404, Some(true))));
+        assert!(!hit(&r, WEB, IP, &http("GET", "/", 404, None)));
+        assert!(!hit(&r, WEB, IP, &Event::Probe { what: "x" }));
+        // Allowed addresses match nothing.
+        assert!(!hit(
+            &r,
+            WEB,
+            "10.1.1.1",
+            &http("GET", "/", 404, Some(false))
         ));
-        assert!(!root.matches(
-            "ssh",
-            &Event::AuthFailure {
-                user: Some("rooted".into())
-            },
-            &[]
-        ));
-        assert!(!root.matches("ssh", &Event::AuthFailure { user: None }, &[]));
 
-        let mut rule = by_name("Failed logins").rule;
+        let root = set(default_rule("Root logins"));
+        assert!(hit(
+            &root,
+            SSH,
+            IP,
+            &Event::AuthFailure { user: Some("root") }
+        ));
+        assert!(!hit(
+            &root,
+            SSH,
+            IP,
+            &Event::AuthFailure {
+                user: Some("rooted")
+            }
+        ));
+        assert!(!hit(&root, SSH, IP, &Event::AuthFailure { user: None }));
+
+        let mut rule = default_rule("Failed logins");
         rule.sources = vec!["ssh".into()];
         rule.conditions.listed = vec!["tor".into()];
-        let r = Compiled::new(rule).unwrap();
+        let r = set(rule);
         let fail = Event::AuthFailure { user: None };
-        assert!(r.matches("ssh", &fail, &["tor"]));
-        assert!(!r.matches("ssh", &fail, &[]));
-        assert!(!r.matches("web", &fail, &["tor"]));
+        assert!(hit(&r, SSH, "203.0.113.4", &fail));
+        assert!(!hit(&r, SSH, IP, &fail));
+        assert!(!hit(&r, WEB, "203.0.113.4", &fail));
 
-        let mut rule = by_name("Failed logins").rule;
-        rule.conditions.path = Some("x".into());
-        assert!(!Compiled::new(rule).unwrap().matches("ssh", &fail, &[]));
+        let mut rule = default_rule("Failed logins");
+        rule.conditions.listed = vec!["gone".into()];
+        assert!(!hit(&set(rule), SSH, "203.0.113.4", &fail));
 
-        let mut rule = by_name("Failed logins").rule;
+        let mut rule = default_rule("Failed logins");
         rule.enabled = false;
-        assert!(!Compiled::new(rule).unwrap().matches("ssh", &fail, &[]));
+        assert!(!hit(&set(rule), SSH, IP, &fail));
+
+        let mut rule = default_rule("Protocol probes");
+        rule.conditions.what = Some("!banner".into());
+        let r = set(rule);
+        assert!(hit(
+            &r,
+            SSH,
+            IP,
+            &Event::Probe {
+                what: "protocol error"
+            }
+        ));
+        let mut what = String::new();
+        assert_eq!(
+            r.matches(
+                SSH,
+                IP.parse().unwrap(),
+                &Event::Probe {
+                    what: "invalid banner"
+                },
+                &mut what
+            ),
+            0
+        );
+        assert_eq!(what, "invalid banner");
+    }
+
+    #[test]
+    fn masks() {
+        let mut rules = defaults();
+        rules[1].sources = vec!["ssh".into()];
+        let set = RuleSet::new(1, rules, &["web", "ssh"], &[], NetSet::default()).unwrap();
+        let mut what = String::new();
+        let ip = IP.parse().unwrap();
+        // "/.env" without a route: exploit probes (bit 0); "no known host" (bit 1) only looks at ssh.
+        let event = http("GET", "/.env", 404, Some(false));
+        // Bit 3: "many errors" counts 404s.
+        assert_eq!(set.matches(WEB, ip, &event, &mut what), 0b1001);
+        assert_eq!(set.matches(SSH, ip, &event, &mut what), 0b1011);
+        assert_eq!(set.matches(7, ip, &event, &mut what), 0);
+        assert_eq!(
+            set.matches(WEB, ip, &Event::Session { user: "a" }, &mut what),
+            0
+        );
     }
 
     #[test]
     fn invalid_rules() {
-        let mut rule = by_name("Exploit probes").rule;
+        let compile = |rule| Compiled::new(rule, &[]);
+        let mut rule = default_rule("Exploit probes");
         rule.conditions.path = Some("(".into());
-        assert_eq!(Compiled::new(rule).unwrap_err().field, "path");
-        let mut rule = by_name("Exploit probes").rule;
+        assert_eq!(compile(rule).unwrap_err().field, "path");
+        let mut rule = default_rule("Exploit probes");
         rule.threshold = 0;
-        assert!(Compiled::new(rule).is_err());
-        let mut rule = by_name("Exploit probes").rule;
+        assert!(compile(rule).is_err());
+        let mut rule = default_rule("Exploit probes");
         rule.prefix_v4 = 4;
-        assert!(Compiled::new(rule).is_err());
+        assert!(compile(rule).is_err());
+        let mut rule = default_rule("Failed logins");
+        rule.conditions.path = Some("x".into());
+        assert_eq!(compile(rule).unwrap_err().field, "conditions");
     }
 
     #[test]
@@ -623,7 +831,7 @@ mod tests {
 
     #[test]
     fn json_shape() {
-        let json = serde_json::to_value(by_name("Exploit probes").rule).unwrap();
+        let json = serde_json::to_value(default_rule("Exploit probes")).unwrap();
         assert_eq!(
             json["ban"],
             serde_json::json!({"type": "secs", "secs": 365 * DAY})

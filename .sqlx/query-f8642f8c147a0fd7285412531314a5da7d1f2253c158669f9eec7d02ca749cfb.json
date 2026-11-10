@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT country, asn, hits, last_seen FROM ip",
+  "describe": {
+    "columns": [
+      {
+        "name": "country",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "ip",
+            "name": "country"
+          }
+        }
+      },
+      {
+        "name": "asn",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "ip",
+            "name": "asn"
+          }
+        }
+      },
+      {
+        "name": "hits",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "ip",
+            "name": "hits"
+          }
+        }
+      },
+      {
+        "name": "last_seen",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "ip",
+            "name": "last_seen"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "f8642f8c147a0fd7285412531314a5da7d1f2253c158669f9eec7d02ca749cfb"
+}

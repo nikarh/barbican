@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, definition, fetched, count, error, etag, data FROM feed ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "feed",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "definition",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "feed",
+            "name": "definition"
+          }
+        }
+      },
+      {
+        "name": "fetched",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "feed",
+            "name": "fetched"
+          }
+        }
+      },
+      {
+        "name": "count",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "feed",
+            "name": "count"
+          }
+        }
+      },
+      {
+        "name": "error",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "feed",
+            "name": "error"
+          }
+        }
+      },
+      {
+        "name": "etag",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "feed",
+            "name": "etag"
+          }
+        }
+      },
+      {
+        "name": "data",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "feed",
+            "name": "data"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "d6f25aa5ce2709f2d57198d6e4de14be7e6ce27d70d1eb23ca8b7cbe39b103c4"
+}

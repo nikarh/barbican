@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, net, kind, note, created, until FROM entry ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "entry",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "net",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "entry",
+            "name": "net"
+          }
+        }
+      },
+      {
+        "name": "kind",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "entry",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "name": "note",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "entry",
+            "name": "note"
+          }
+        }
+      },
+      {
+        "name": "created",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "entry",
+            "name": "created"
+          }
+        }
+      },
+      {
+        "name": "until",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "entry",
+            "name": "until"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "88cee6abe7936961bcb3143e4e19a2cd951ca6e0c910c0d7f10021c28d695536"
+}

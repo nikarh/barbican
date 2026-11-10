@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO rule (position, definition) VALUES ((SELECT coalesce(max(position), 0) + 1 FROM rule), ?)\n         RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "rule",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1249e7426dad3b5926601165dce6600c624ad3ef19643365102b3ec0f7035a8d"
+}

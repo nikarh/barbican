@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO asn (number, name) VALUES (?, ?) ON CONFLICT (number) DO UPDATE SET name = excluded.name\n         WHERE name != excluded.name",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "acc71f256b5bf96b1dc41364efe44151ffaa4ec0cc9486629704fe46afe22cc1"
+}

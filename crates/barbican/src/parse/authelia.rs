@@ -1,116 +1,137 @@
 //! Authelia, in its text (logfmt) or JSON log format: failed and successful logins, and, at the debug level, every
 //! authorization of a signed-in user, which keeps that user's address trusted.
+//!
+//! Text lines aren't split into all their fields: only `msg` and `remote_ip` are looked for.
 
-use std::collections::HashMap;
+use std::borrow::Cow;
 use std::net::IpAddr;
 use std::sync::LazyLock;
 
-use regex::Regex;
-use serde_json::Value;
+use regex::{CaptureLocations, Regex};
+use serde::Deserialize;
 
 use crate::signal::Event;
 
 static UNSUCCESSFUL: LazyLock<Option<Regex>> = LazyLock::new(|| {
-    Regex::new(r"^Unsuccessful .*authentication attempt (?:made )?by user '(?P<user>[^']*)'").ok()
+    Regex::new(r"^Unsuccessful .*authentication attempt (?:made )?by user '([^']*)'").ok()
 });
 static SUCCESSFUL: LazyLock<Option<Regex>> = LazyLock::new(|| {
-    Regex::new(r"^Successful .*authentication attempt (?:made )?by user '(?P<user>[^']*)'").ok()
+    Regex::new(r"^Successful .*authentication attempt (?:made )?by user '([^']*)'").ok()
 });
-static SUBJECT: LazyLock<Option<Regex>> = LazyLock::new(|| {
-    Regex::new(r"^Check authorization of subject username=(?P<user>\S+) groups=\S* ip=(?P<ip>\S+) ")
-        .ok()
-});
+const SUBJECT: &str = "Check authorization of subject username=";
 
-pub fn parse(line: &str) -> Option<(IpAddr, Event)> {
-    let fields = if line.starts_with('{') {
-        json_fields(line)?
-    } else {
-        logfmt(line)
-    };
-    let msg = fields.get("msg")?;
-    if let Some(c) = SUBJECT.as_ref().and_then(|r| r.captures(msg)) {
-        let ip = super::ip(c.name("ip")?.as_str())?;
-        return Some((
-            ip,
-            Event::Session {
-                user: c.name("user")?.as_str().to_owned(),
-            },
-        ));
-    }
-    let ip = super::ip(fields.get("remote_ip")?)?;
-    if let Some(c) = UNSUCCESSFUL.as_ref().and_then(|r| r.captures(msg)) {
-        let user = c
-            .name("user")
-            .map(|u| u.as_str().to_owned())
-            .filter(|u| !u.is_empty());
-        return Some((ip, Event::AuthFailure { user }));
-    }
-    if let Some(c) = SUCCESSFUL.as_ref().and_then(|r| r.captures(msg)) {
-        return Some((
-            ip,
-            Event::AuthSuccess {
-                user: c.name("user")?.as_str().to_owned(),
-            },
-        ));
+#[derive(Debug, Default)]
+pub struct Authelia {
+    locations: Option<CaptureLocations>,
+    /// An unescaped JSON `msg`.
+    buffer: String,
+}
+
+#[derive(Deserialize)]
+struct Line<'a> {
+    #[serde(borrow, default)]
+    msg: Option<super::Text<'a>>,
+    #[serde(borrow, default)]
+    remote_ip: Option<super::Text<'a>>,
+}
+
+/// The value of `key=` in a logfmt line: up to the closing quote (escapes left in) or the next space.
+fn logfmt<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    let mut from = 0;
+    while let Some(found) = line.get(from..)?.find(key) {
+        let at = from + found;
+        from = at + key.len();
+        let starts_token = at == 0
+            || line
+                .as_bytes()
+                .get(at - 1)
+                .is_some_and(u8::is_ascii_whitespace);
+        if !starts_token || line.as_bytes().get(from) != Some(&b'=') {
+            continue;
+        }
+        let rest = line.get(from + 1..)?;
+        if let Some(quoted) = rest.strip_prefix('"') {
+            let bytes = quoted.as_bytes();
+            let mut i = 0;
+            while i < bytes.len() {
+                match bytes.get(i) {
+                    Some(b'\\') => i += 2,
+                    Some(b'"') => return quoted.get(..i),
+                    _ => i += 1,
+                }
+            }
+            return Some(quoted);
+        }
+        return rest.split_whitespace().next().or(Some(""));
     }
     None
 }
 
-fn json_fields(line: &str) -> Option<HashMap<String, String>> {
-    let value: Value = serde_json::from_str(line).ok()?;
-    let object = value.as_object()?;
-    Some(
-        object
-            .iter()
-            .filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_owned())))
-            .collect(),
-    )
-}
-
-/// `key=value key="quoted \"value\""` pairs.
-fn logfmt(line: &str) -> HashMap<String, String> {
-    let mut fields = HashMap::new();
-    let mut chars = line.chars().peekable();
-    loop {
-        while chars.next_if(|c| c.is_whitespace()).is_some() {}
-        let key: String =
-            std::iter::from_fn(|| chars.next_if(|c| *c != '=' && !c.is_whitespace())).collect();
-        if key.is_empty() && chars.peek().is_none() {
-            break;
-        }
-        if chars.next_if_eq(&'=').is_none() {
-            if chars.peek().is_none() {
-                break;
-            }
-            continue;
-        }
-        let mut value = String::new();
-        if chars.next_if_eq(&'"').is_some() {
-            while let Some(c) = chars.next() {
-                match c {
-                    '\\' => {
-                        if let Some(escaped) = chars.next() {
-                            value.push(escaped);
-                        }
-                    }
-                    '"' => break,
-                    c => value.push(c),
+impl Authelia {
+    pub fn parse<'s>(&'s mut self, line: &'s str) -> Option<(IpAddr, Event<'s>)> {
+        let (msg, remote_ip): (&'s str, Option<&'s str>) = if line.starts_with('{') {
+            let parsed: Line<'s> = serde_json::from_str(line).ok()?;
+            // Addresses have nothing to escape.
+            let remote_ip = match parsed.remote_ip.map(|t| t.0) {
+                Some(Cow::Borrowed(ip)) => Some(ip),
+                _ => None,
+            };
+            let msg = match parsed.msg?.0 {
+                Cow::Borrowed(m) => m,
+                Cow::Owned(m) => {
+                    self.buffer = m;
+                    self.buffer.as_str()
                 }
-            }
+            };
+            (msg, remote_ip)
         } else {
-            value.extend(std::iter::from_fn(|| chars.next_if(|c| !c.is_whitespace())));
+            (logfmt(line, "msg")?, logfmt(line, "remote_ip"))
+        };
+
+        if let Some(rest) = msg.strip_prefix(SUBJECT) {
+            // `<user> groups=<groups> ip=<ip> and object ...`
+            let (user, rest) = rest.split_once(' ')?;
+            if user.is_empty() {
+                return None;
+            }
+            let ip = rest.split(' ').find_map(|t| t.strip_prefix("ip="))?;
+            return Some((super::ip(ip)?, Event::Session { user }));
         }
-        fields.insert(key, value);
+        let ip = super::ip(remote_ip?)?;
+        let (regex, failure) = if msg.starts_with("Unsuccessful ") {
+            (UNSUCCESSFUL.as_ref()?, true)
+        } else if msg.starts_with("Successful ") {
+            (SUCCESSFUL.as_ref()?, false)
+        } else {
+            return None;
+        };
+        let locations = self
+            .locations
+            .get_or_insert_with(|| regex.capture_locations());
+        regex.captures_read(locations, msg)?;
+        let user = super::group(locations, Some(1), msg)?;
+        Some((
+            ip,
+            if failure {
+                Event::AuthFailure {
+                    user: (!user.is_empty()).then_some(user),
+                }
+            } else {
+                Event::AuthSuccess { user }
+            },
+        ))
     }
-    fields
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn p(line: &str) -> Option<(String, Event)> {
-        parse(line).map(|(ip, e)| (ip.to_string(), e))
+    fn p(line: &str) -> Option<(String, String)> {
+        let mut parser = Authelia::default();
+        parser
+            .parse(line)
+            .map(|(ip, e)| (ip.to_string(), format!("{e:?}")))
     }
 
     #[test]
@@ -121,9 +142,7 @@ mod tests {
             ),
             Some((
                 "203.0.113.20".into(),
-                Event::AuthFailure {
-                    user: Some("alice".into())
-                }
+                r#"AuthFailure { user: Some("alice") }"#.into()
             ))
         );
         assert_eq!(
@@ -132,23 +151,15 @@ mod tests {
             ),
             Some((
                 "192.0.2.8".into(),
-                Event::AuthSuccess {
-                    user: "alice".into()
-                }
+                r#"AuthSuccess { user: "alice" }"#.into()
             ))
         );
         assert_eq!(
             p(
                 r#"time="2026-10-12T21:01:10Z" level=debug msg="Check authorization of subject username=alice groups=admins,media ip=192.0.2.8 and object https://app.example.com/ (method GET)." method=GET path=/api/authz/forward-auth remote_ip=172.20.0.3"#
             ),
-            Some((
-                "192.0.2.8".into(),
-                Event::Session {
-                    user: "alice".into()
-                }
-            ))
+            Some(("192.0.2.8".into(), r#"Session { user: "alice" }"#.into()))
         );
-        // Anonymous requests aren't sessions.
         assert_eq!(
             p(
                 r#"level=debug msg="Check authorization of subject username= groups= ip=203.0.113.1 and object https://a.example.com/ (method GET).""#
@@ -171,19 +182,28 @@ mod tests {
             ),
             Some((
                 "2001:db8::9".into(),
-                Event::AuthFailure {
-                    user: Some("bob".into())
-                }
+                r#"AuthFailure { user: Some("bob") }"#.into()
+            ))
+        );
+        assert_eq!(
+            p(
+                r#"{"msg":"Unsuccessful 1FA authentication attempt by user 'böb'","remote_ip":"192.0.2.1"}"#
+            ),
+            Some((
+                "192.0.2.1".into(),
+                r#"AuthFailure { user: Some("böb") }"#.into()
             ))
         );
     }
 
     #[test]
     fn logfmt_values() {
-        let f = logfmt(r#"a=1 b="two words" c="esc \"q\"" bare d="#);
-        assert_eq!(f["a"], "1");
-        assert_eq!(f["b"], "two words");
-        assert_eq!(f["c"], "esc \"q\"");
-        assert_eq!(f["d"], "");
+        let line = r#"a=1 b="two words" c="esc \"q\"" xmsg=no msg=yes d="#;
+        assert_eq!(logfmt(line, "a"), Some("1"));
+        assert_eq!(logfmt(line, "b"), Some("two words"));
+        assert_eq!(logfmt(line, "c"), Some(r#"esc \"q\""#));
+        assert_eq!(logfmt(line, "msg"), Some("yes"));
+        assert_eq!(logfmt(line, "d"), Some(""));
+        assert_eq!(logfmt(line, "e"), None);
     }
 }

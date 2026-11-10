@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT position FROM cursor WHERE source = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "position",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "cursor",
+            "name": "position"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ab5b0171c1f1c341b7fdd1e39f52e1f02c1d7374da26b5fa94f1600792f9cc8a"
+}

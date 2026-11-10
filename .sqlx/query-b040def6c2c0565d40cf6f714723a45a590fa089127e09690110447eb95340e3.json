@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO what (kind, text) VALUES (?, ?) ON CONFLICT (kind, text) DO UPDATE SET kind = excluded.kind\n         RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "what",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b040def6c2c0565d40cf6f714723a45a590fa089127e09690110447eb95340e3"
+}

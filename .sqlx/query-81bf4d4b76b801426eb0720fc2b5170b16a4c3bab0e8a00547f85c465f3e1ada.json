@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO cursor (source, position) VALUES (?, ?) ON CONFLICT (source) DO UPDATE SET position = excluded.position",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "81bf4d4b76b801426eb0720fc2b5170b16a4c3bab0e8a00547f85c465f3e1ada"
+}
