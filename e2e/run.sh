@@ -49,7 +49,8 @@ wait "${server_up}"
 
 log "copying into the server VM"
 "${vm}" server ssh 'sudo mkdir -p /opt/barbican && sudo chown debian /opt/barbican'
-for f in "${bin}/barbican" "${bin}/barbican-edge-ipset" e2e/rpc.py e2e/server.sh dist/barbican.service "${geo}"; do
+for f in "${bin}/barbican" "${bin}/barbican-edge-ipset" e2e/rpc.py e2e/server.sh dist/barbican.service dist/barbican.sysusers dist/barbican.tmpfiles \
+  Dockerfile.ci "${geo}"; do
   "${vm}" server put "${f}" "/opt/barbican/$(basename "${f}")"
 done
 "${vm}" server ssh 'chmod +x /opt/barbican/barbican /opt/barbican/barbican-edge-ipset /opt/barbican/server.sh'
