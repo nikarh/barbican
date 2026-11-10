@@ -75,6 +75,14 @@ body {
   color: var(--ink-faint);
 }
 
+/* A screen that fills the height left below the header (and above the phone's tab bar): its last child, a grid,
+ * takes what is left. */
+.fill {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
+}
+
 a.plain {
   color: inherit;
   text-decoration: none;

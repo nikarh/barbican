@@ -69,7 +69,7 @@ export function BansScreen() {
   )
 
   return (
-    <Stack gap="sm">
+    <Stack gap="sm" className="fill">
       <Group gap="sm" wrap="wrap">
         <TextInput
           placeholder="Address, prefix, country code or reason"
@@ -106,7 +106,6 @@ export function BansScreen() {
         onRowClick={(row) => {
           navigate('addresses', { ip: row.ip ?? row.net.split('/')[0] ?? row.net })
         }}
-        height="calc(100dvh - var(--header-height) - var(--tabbar-height) - 110px)"
       />
       <BanDialog
         opened={banning}

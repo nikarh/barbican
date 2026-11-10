@@ -14,6 +14,8 @@ import {
 import { AgGridReact } from 'ag-grid-react'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 
+import classes from './Grid.module.css'
+
 ModuleRegistry.registerModules([
   InfiniteRowModelModule,
   CellStyleModule,
@@ -47,20 +49,19 @@ export interface PageResult<T> {
 }
 
 /** A grid that loads its rows page by page as it scrolls (ag-grid's infinite row model). `fetch` gets an offset
- * and a limit; whenever `query` changes (filters), the grid starts over. */
+ * and a limit; whenever `query` changes (filters), the grid starts over. It takes the height its parent (a `.fill`
+ * screen) has left, and no less than a few rows. */
 export function InfiniteGrid<T>({
   columns,
   fetch,
   query,
   onRowClick,
-  height,
   pageSize = 100,
 }: {
   columns: ColDef<T>[]
   fetch: (offset: number, limit: number) => Promise<PageResult<T>>
   query: string
   onRowClick?: (row: T) => void
-  height: string
   pageSize?: number
 }) {
   const api = useRef<GridApi<T> | null>(null)
@@ -107,7 +108,7 @@ export function InfiniteGrid<T>({
   )
 
   return (
-    <div style={{ height }}>
+    <div className={classes.grid}>
       <AgGridReact<T>
         theme={gridTheme}
         columnDefs={columns}
