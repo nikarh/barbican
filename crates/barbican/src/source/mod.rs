@@ -1,7 +1,7 @@
 //! Log sources: where lines come from. Each runs on its own, reconnecting (with a growing pause) when its input
 //! goes away, and continues where it stopped after a restart of the agent.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
@@ -30,7 +30,8 @@ pub struct Feeder {
     prefilter: Prefilter,
     tx: mpsc::Sender<Hit>,
     counters: Arc<SourceCounters>,
-    cursor: Option<String>,
+    /// Shared with the agent, which saves it as it stops.
+    cursor: Arc<Mutex<Option<String>>>,
     cursor_at: Instant,
 }
 
@@ -48,13 +49,17 @@ impl Feeder {
         if let Ok(mut all) = app.source_counters.lock() {
             all.insert(source.name.clone(), Arc::clone(&counters));
         }
+        let cursor = Arc::new(Mutex::new(None));
+        if let Ok(mut all) = app.unsaved_cursors.lock() {
+            all.insert(source.name.clone(), Arc::clone(&cursor));
+        }
         Self {
             app,
             name: source.name.clone(),
             prefilter,
             tx,
             counters,
-            cursor: None,
+            cursor,
             cursor_at: now,
         }
     }
@@ -119,7 +124,9 @@ impl Feeder {
 
     /// Remembers where reading got to; saved every few seconds (and by [`Self::flush_cursor`]).
     pub async fn cursor(&mut self, position: String) {
-        self.cursor = Some(position);
+        if let Ok(mut cursor) = self.cursor.lock() {
+            *cursor = Some(position);
+        }
         if self.cursor_at.elapsed() >= CURSOR_EVERY {
             self.flush_cursor().await;
         }
@@ -127,16 +134,38 @@ impl Feeder {
 
     pub async fn flush_cursor(&mut self) {
         self.cursor_at = Instant::now();
-        if let Some(position) = self.cursor.take()
-            && let Ok(mut conn) = self.app.db.pool.acquire().await
-            && let Err(e) = crate::db::set_cursor(&mut conn, &self.name, &position).await
-        {
-            tracing::warn!(source = %self.name, error = %e, "Saving where the source got to failed");
+        let position = self.cursor.lock().ok().and_then(|mut c| c.take());
+        if let Some(position) = position {
+            save_cursor(&self.app, &self.name, &position).await;
         }
     }
 
     pub fn app(&self) -> &Arc<App> {
         &self.app
+    }
+}
+
+async fn save_cursor(app: &App, name: &str, position: &str) {
+    if let Ok(mut conn) = app.db.pool.acquire().await
+        && let Err(e) = crate::db::set_cursor(&mut conn, name, position).await
+    {
+        tracing::warn!(source = %name, error = %e, "Saving where the source got to failed");
+    }
+}
+
+/// Saves where every source got to, as the agent stops: otherwise its last few seconds of lines would be read
+/// again after a restart, and a ban lifted meanwhile would come back.
+pub async fn save_cursors(app: &App) {
+    let unsaved: Vec<(String, String)> = app.unsaved_cursors.lock().map_or_else(
+        |_| Vec::new(),
+        |all| {
+            all.iter()
+                .filter_map(|(name, c)| Some((name.clone(), c.lock().ok()?.take()?)))
+                .collect()
+        },
+    );
+    for (name, position) in unsaved {
+        save_cursor(app, &name, &position).await;
     }
 }
 

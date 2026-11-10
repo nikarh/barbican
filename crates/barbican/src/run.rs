@@ -432,6 +432,7 @@ pub async fn run(config: Config, dry_run: bool) -> Result<(), String> {
     tokio::select! {
         () = stop => {
             tracing::info!("Stopping; the firewall's blocks stay in place");
+            source::save_cursors(&app).await;
             Ok(())
         }
         Some(result) = servers.join_next(), if !servers.is_empty() => {
