@@ -335,7 +335,9 @@ systemctl restart barbican
 say "the UI in a container"
 sed -i 's#^listen = "127.0.0.1:7381"$#socket = "/run/barbican-ui/ui.sock"\nsocket_group = "barbican-ui"#' /etc/barbican/config.toml
 systemctl restart barbican
-if [[ $(stat -c '%a %G' /run/barbican-ui/ui.sock 2>/dev/null) == "660 barbican-ui" ]]; then
+# Ready (sd_notify) comes before the UI's socket is bound.
+socket_ready() { [[ $(stat -c '%a %G' /run/barbican-ui/ui.sock 2>/dev/null) == "660 barbican-ui" ]]; }
+if wait_until 10 socket_ready; then
   pass "the UI's socket is barbican-ui's alone (0660)"
 else
   fail "the socket: $(ls -la /run/barbican-ui 2>&1)"
