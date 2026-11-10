@@ -92,7 +92,12 @@ pub async fn run(inputs: &[ReplayInput], geo: Option<PathBuf>) -> Result<Summary
     let (_keep, rx) = watch::channel(Arc::new(set));
 
     let mut summary = Summary::default();
-    let lines = read(inputs, &mut summary)?;
+    let files: Vec<(u16, &std::path::Path)> = inputs
+        .iter()
+        .enumerate()
+        .map(|(i, input)| (u16::try_from(i).unwrap_or(u16::MAX), input.path.as_path()))
+        .collect();
+    let lines = read(&files, &mut summary.lines, &mut summary.untimed)?;
 
     let mut prefilters: Vec<Prefilter> = inputs
         .iter()
@@ -140,21 +145,22 @@ pub async fn run(inputs: &[ReplayInput], geo: Option<PathBuf>) -> Result<Summary
     Ok(summary)
 }
 
-/// Every line, with its time and source, merged in time order.
-fn read(inputs: &[ReplayInput], summary: &mut Summary) -> Result<Vec<(i64, u16, String)>, String> {
-    // Every line, with its time and source, merged in time order.
+/// Every line of the files (each with its source), with its time, merged in time order. Lines without a time are
+/// counted in `untimed` and skipped.
+pub fn read(
+    files: &[(u16, &std::path::Path)],
+    lines_read: &mut u64,
+    untimed: &mut u64,
+) -> Result<Vec<(i64, u16, String)>, String> {
     let mut lines: Vec<(i64, u16, String)> = Vec::new();
-    for (i, input) in inputs.iter().enumerate() {
-        let file = std::fs::File::open(&input.path)
-            .map_err(|e| format!("{}: {e}", input.path.display()))?;
+    for (source, path) in files {
+        let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
         for line in std::io::BufReader::new(file).lines() {
             let line = line.map_err(|e| e.to_string())?;
-            summary.lines += 1;
+            *lines_read += 1;
             match crate::time::split_timestamped(&line) {
-                Some((at, rest)) => {
-                    lines.push((at, u16::try_from(i).unwrap_or(u16::MAX), rest.to_owned()));
-                }
-                None => summary.untimed += 1,
+                Some((at, rest)) => lines.push((at, *source, rest.to_owned())),
+                None => *untimed += 1,
             }
         }
     }

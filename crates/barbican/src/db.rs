@@ -126,6 +126,14 @@ impl Db {
 
 // --- Addresses and events ---------------------------------------------------------------------------------------
 
+/// How many bans there are, lifted and run out ones included.
+pub async fn bans_count(pool: &SqlitePool) -> Result<i64, Error> {
+    let row = sqlx::query!("SELECT count(*) AS n FROM ban")
+        .fetch_one(pool)
+        .await?;
+    Ok(row.n)
+}
+
 /// Adds an address, or counts one more hit of it. Returns its id.
 pub async fn ip_seen(
     conn: &mut SqliteConnection,

@@ -20,7 +20,7 @@ pub const POLICY: &str = "policy";
 const SEEDED: &str = "seeded";
 
 /// Puts the default rules and policy into a new database.
-async fn seed(db: &Db) -> Result<(), String> {
+pub async fn seed(db: &Db) -> Result<(), String> {
     if db::setting(&db.pool, SEEDED)
         .await
         .map_err(|e| e.to_string())?
@@ -80,7 +80,7 @@ pub async fn load_feeds(db: &Db) -> Result<Vec<Feed>, db::Error> {
     Ok(feeds)
 }
 
-async fn load(app: &Arc<App>) -> Result<(), String> {
+pub async fn load(app: &Arc<App>) -> Result<(), String> {
     let db = &app.db;
     let now = now();
     let rules = load_rules(db).await.map_err(|e| e.to_string())?;
@@ -120,7 +120,7 @@ async fn load(app: &Arc<App>) -> Result<(), String> {
     Ok(())
 }
 
-fn open_geo(config: &Config) -> geo::Geo {
+pub fn open_geo(config: &Config) -> geo::Geo {
     match geo::Geo::open(config.geoip.country.as_deref(), config.geoip.asn.as_deref()) {
         Ok(geo) => geo,
         Err(e) => {
