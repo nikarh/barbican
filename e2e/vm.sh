@@ -61,6 +61,13 @@ ssh_opts=(
   -o LogLevel=ERROR
   -o IdentitiesOnly=yes
   -o ConnectTimeout=5
+  # One connection for all the commands of a suite: a handshake per command adds up. (%C: a hash of the
+  # address, port and user, short enough for a socket's path.)
+  -o ControlMaster=auto
+  -o "ControlPath=${XDG_RUNTIME_DIR:-/tmp}/barbican-e2e-%C"
+  -o ControlPersist=60
+  -o ServerAliveInterval=2
+  -o ServerAliveCountMax=3
 )
 
 log() { printf '[vm %s] %s\n' "${vm}" "$*" >&2; }
@@ -288,6 +295,7 @@ put() {
 
 down() {
   if is_running; then
+    ssh "${ssh_opts[@]}" -O exit "${SSH_USER}@127.0.0.1" 2>/dev/null || true
     # The disk is thrown away: no need to shut down cleanly.
     local pid
     pid="$(cat "${PIDFILE}")"
