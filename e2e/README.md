@@ -32,7 +32,10 @@ container's log. It checks that:
 - a blocked country is dropped (thousands of prefixes) and unblocking works;
 - bans run out in the kernel with the agent stopped;
 - after a reboot (the table deleted), the blocks are back by the time the agent reports ready;
-- the edge API refuses requests without a token, and gives an edge the whole state.
+- the edge API refuses requests without a token, and gives an edge the whole state;
+- with the UI on a unix socket, the image's UI proxy, run read-only, without capabilities, as nobody with the
+  `barbican-ui` group, serves the UI and reaches the agent (bans and lifts through it, also after the agent
+  restarts), the Origin check still holds, and a container without the group is refused.
 
 ## The router suite (`router.sh`)
 

@@ -4,7 +4,8 @@
 # Attackers live in network namespaces routed from the VM: `att` has 203.0.113.10 and 1.0.1.10 (an address the
 # geolocation database puts in China), `by` (a bystander) has 198.51.100.10. The VM serves HTTP on 203.0.113.1:8080
 # and 198.51.100.1:8080; `att` serves HTTP on 203.0.113.10:9000. barbican runs as the systemd service, reading a
-# Traefik access log (a file), the journal and a container's log.
+# Traefik access log (a file), the journal and a container's log; at the end its UI moves to a unix socket, for the
+# image's UI proxy in a container.
 set -euo pipefail
 
 DIR=/opt/barbican
@@ -122,6 +123,10 @@ name = "container"
 parser = "sshd"
 docker = { container = "e2e-logger" }
 EOF
+  install -D -m 0644 "${DIR}/barbican.sysusers" /etc/sysusers.d/barbican.conf
+  systemd-sysusers
+  install -D -m 0644 "${DIR}/barbican.tmpfiles" /etc/tmpfiles.d/barbican.conf
+  systemd-tmpfiles --create barbican.conf
   sed "s#^ExecStart=.*#ExecStart=${DIR}/barbican#" "${DIR}/barbican.service" >/etc/systemd/system/barbican.service
   mkdir -p /etc/systemd/system/barbican.service.d
   printf '[Service]\nSupplementaryGroups=systemd-journal docker\nEnvironment=RUST_LOG=barbican=debug\n' \
@@ -314,6 +319,57 @@ fi
 lift 203.0.113.10
 rm -f /etc/systemd/system/barbican.service.d/dry-run.conf
 systemctl daemon-reload
+systemctl restart barbican
+
+say "the UI in a container"
+sed -i 's#^listen = "127.0.0.1:7381"$#socket = "/run/barbican-ui/ui.sock"\nsocket_group = "barbican-ui"#' /etc/barbican/config.toml
+systemctl restart barbican
+if [[ $(stat -c '%a %G' /run/barbican-ui/ui.sock 2>/dev/null) == "660 barbican-ui" ]]; then
+  pass "the UI's socket is barbican-ui's alone (0660)"
+else
+  fail "the socket: $(ls -la /run/barbican-ui 2>&1)"
+fi
+if ! sudo -u nobody test -x /run/barbican-ui; then pass "others can't enter its directory"; else fail "/run/barbican-ui is open to others"; fi
+if ! curl -s -m 2 -o /dev/null http://127.0.0.1:7381/; then pass "no UI port"; else fail "the UI still listens on its port"; fi
+mkdir -p /tmp/ui-image/ci-rootfs/amd64
+install -m 0755 "${DIR}/barbican" /tmp/ui-image/ci-rootfs/amd64/barbican
+docker build -q -f "${DIR}/Dockerfile.ci" -t barbican-e2e-ui /tmp/ui-image >/dev/null
+gid=$(getent group barbican-ui | cut -d: -f3)
+ui_container() { # <name> <port> [docker run options]
+  local name=$1 port=$2
+  shift 2
+  docker rm -f "${name}" >/dev/null 2>&1 || true
+  docker run -d --name "${name}" --read-only --cap-drop=ALL --security-opt no-new-privileges --user 65534:65534 \
+    -v /run/barbican-ui:/run/barbican-ui:ro -p "127.0.0.1:${port}:8080" "$@" barbican-e2e-ui >/dev/null
+}
+ui_container e2e-ui 7382 --group-add "${gid}"
+ui_container e2e-ui-stranger 7383
+UI="python3 ${DIR}/rpc.py --url ws://127.0.0.1:7382/api/ws"
+healthy() { docker exec e2e-ui /barbican healthcheck; }
+if wait_until 10 healthy; then pass "the container is healthy (read-only, no capabilities, nobody)"; else fail "unhealthy: $(docker logs e2e-ui 2>&1 | tail -5)"; fi
+if [[ $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:7382/) == 200 ]]; then pass "it serves the UI"; else fail "no UI page"; fi
+${UI} ban.create '{"net": "203.0.113.10", "secs": 3600, "reason": "e2e ui container"}' >/dev/null || true
+if wait_until 5 att_blocked; then pass "a ban made through the container blocks"; else fail "the container's API doesn't reach the agent"; fi
+ws() { # <port> [curl options]: the status of a WebSocket handshake
+  local port=$1
+  shift
+  curl -s -o /dev/null -w '%{http_code}' -m 3 "$@" -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+    -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "http://127.0.0.1:${port}/api/ws" || true
+}
+if [[ $(ws 7382 -H 'Origin: https://elsewhere.example') == 403 ]]; then pass "the agent still refuses another site's WebSocket"; else fail "a cross-site WebSocket got through the proxy"; fi
+if [[ $(ws 7383) == 502 ]]; then pass "a container without the group can't use the socket"; else fail "a container without barbican-ui reached the agent"; fi
+systemctl restart barbican
+reconnects() { ${UI} bans.list '{"active": true}' >/dev/null 2>&1; }
+if wait_until 10 reconnects; then pass "the container reaches the agent again after it restarted"; else fail "lost the agent after its restart"; fi
+id=$(${UI} bans.list '{"active": true}' | python3 -c 'import json,sys; print([b["id"] for b in json.load(sys.stdin)["rows"] if b["net"]=="203.0.113.10"][0])')
+${UI} ban.lift "{\"id\": ${id}}" >/dev/null
+if wait_until 5 att; then pass "a lift through the container"; else fail "still blocked after lifting through the container"; fi
+start=${SECONDS}
+docker stop e2e-ui >/dev/null
+if ((SECONDS - start < 5)); then pass "it stops at once"; else fail "docker stop took $((SECONDS - start)) s"; fi
+docker rm -f e2e-ui e2e-ui-stranger >/dev/null
+docker rmi barbican-e2e-ui >/dev/null
+sed -i 's#^socket = "/run/barbican-ui/ui.sock"$#listen = "127.0.0.1:7381"#; /^socket_group = /d' /etc/barbican/config.toml
 systemctl restart barbican
 
 say "done"
