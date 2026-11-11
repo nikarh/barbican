@@ -9,7 +9,7 @@ import { rpc } from '../api/rpc'
 import { InfiniteGrid } from '../components/Grid'
 import { Country } from '../components/ui'
 import { count, dateTime, KIND_LABELS, WIDEST } from '../lib/format'
-import { columnsFor, fit, useTier, type Column } from '../lib/columns'
+import { columnsFor, useTier, type Column } from '../lib/columns'
 import { navigate } from '../lib/router'
 
 export function EventsScreen() {
@@ -36,30 +36,27 @@ export function EventsScreen() {
       {
         headerName: 'Hour',
         field: 'hour',
-        width: fit('Hour', WIDEST.dateTime()),
+        fits: WIDEST.dateTime(),
         valueFormatter: (p) => dateTime(Number(p.value ?? 0)),
       },
       {
         headerName: 'Address',
         field: 'ip',
-        width: 140,
+        fits: WIDEST.address,
         cellClass: 'mono',
         pin: true,
-        phone: { width: 150 },
       },
       {
         headerName: '',
         field: 'country',
-        width: 70,
+        fits: WIDEST.country,
         cellRenderer: (p: { value: string | null }) => <Country code={p.value} />,
-        phone: { width: 80 },
       },
       {
         headerName: 'Kind',
         field: 'kind',
-        width: 120,
+        fits: WIDEST.kind(),
         valueFormatter: (p) => KIND_LABELS[p.value as Kind],
-        phone: { width: 110 },
       },
       {
         headerName: 'What',
@@ -68,16 +65,16 @@ export function EventsScreen() {
         minWidth: 160,
         cellClass: 'mono',
         tooltip: (p) => p.data?.what,
-        phone: { minWidth: 260 },
+        phone: { minWidth: 220 },
       },
       {
         headerName: 'Rule',
         field: 'rule',
         width: 150,
         valueFormatter: (p) => ruleName(Number(p.value ?? 0)),
-        phone: { width: 130 },
+        phone: { width: 116 },
       },
-      { headerName: 'Source', field: 'source', width: 100, phone: { width: 90 } },
+      { headerName: 'Source', field: 'source', width: 100, phone: { width: 76 } },
       {
         headerName: 'Times',
         field: 'count',

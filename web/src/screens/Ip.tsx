@@ -20,7 +20,7 @@ import { rpc } from '../api/rpc'
 import { InfiniteGrid, type Sort } from '../components/Grid'
 import { Kept } from '../components/Kept'
 import { BanDialog, Country } from '../components/ui'
-import { columnsFor, fit, useTier, type Column } from '../lib/columns'
+import { columnsFor, useTier, type Column } from '../lib/columns'
 import { ago, count, dateTime, KIND_LABELS, remaining, WIDEST } from '../lib/format'
 import { href, navigate } from '../lib/router'
 import { useNow } from '../lib/useNow'
@@ -47,9 +47,8 @@ function ActivityGrid({ d }: { d: IpDetail }) {
       {
         headerName: 'Kind',
         field: 'kind',
-        width: 120,
+        fits: WIDEST.kind(),
         valueFormatter: (p) => KIND_LABELS[p.value as Kind],
-        phone: { width: 110 },
       },
       {
         headerName: 'What',
@@ -59,36 +58,36 @@ function ActivityGrid({ d }: { d: IpDetail }) {
         cellClass: 'mono',
         tooltip: (p) => p.data?.what,
         sortable: true,
-        phone: { minWidth: 240 },
+        phone: { minWidth: 220 },
       },
       {
         headerName: 'Rule',
         field: 'rule',
         width: 150,
         valueFormatter: (p) => ruleName(Number(p.value ?? 0)),
-        phone: { width: 130 },
+        tooltip: (p) => (p.data === undefined ? undefined : ruleName(p.data.rule)),
+        phone: { width: 116 },
       },
-      { headerName: 'Source', field: 'source', width: 100, phone: { width: 90 } },
+      { headerName: 'Source', field: 'source', width: 100, phone: { width: 76 } },
       {
         headerName: 'Times',
         field: 'count',
-        width: 90,
+        fits: WIDEST.count,
         type: 'rightAligned',
         valueFormatter: (p) => count(Number(p.value ?? 0)),
         sortable: true,
-        phone: { width: 80 },
       },
       {
         headerName: 'First',
         field: 'first',
-        width: fit('First', WIDEST.dateTime(), { sortable: true }),
+        fits: WIDEST.dateTime(),
         valueFormatter: (p) => dateTime(Number(p.value ?? 0)),
         sortable: true,
       },
       {
         headerName: 'Last',
         field: 'last',
-        width: fit('Last', WIDEST.ago, { sortable: true }),
+        fits: WIDEST.ago,
         valueFormatter: (p) => ago(Number(p.value ?? 0)),
         sortable: true,
         initialSort: 'desc',
@@ -130,9 +129,8 @@ function BansGrid({ d }: { d: IpDetail }) {
       {
         headerName: 'Blocked',
         field: 'net',
-        width: 170,
+        fits: WIDEST.address,
         cellClass: 'mono',
-        phone: { width: 150 },
       },
       {
         headerName: 'Reason',
@@ -140,17 +138,17 @@ function BansGrid({ d }: { d: IpDetail }) {
         flex: 1,
         minWidth: 160,
         tooltip: (p) => p.data?.reason,
-        phone: { minWidth: 170 },
+        phone: { minWidth: 140 },
       },
       {
         headerName: 'Since',
         field: 'created',
-        width: fit('Since', WIDEST.dateTime()),
+        fits: WIDEST.dateTime(),
         valueFormatter: (p) => dateTime(Number(p.value ?? 0)),
       },
       {
         headerName: 'Ends',
-        width: fit('Ends', [...WIDEST.remaining, ...WIDEST.lifted.map((l) => `${l} (ui)`)]),
+        fits: [...WIDEST.remaining, ...WIDEST.lifted.map((l) => `${l} (ui)`)],
         valueGetter: (p) =>
           p.data === undefined
             ? ''
