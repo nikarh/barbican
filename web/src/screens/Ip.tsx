@@ -38,7 +38,7 @@ function ActivityGrid({ d }: { d: IpDetail }) {
         field: 'kind',
         width: 120,
         valueFormatter: (p) => KIND_LABELS[p.value as Kind],
-        from: 'tablet',
+        phone: { width: 110 },
       },
       {
         headerName: 'What',
@@ -48,17 +48,16 @@ function ActivityGrid({ d }: { d: IpDetail }) {
         cellClass: 'mono',
         tooltip: (p) => p.data?.what,
         sortable: true,
-        from: 'phone',
-        phone: { minWidth: 110 },
+        phone: { minWidth: 240 },
       },
       {
         headerName: 'Rule',
         field: 'rule',
         width: 150,
         valueFormatter: (p) => ruleName(Number(p.value ?? 0)),
-        from: 'tablet',
+        phone: { width: 130 },
       },
-      { headerName: 'Source', field: 'source', width: 100 },
+      { headerName: 'Source', field: 'source', width: 100, phone: { width: 90 } },
       {
         headerName: 'Times',
         field: 'count',
@@ -66,8 +65,7 @@ function ActivityGrid({ d }: { d: IpDetail }) {
         type: 'rightAligned',
         valueFormatter: (p) => count(Number(p.value ?? 0)),
         sortable: true,
-        from: 'phone',
-        phone: { width: 72 },
+        phone: { width: 80 },
       },
       {
         headerName: 'First',
@@ -75,6 +73,7 @@ function ActivityGrid({ d }: { d: IpDetail }) {
         width: 150,
         valueFormatter: (p) => dateTime(Number(p.value ?? 0)),
         sortable: true,
+        phone: { width: 150 },
       },
       {
         headerName: 'Last',
@@ -83,8 +82,7 @@ function ActivityGrid({ d }: { d: IpDetail }) {
         valueFormatter: (p) => ago(Number(p.value ?? 0)),
         sortable: true,
         initialSort: 'desc',
-        from: 'phone',
-        phone: { width: 92 },
+        phone: { width: 96 },
       },
     ]
     return columnsFor(all, tier)
@@ -125,7 +123,7 @@ function BansGrid({ d }: { d: IpDetail }) {
         field: 'net',
         width: 170,
         cellClass: 'mono',
-        from: 'tablet',
+        phone: { width: 150 },
       },
       {
         headerName: 'Reason',
@@ -133,16 +131,14 @@ function BansGrid({ d }: { d: IpDetail }) {
         flex: 1,
         minWidth: 160,
         tooltip: (p) => p.data?.reason,
-        from: 'phone',
-        phone: { minWidth: 120 },
+        phone: { minWidth: 170 },
       },
       {
         headerName: 'Since',
         field: 'created',
         width: 150,
         valueFormatter: (p) => dateTime(Number(p.value ?? 0)),
-        from: 'phone',
-        phone: { width: 110, valueFormatter: (p) => ago(Number(p.value ?? 0)) },
+        phone: { width: 150 },
       },
       {
         headerName: 'Ends',
@@ -154,8 +150,7 @@ function BansGrid({ d }: { d: IpDetail }) {
               ? `lifted ${ago(p.data.lifted)}${p.data.liftedBy === null ? '' : ` (${p.data.liftedBy})`}`
               : remaining(p.data.until),
         tooltip: (p) => (p.data?.until == null ? undefined : `until ${dateTime(p.data.until)}`),
-        from: 'phone',
-        phone: { width: 100 },
+        phone: { width: 150 },
       },
     ]
     return columnsFor(all, tier)

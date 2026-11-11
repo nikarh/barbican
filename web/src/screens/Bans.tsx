@@ -25,30 +25,30 @@ export function BansScreen() {
         field: 'net',
         width: 190,
         cellClass: 'mono',
-        from: 'phone',
-        phone: { width: 140 },
+        pin: true,
+        phone: { width: 150 },
       },
       {
         headerName: 'Country',
         field: 'country',
         width: 100,
         cellRenderer: (p: { value: string | null }) => <Country code={p.value} />,
-        from: 'tablet',
+        phone: { width: 80 },
       },
       {
         headerName: 'Reason',
         field: 'reason',
         flex: 1.4,
         minWidth: 140,
-        from: 'phone',
-        phone: { minWidth: 100 },
+        tooltip: (p) => p.data?.reason,
+        phone: { minWidth: 160 },
       },
       {
         headerName: 'Since',
         field: 'created',
         width: 110,
         valueFormatter: (p) => ago(Number(p.value ?? 0)),
-        from: 'tablet',
+        phone: { width: 96 },
       },
       {
         headerName: 'Ends',
@@ -59,8 +59,7 @@ export function BansScreen() {
             : p.data.lifted !== null
               ? `lifted ${ago(p.data.lifted)}`
               : remaining(p.data.until),
-        from: 'phone',
-        phone: { width: 84 },
+        phone: { width: 110 },
       },
     ]
     return columnsFor(all, tier)
