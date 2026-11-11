@@ -36,32 +36,37 @@ function List() {
         flex: 1.4,
         minWidth: 140,
         cellClass: 'mono',
-        from: 'phone',
-        phone: { minWidth: 130 },
+        pin: true,
+        phone: { flex: null, width: 150 },
       },
       {
         headerName: 'Country',
         field: 'country',
         width: 100,
         cellRenderer: (p: { value: string | null }) => <Country code={p.value} />,
-        from: 'phone',
-        phone: { width: 84 },
+        phone: { width: 80 },
       },
-      { headerName: 'Network', field: 'asName', flex: 1.4, minWidth: 140 },
+      {
+        headerName: 'Network',
+        field: 'asName',
+        flex: 1.4,
+        minWidth: 140,
+        tooltip: (p) => p.data?.asName ?? undefined,
+        phone: { minWidth: 170 },
+      },
       {
         headerName: 'Hits',
         field: 'hits',
         width: 90,
         type: 'rightAligned',
         valueFormatter: (p) => count(Number(p.value ?? 0)),
-        from: 'tablet',
+        phone: { width: 72 },
       },
       {
         headerName: 'Last seen',
         field: 'lastSeen',
         width: 110,
         valueFormatter: (p) => ago(Number(p.value ?? 0)),
-        from: 'phone',
         phone: { width: 100 },
       },
       {
@@ -69,11 +74,12 @@ function List() {
         field: 'firstSeen',
         width: 110,
         valueFormatter: (p) => ago(Number(p.value ?? 0)),
+        phone: { width: 100 },
       },
       {
         headerName: 'State',
         width: 200,
-        from: 'tablet',
+        phone: { width: 170 },
         cellRenderer: (p: { data?: IpRow }) =>
           p.data ? (
             <Group gap={6} wrap="nowrap" h="100%">
