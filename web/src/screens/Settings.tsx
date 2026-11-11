@@ -23,6 +23,7 @@ import { useState, type ReactNode } from 'react'
 import {
   useAction,
   useCoverage,
+  useEdges,
   useEntries,
   useFeedPresets,
   useFeeds,
@@ -31,6 +32,7 @@ import {
 } from '../api/hooks'
 import type { BlockCoverage, Extent, Feed, FeedDef, Policy } from '../api/generated/model'
 import { ActionCard } from '../components/ActionCard'
+import { EdgeCard } from '../components/Edges'
 import { AddPicker, EditableList } from '../components/EditableList'
 import { COUNTRY_SELECT } from '../components/countrySelect'
 import { GeoDatabases } from '../components/Geo'
@@ -951,7 +953,41 @@ function FeedsTab() {
   )
 }
 
-const TABS = ['policy', 'lists', 'feeds', 'geoip', 'about'] as const
+function EdgesTab() {
+  const edges = useEdges()
+  const meta = useMeta()
+  const now = useNow(10_000)
+  const list = edges.data ?? []
+  return (
+    <Stack gap="md">
+      <Text fz={13} c="var(--ink-dim)" maw={700}>
+        Routers that follow this agent with barbican-edge, and what they report: whether they apply
+        the blocks, how many they hold, and what their own firewalls dropped (for the bans and lists
+        of every agent they follow). They report when something changes, and every minute.
+      </Text>
+      {list.length === 0 && (
+        <Text fz={13} c="var(--ink-dim)">
+          No edge clients are configured (<code>[[edge.client]]</code>).
+        </Text>
+      )}
+      <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="md">
+        {list.map((e) => (
+          <EdgeCard key={e.name} e={e} now={now} />
+        ))}
+      </SimpleGrid>
+      {meta.data?.edgeFingerprint != null && (
+        <Text c="var(--ink-faint)" fz={12}>
+          This agent’s certificate (the edges’ <code>fingerprint</code>):{' '}
+          <span className="mono" style={{ wordBreak: 'break-all' }}>
+            {meta.data.edgeFingerprint}
+          </span>
+        </Text>
+      )}
+    </Stack>
+  )
+}
+
+const TABS = ['policy', 'lists', 'feeds', 'geoip', 'edges', 'about'] as const
 type Tab = (typeof TABS)[number]
 
 export function SettingsScreen({ tab }: { tab: string | null }) {
@@ -970,6 +1006,7 @@ export function SettingsScreen({ tab }: { tab: string | null }) {
         <Tabs.Tab value="lists">Allow and deny</Tabs.Tab>
         <Tabs.Tab value="feeds">Blocklists</Tabs.Tab>
         <Tabs.Tab value="geoip">Geolocation</Tabs.Tab>
+        {meta.data?.edgeApi === true && <Tabs.Tab value="edges">Edges</Tabs.Tab>}
         <Tabs.Tab value="about">About</Tabs.Tab>
       </Tabs.List>
       <Tabs.Panel value="policy">
@@ -983,6 +1020,9 @@ export function SettingsScreen({ tab }: { tab: string | null }) {
       </Tabs.Panel>
       <Tabs.Panel value="geoip">
         <GeoDatabases />
+      </Tabs.Panel>
+      <Tabs.Panel value="edges">
+        <EdgesTab />
       </Tabs.Panel>
       <Tabs.Panel value="about">
         <Stack gap={6} fz={14}>

@@ -45,7 +45,9 @@ config upstream 'server'
 ```
 
 then `/etc/init.d/barbican-edge restart`. **Services → Barbican → Status** (or `barbican-edge status`) shows whether
-it follows its agents and what it blocks. See [Connecting an edge to an agent](README.md#connecting-an-edge-to-an-agent).
+it follows its agents and what it blocks. The edge stays connected to each agent and reports to it, so each agent's UI
+shows it too (**Settings → Edges**): whether it is connected, what it applied, and what its firewall dropped. See
+[Connecting an edge to an agent](README.md#connecting-an-edge-to-an-agent).
 
 Without IPv6 on the router, `option ipv6 '0'` leaves it out: its country and blocklist prefixes would otherwise take
 about as much memory as IPv4's (roughly 140 bytes each; ~12 MB for Africa, Asia and South America).

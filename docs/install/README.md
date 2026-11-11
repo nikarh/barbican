@@ -40,7 +40,8 @@ shows how).
    barbican edge-fingerprint
    ```
 
-   (The UI's **Settings → About** shows it too.)
+   (The UI's **Settings → About** and **Settings → Edges** show it too.)
 
 3. On the router, add the agent as an upstream: its address, that fingerprint and the token (see the router's guide).
+   Once it connects, the agent's **Settings → Edges** shows it, with what it applied and what its firewall dropped.
    Agents and edges of one release speak the same protocol: update them together.
