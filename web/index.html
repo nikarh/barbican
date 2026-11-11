@@ -12,6 +12,18 @@
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <link rel="manifest" href="./manifest.webmanifest" />
     <title>Barbican</title>
+    <script>
+      // Connects to the agent while the app's script loads; the app takes this socket over (src/api/rpc.ts).
+      try {
+        window.barbicanSocket = new WebSocket(
+          (location.protocol === 'https:' ? 'wss://' : 'ws://') +
+            location.host +
+            new URL('.', location.href).pathname +
+            'api/ws',
+          typeof DecompressionStream === 'function' ? ['barbican.deflate'] : [],
+        )
+      } catch {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

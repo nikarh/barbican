@@ -48,19 +48,22 @@ export function useCoverage(countries: string[], continents: string[]) {
   })
 }
 
-export function useGeoStatus() {
+/** `enabled: false` holds the call back: the overview asks once its own data is in. */
+export function useGeoStatus(enabled = true) {
   return useQuery({
     queryKey: ['geoip'],
     queryFn: () => rpc.call('geoip.status'),
     refetchInterval: 60_000,
+    enabled,
   })
 }
 
-export function useFeeds() {
+export function useFeeds(enabled = true) {
   return useQuery({
     queryKey: ['feeds'],
     queryFn: () => rpc.call('feeds.list'),
     refetchInterval: 30_000,
+    enabled,
   })
 }
 

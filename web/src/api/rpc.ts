@@ -115,6 +115,31 @@ interface Subscription {
 
 const MAX_BACKOFF_MS = 10_000
 
+declare global {
+  interface Window {
+    /** The WebSocket index.html opens before the app's script has loaded; the client takes it over. */
+    barbicanSocket?: WebSocket | undefined
+  }
+}
+
+/** Asks the agent for its larger messages compressed (see crates/barbican/src/api.rs), where the browser can
+ * inflate them. index.html opens its early socket with the same. */
+export const PROTOCOLS = typeof DecompressionStream === 'function' ? ['barbican.deflate'] : []
+
+async function inflate(data: Blob): Promise<string> {
+  return new Response(data.stream().pipeThrough(new DecompressionStream('deflate'))).text()
+}
+
+/** The socket index.html opened for `url`, unless it already failed. Taken once. */
+function takeEarlySocket(url: string): WebSocket | null {
+  const socket = window.barbicanSocket
+  window.barbicanSocket = undefined
+  if (socket === undefined || socket.url !== url) return null
+  return socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN
+    ? socket
+    : null
+}
+
 export class RpcClient {
   private socket: WebSocket | null = null
   private connection: Connection = {
@@ -133,18 +158,55 @@ export class RpcClient {
   private flushScheduled = false
   private nextId = 1
   private attempt = 0
+  /** The page is going away (or into the back-forward cache): its socket was closed on purpose. */
+  private leaving = false
+  private readonly settledWaiters: (() => void)[] = []
+  /** Messages in the order they came, compressed ones inflated in between. */
+  private inbox: Promise<void> = Promise.resolve()
+  private inflating = 0
   private readonly url: string
   private readonly diagnose: () => Promise<Problem>
 
   constructor(url: string, diagnose: () => Promise<Problem>) {
     this.url = url
     this.diagnose = diagnose
-    this.connect()
+    this.connect(takeEarlySocket(url))
     // Back online, or back in front of the user: no need to wait out the backoff.
     window.addEventListener('online', this.retry)
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') this.retry()
     })
+    // A reload or leaving the page closes the socket with a proper close, at once: the agent and the proxies in
+    // between let go of it now, instead of when they notice that the connection is gone.
+    window.addEventListener('pagehide', () => {
+      this.leaving = true
+      if (this.retryTimer !== null) window.clearTimeout(this.retryTimer)
+      this.retryTimer = null
+      this.socket?.close(1000)
+    })
+    // Back from the back-forward cache.
+    window.addEventListener('pageshow', (e) => {
+      if (!e.persisted || !this.leaving) return
+      this.leaving = false
+      this.attempt = 0
+      if (this.socket === null) this.connect()
+    })
+  }
+
+  /** Resolves once connected with no call in flight: when what the screen asked for first has arrived. */
+  settled(): Promise<void> {
+    return new Promise((resolve) => {
+      this.settledWaiters.push(resolve)
+      this.checkSettled()
+    })
+  }
+
+  private checkSettled(): void {
+    if (this.connection.state !== 'open' || this.queue.length > 0) return
+    for (const id of this.pending.keys()) {
+      if (!this.subscriptions.has(id)) return
+    }
+    for (const resolve of this.settledWaiters.splice(0)) resolve()
   }
 
   // Connection state, for useSyncExternalStore.
@@ -168,12 +230,12 @@ export class RpcClient {
     this.connect()
   }
 
-  private connect(): void {
+  private connect(early: WebSocket | null = null): void {
     this.update({ state: 'connecting', retryAt: null })
-    const socket = new WebSocket(this.url)
+    const socket = early ?? new WebSocket(this.url, PROTOCOLS)
     this.socket = socket
 
-    socket.addEventListener('open', () => {
+    const opened = () => {
       this.attempt = 0
       this.update({ state: 'open', failures: 0, lostAt: null, problem: null })
       // Resubscribe under the same ids, ahead of anything queued while offline.
@@ -183,16 +245,38 @@ export class RpcClient {
         .map(([id, s]) => ({ id, ...s.call }))
       this.queue = [...resubscribe, ...this.queue]
       this.flush()
-    })
+      this.checkSettled()
+    }
+    // The early socket may be open already: its open event has fired, before anyone listened.
+    if (socket.readyState === WebSocket.OPEN) queueMicrotask(opened)
+    else socket.addEventListener('open', opened)
 
     socket.addEventListener('message', (e: MessageEvent<unknown>) => {
-      if (typeof e.data !== 'string') return
-      this.receive(JSON.parse(e.data) as ServerMessage)
+      const data = e.data
+      // Text right away, unless a compressed message before it is still being inflated: order is kept.
+      if (typeof data === 'string' && this.inflating === 0) {
+        this.receive(JSON.parse(data) as ServerMessage)
+        return
+      }
+      if (typeof data !== 'string' && !(data instanceof Blob)) return
+      this.inflating += 1
+      this.inbox = this.inbox
+        .then(async () => {
+          const text = typeof data === 'string' ? data : await inflate(data)
+          this.receive(JSON.parse(text) as ServerMessage)
+        })
+        .catch((error: unknown) => {
+          console.error('A message from the agent could not be read', error)
+        })
+        .finally(() => {
+          this.inflating -= 1
+        })
     })
 
     socket.addEventListener('close', () => {
       if (this.socket !== socket) return
       this.socket = null
+      if (this.leaving) return
       const delay = Math.min(MAX_BACKOFF_MS, 500 * 2 ** this.attempt)
       this.attempt += 1
       const { state, failures, lostAt } = this.connection
@@ -232,6 +316,7 @@ export class RpcClient {
         const p = this.pending.get(message.id)
         this.pending.delete(message.id)
         p?.resolve(message.result)
+        this.checkSettled()
         break
       }
       case 'error': {
@@ -243,6 +328,7 @@ export class RpcClient {
         const p = this.pending.get(message.id)
         this.pending.delete(message.id)
         p?.reject(error)
+        this.checkSettled()
         const s = this.subscriptions.get(message.id)
         if (s) {
           this.subscriptions.delete(message.id)

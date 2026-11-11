@@ -11,9 +11,19 @@
 //! A `*.subscribe` call answers with a `null` result and then pushes [`ServerMessage::Event`]s tagged with the
 //! subscribing request's `id` until the client sends `unsubscribe` with that id, or disconnects.
 //!
+//! A client that offers the `barbican.deflate` subprotocol gets messages of [`DEFLATE_MIN`] bytes and more as binary
+//! frames, compressed with zlib (RFC 1950), which browsers inflate natively (`DecompressionStream("deflate")`).
+//! Smaller ones stay text. (The WebSocket stack has no permessage-deflate.)
+//!
 //! Times are unix seconds.
 
 use serde::{Deserialize, Serialize};
+
+/// The subprotocol by which a client asks for compressed messages.
+pub const DEFLATE_PROTOCOL: &str = "barbican.deflate";
+/// Messages from this size (serialized) on are compressed, for a client that asked: below it, the frame and the
+/// work of inflating cost more than they save.
+pub const DEFLATE_MIN: usize = 1024;
 
 #[cfg(test)]
 use ts_rs::TS;
