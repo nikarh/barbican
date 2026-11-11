@@ -7,6 +7,7 @@ import type { Activity, Ban, IpDetail, Kind } from '../api/generated/model'
 import type { ActivitySort } from '../api/generated/rpc'
 import { rpc } from '../api/rpc'
 import { InfiniteGrid, type Sort } from '../components/Grid'
+import { Kept } from '../components/Kept'
 import { BanDialog, Country } from '../components/ui'
 import { columnsFor, useTier, type Column } from '../lib/columns'
 import { ago, count, dateTime, KIND_LABELS, remaining } from '../lib/format'
@@ -103,8 +104,9 @@ function ActivityGrid({ d }: { d: IpDetail }) {
     <InfiniteGrid<Activity>
       columns={columns}
       fetch={fetch}
-      // New events (or a ban) start it over.
-      query={`${d.ip}|${String(d.hits)}|${String(d.activityCount)}`}
+      query={d.ip}
+      // New events (or a ban) refresh it.
+      version={`${String(d.hits)}|${String(d.activityCount)}`}
       empty={{
         title: 'Nothing recorded',
         hint: 'What its events matched shows up here: the requests, user names and probes.',
@@ -167,7 +169,8 @@ function BansGrid({ d }: { d: IpDetail }) {
     <InfiniteGrid<Ban>
       columns={columns}
       fetch={fetch}
-      query={`${d.ip}|${String(d.banCount)}|${String(d.activeBan?.id ?? '')}|${String(d.activeBan?.lifted ?? '')}`}
+      query={d.ip}
+      version={`${String(d.banCount)}|${String(d.activeBan?.id ?? '')}|${String(d.activeBan?.lifted ?? '')}`}
       empty={{
         title: 'Never banned',
         hint: 'A rule bans it once its threshold is reached, or “Ban” does by hand.',
@@ -284,12 +287,11 @@ export function IpScreen({ ip, tab }: { ip: string; tab: string | null }) {
       </Group>
 
       <Tabs
+        id="address"
         value={current}
         onChange={(v) => {
           navigate('addresses', { ip, ...(v === 'bans' ? { tab: 'bans' } : {}) }, true)
         }}
-        keepMounted={false}
-        classNames={{ root: classes.tabs, panel: classes.panel }}
       >
         <Tabs.List>
           <Tabs.Tab value="activity" rightSection={<Counter n={d.activityCount} />}>
@@ -299,13 +301,31 @@ export function IpScreen({ ip, tab }: { ip: string; tab: string | null }) {
             Bans
           </Tabs.Tab>
         </Tabs.List>
-        <Tabs.Panel value="activity">
-          <ActivityGrid d={d} />
-        </Tabs.Panel>
-        <Tabs.Panel value="bans">
-          <BansGrid d={d} />
-        </Tabs.Panel>
       </Tabs>
+      {/* The panels are kept, not Tabs.Panel's: both grids stay laid out, so switching back shows the other's rows
+       * at once. The ids are the ones the tabs refer to. */}
+      <div className={classes.panels}>
+        <Kept shown={current === 'activity'}>
+          <div
+            className={classes.panel}
+            role="tabpanel"
+            id="address-panel-activity"
+            aria-labelledby="address-tab-activity"
+          >
+            <ActivityGrid d={d} />
+          </div>
+        </Kept>
+        <Kept shown={current === 'bans'}>
+          <div
+            className={classes.panel}
+            role="tabpanel"
+            id="address-panel-bans"
+            aria-labelledby="address-tab-bans"
+          >
+            <BansGrid d={d} />
+          </div>
+        </Kept>
+      </div>
       <BanDialog
         opened={banning}
         onClose={() => {

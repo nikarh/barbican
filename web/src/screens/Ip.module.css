@@ -1,9 +1,8 @@
-/* The tabs take what the page leaves below the address, and the open one's grid fills it. */
-.tabs {
+/* The open tab's grid takes what the page leaves below the tabs. */
+.panels {
   flex: 1 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 12px;
 }
 
 .panel {

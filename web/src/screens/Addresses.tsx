@@ -7,6 +7,7 @@ import type { IpRow } from '../api/generated/model'
 import type { IpFilter, IpSort } from '../api/generated/rpc'
 import { rpc } from '../api/rpc'
 import { InfiniteGrid } from '../components/Grid'
+import { Kept } from '../components/Kept'
 import { Country, StatusBadge } from '../components/ui'
 import { ago, count, remaining } from '../lib/format'
 import { columnsFor, useTier, type Column } from '../lib/columns'
@@ -162,6 +163,15 @@ function List() {
   )
 }
 
+/** The list, or an address's page. The list stays mounted under an address's page, so going back shows it as it
+ * was. */
 export function AddressesScreen({ ip, tab }: { ip: string | null; tab: string | null }) {
-  return ip === null ? <List /> : <IpScreen ip={ip} tab={tab} />
+  return (
+    <>
+      <Kept shown={ip === null}>
+        <List />
+      </Kept>
+      {ip !== null && <IpScreen ip={ip} tab={tab} />}
+    </>
+  )
 }

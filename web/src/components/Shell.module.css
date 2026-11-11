@@ -126,7 +126,9 @@
   padding: 16px 16px calc(var(--tabbar-height) + 16px + env(safe-area-inset-bottom));
 }
 
+/* Kept screens hidden while another shows are laid out over it (see Kept). */
 .content {
+  position: relative;
   flex: 1 0 auto;
   display: flex;
   flex-direction: column;
