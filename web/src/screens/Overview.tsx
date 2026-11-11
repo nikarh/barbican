@@ -184,22 +184,31 @@ export function OverviewScreen() {
             </Stack>
           </Panel>
 
+          {/* Every panel that leads somewhere does it the same way: a link at the right of its title. */}
           <Panel
-            title="Data"
+            title="Geolocation"
             right={
               <Anchor href={href('settings', { tab: 'geoip' })} fz={13}>
                 Details
               </Anchor>
             }
           >
+            <Stack gap={6}>{geo.data && <GeoSummary geo={geo.data} now={now} />}</Stack>
+          </Panel>
+
+          <Panel
+            title="Blocklists"
+            right={
+              <Anchor href={href('settings', { tab: 'feeds' })} fz={13}>
+                Details
+              </Anchor>
+            }
+          >
             <Stack gap={6}>
-              {geo.data && <GeoSummary geo={geo.data} now={now} />}
-              {(feeds.data ?? []).length > 0 && (
-                <div className={classes.subhead}>
-                  <a className="plain panel-title" href={href('settings', { tab: 'feeds' })}>
-                    Blocklists
-                  </a>
-                </div>
+              {(feeds.data ?? []).length === 0 && (
+                <Text fz={13} c="var(--ink-dim)">
+                  None yet
+                </Text>
               )}
               {(feeds.data ?? []).map((f) => (
                 <FeedLine key={f.def.id} feed={f} now={now} />
