@@ -19,12 +19,13 @@ export function useTier(): Tier {
 export type Column<T> = ColDef<T> & { phone?: Partial<ColDef<T>>; pin?: boolean }
 
 /** The columns of a tier. Every tier has every column: where they don't fit (a phone, a tablet), the grid scrolls
- * sideways, and the column that says which row it is stays on the left. */
+ * sideways. On a tablet the column that says which row it is stays on the left. */
 export function columnsFor<T>(columns: Column<T>[], tier: Tier): ColDef<T>[] {
   return columns.map(({ phone, pin, ...c }) => ({
     ...c,
     ...(tier === 'phone' ? phone : {}),
-    ...(pin === true && tier !== 'desktop' ? { pinned: 'left' as const, lockPinned: true } : {}),
+    // Not on a phone: there an address alone takes most of the width, and the rest would scroll in a sliver.
+    ...(pin === true && tier === 'tablet' ? { pinned: 'left' as const, lockPinned: true } : {}),
   }))
 }
 
