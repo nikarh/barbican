@@ -66,7 +66,8 @@ mkpkg() { # <package> <version> <description> <depends> <output>
     --info "license:MIT OR Apache-2.0" --info "origin:${pkg}" --info "url:https://github.com/nikarh/barbican"
     --info "maintainer:Nikolay Arhipov <nikarh@users.noreply.github.com>")
   [[ -n "$4" ]] && args+=(--info "depends:$4")
-  for kind in post-install:postinst pre-deinstall:prerm post-deinstall:postrm; do
+  # apk runs post-upgrade, not post-install, on an upgrade: both run the postinst (which restarts the service).
+  for kind in post-install:postinst post-upgrade:postinst pre-deinstall:prerm post-deinstall:postrm; do
     local script="dist/openwrt/package/${pkg}.${kind#*:}"
     [[ -f "${script}" ]] && cp "${script}" "${stage}/${pkg}.${kind#*:}" && args+=(--script "${kind%%:*}:/stage/${pkg}.${kind#*:}")
   done
