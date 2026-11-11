@@ -61,3 +61,8 @@ contents:
     dst: /usr/share/licenses/barbican/LICENSE-MIT
   - src: LICENSE-APACHE
     dst: /usr/share/licenses/barbican/LICENSE-APACHE
+
+archlinux:
+  scripts:
+    # pacman runs only this on an upgrade (not post_install or the removal scripts).
+    postupgrade: dist/packaging/arch/post_upgrade.sh
