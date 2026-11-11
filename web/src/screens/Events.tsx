@@ -21,6 +21,9 @@ export function EventsScreen() {
   const rules = useRules()
   const meta = useMeta()
   const tier = useTier()
+  // On a phone, the search takes a line and the three filters share the next one (with shorter placeholders).
+  const phone = tier === 'phone'
+  const filter = phone ? { style: { flex: '1 1 0', minWidth: 0 } } : {}
 
   const ruleName = useCallback(
     (id: number) =>
@@ -33,7 +36,7 @@ export function EventsScreen() {
       {
         headerName: 'Hour',
         field: 'hour',
-        width: 140,
+        width: 150,
         valueFormatter: (p) => dateTime(Number(p.value ?? 0)),
         phone: { width: 150 },
       },
@@ -102,8 +105,8 @@ export function EventsScreen() {
   )
 
   return (
-    <Stack gap="sm" className="fill">
-      <Group gap="sm" wrap="wrap">
+    <Stack gap={phone ? 8 : 'sm'} className="fill">
+      <Group gap={phone ? 8 : 'sm'} wrap="wrap">
         <TextInput
           placeholder="Path, user name, probe…"
           leftSection={<IconSearch size={16} />}
@@ -111,33 +114,33 @@ export function EventsScreen() {
           onChange={(e) => {
             setQuery(e.currentTarget.value)
           }}
-          style={{ flex: '1 1 220px' }}
+          style={{ flex: phone ? '1 1 100%' : '1 1 220px' }}
         />
         <Select
-          placeholder="Any kind"
+          placeholder={phone ? 'Kind' : 'Any kind'}
           data={Object.entries(KIND_LABELS).map(([value, label]) => ({ value, label }))}
           value={kind}
           onChange={(v) => {
             setKind(v as Kind | null)
           }}
           clearable
-          w={150}
+          {...(phone ? filter : { w: 150 })}
         />
         <Select
-          placeholder="Any rule"
+          placeholder={phone ? 'Rule' : 'Any rule'}
           data={(rules.data ?? []).map((r) => ({ value: String(r.id), label: r.name }))}
           value={rule}
           onChange={setRule}
           clearable
-          w={180}
+          {...(phone ? filter : { w: 180 })}
         />
         <Select
-          placeholder="Any source"
+          placeholder={phone ? 'Source' : 'Any source'}
           data={meta.data?.sources ?? []}
           value={source}
           onChange={setSource}
           clearable
-          w={140}
+          {...(phone ? filter : { w: 140 })}
         />
       </Group>
       <InfiniteGrid<EventRow>

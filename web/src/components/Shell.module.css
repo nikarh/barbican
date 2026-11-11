@@ -123,7 +123,8 @@
   min-height: calc(100dvh - var(--header-height));
   max-width: var(--content-width);
   margin: 0 auto;
-  padding: 16px 16px calc(var(--tabbar-height) + 16px);
+  /* Narrow margins on a phone: the room goes to the content. */
+  padding: 12px 12px calc(var(--tabbar-height) + 12px);
 }
 
 /* Kept screens hidden while another shows are laid out over it (see Kept). */
@@ -189,6 +190,12 @@
 
 .tab[aria-current='page'] {
   color: var(--accent);
+}
+
+@media (min-width: 48em) {
+  .main {
+    padding: 16px 16px calc(var(--tabbar-height) + 16px);
+  }
 }
 
 @media (min-width: 62em) {

@@ -27,6 +27,8 @@ function List() {
   const [filter, setFilter] = useState<IpFilter>('all')
   const [sort, setSort] = useState<IpSort>('lastSeen')
   const tier = useTier()
+  // On a phone, the search takes a line and the rest share the next one, so that the grid gets the height.
+  const phone = tier === 'phone'
 
   const columns = useMemo(() => {
     const all: Column<IpRow>[] = [
@@ -110,8 +112,8 @@ function List() {
   )
 
   return (
-    <Stack gap="sm" className="fill">
-      <Group gap="sm" wrap="wrap">
+    <Stack gap={phone ? 8 : 'sm'} className="fill">
+      <Group gap={phone ? 8 : 'sm'} wrap="wrap">
         <TextInput
           placeholder="Address, prefix, country code, AS1234 or network"
           leftSection={<IconSearch size={16} />}
@@ -119,9 +121,11 @@ function List() {
           onChange={(e) => {
             setQuery(e.currentTarget.value)
           }}
-          style={{ flex: '1 1 260px' }}
+          style={{ flex: phone ? '1 1 100%' : '1 1 260px' }}
         />
         <SegmentedControl
+          fullWidth={phone}
+          style={phone ? { flex: '1 1 0' } : undefined}
           value={filter}
           onChange={(v) => {
             setFilter(v)
@@ -139,7 +143,7 @@ function List() {
             if (v !== null) setSort(v)
           }}
           allowDeselect={false}
-          w={150}
+          w={phone ? 128 : 150}
           aria-label="Sort"
         />
       </Group>
