@@ -220,11 +220,22 @@ An edge agent follows one or more agents' edge APIs and keeps its router's firew
 block (with their allow lists): `barbican-edge` with nftables on OpenWrt, `barbican-edge-ipset` with iptables and ipset
 where there is no nftables. It stays connected to each agent, which pushes every ban and lift as it happens, so they
 reach the router within a fraction of a second; the edge reports back what it applied and what its firewall dropped,
-which the agent's UI shows (**Settings → Edges**, and the overview's **Edges** panel). Its state is saved now and then
-(flash wears) and on a clean stop, and put back at boot before the network comes up, so blocks hold across reboots and
-while agents are unreachable. A router without a clock that keeps time boots in the
-past: lengths are counted from when the state was saved. Installing and configuring:
-[OpenWrt](docs/install/openwrt.md), [without nftables](docs/install/iptables.md).
+which the agent's UI shows (**Settings → Edges**, and the overview's **Edges** panel, each edge's drops apart from the
+host's own). Installing and configuring: [OpenWrt](docs/install/openwrt.md), [without nftables](docs/install/iptables.md).
+
+- **Dry run** (`option dry_run '1'`): the edge follows the agents and keeps their state, and reports what it would
+  block, but changes nothing in the firewall. To try an edge first, and to see what it costs.
+- **IPv6** (`option ipv6`, on by default with nftables, off with ipset): without it the agents send the edge no IPv6
+  at all, neither bans nor list prefixes.
+- **Saved state**: the edge saves what its agents sent when it stops cleanly (a reboot, an upgrade), in two compact
+  binary files: `state` (bans and allows, 13 bytes a ban, about 320 KB for 25 000 bans) and `state.lists` (the
+  country and blocklist prefixes, 5 bytes each for IPv4, only the families it loads: about 500 KB for 100 000). At
+  boot they are put back before the network comes up, so blocks hold while no agent is reachable yet; once one is,
+  it sends whatever changed. Nothing else is written to flash, which wears; `option persist_interval` (seconds) also
+  saves that often, against power cuts. A router without a clock that keeps time boots in the past: lengths are
+  counted from when the state was saved.
+- **LuCI** (OpenWrt, **Services → Barbican**): the status page shows the mode (enforcing or dry run), what is blocked,
+  each agent's connection, and what the firewall dropped; the settings page edits `/etc/config/barbican`.
 
 **Security**: edges connect out, nothing connects to them; what an agent sends them is only ever what that agent
 blocks and allows. The edge API is TLS only, and an edge accepts exactly the
@@ -232,11 +243,45 @@ certificate whose fingerprint it is configured with (no CA, so it works with bar
 edge and its agent can read the tokens or feed the edge bans or allow lists. Each edge has its own token (at least
 16 characters), and what an edge reports only reaches the agent's UI.
 
-The edge API is a binary protocol over one long-lived TLS connection per edge and agent (a hello with the token and
-where the edge's copy of the agent's state is, then changes pushed by the agent and status reports from the edge,
-with heartbeats both ways), described in [`crates/barbican-common/src/edge.rs`](crates/barbican-common/src/edge.rs)
-and [`edge/wire.rs`](crates/barbican-common/src/edge/wire.rs). Both sides must speak the same protocol version: update
-agents and edges together.
+### The edge protocol
+
+One long-lived TLS connection per edge and agent, the edge connecting. On it, length-prefixed binary frames
+(`u32` length, a type byte, then fixed-width little-endian fields; at most 4 MiB and 65 536 records a frame), read in
+place: a ban is a 26-byte record (family, prefix length, 16 address bytes, end time), a list prefix 18 bytes, and a
+received frame is validated and used without copying its records.
+
+- The edge says **hello**: protocol version, its token, where its copy of the agent's state is (an epoch and a
+  sequence number, the list's version), whether it enforces, wants the lists, and loads IPv6.
+- The agent answers **welcome** and sends what the edge misses: the changes since its sequence number, or the whole
+  state after the agent restarted; the list when its version differs, in chunks the edge applies once complete.
+  After that it pushes each change as it happens. A wrong token or protocol version is refused with the reason.
+- The edge sends **status** reports: on connecting, when something changed, and at least every minute (what it
+  applied, its drop counters, errors, memory, uptime, and the other agents it follows). Reports can carry extensions
+  an older agent skips, so more can be added without a new protocol version.
+- Either side **pings** after 20 seconds without sending and drops the connection after 60 seconds without hearing
+  anything; the edge then reconnects (2 to 60 seconds apart) and carries on from where it was.
+
+A full state of 25 000 bans and 100 000 list prefixes is 2.4 MB and decodes in under a millisecond; a ban reaches a
+router's firewall in about half a second (most of it the edge gathering changes that come together). Both sides must
+speak the same protocol version: update agents and edges together. The frames are described in
+[`crates/barbican-common/src/edge/wire.rs`](crates/barbican-common/src/edge/wire.rs).
+
+## Resource use
+
+Measured with 25 000 bans, Africa, Asia and South America blocked (about 100 000 IPv4 and 87 000 IPv6 prefixes) and
+three blocklists:
+
+| | Memory | Notes |
+|---|---|---|
+| Agent (`barbican`) | about 70 MB resident | Much of it the geolocation databases (mapped) and SQLite's cache; idle CPU near zero |
+| UI container (`barbican ui-proxy`) | about 4 MB | |
+| Edge agent (`barbican-edge`) | 6–10 MB resident, about 20 MB at a full resync | Idle: about 10 ms of CPU per 100 s |
+| Kernel: list sets | about 140 B an element on x86-64, about 250 B on 32-bit ARM | The prefixes are loaded merged into ranges: the IPv4 list above is 55 000 elements instead of 102 000, about 8 MB on x86-64, 14 MB on ARM (IPv6 another 57 000 elements, unless off) |
+| Kernel: bans | about 140 B a ban | 25 000 bans: 3.4 MB |
+
+The kernel sets don't slow packets down with their size: a lookup costs about the same with 1 000 elements or
+300 000. Loading 100 000 elements takes about a second on a router. Leave out IPv6 where there is none
+(`firewall.ipv6 = false`, the edge's `option ipv6 '0'`): its list is as large as IPv4's.
 
 ## Behind a reverse proxy
 
