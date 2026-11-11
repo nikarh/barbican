@@ -14,9 +14,9 @@ An edge agent runs on a router and keeps its firewall equal to the union of what
 | `barbican-edge` | an nftables table of its own (`inet barbican`), as on the server | OpenWrt: [installing](/install/openwrt/) |
 | `barbican-edge-ipset` | an iptables chain in the mangle table, first in PREROUTING, and ipsets | firmware without nftables, such as Asuswrt-Merlin: [installing](/install/iptables/) |
 
-Both are small static binaries (about a megabyte) with plain threads and blocking I/O, configured from a [UCI file](/edge/configuration/).
+Both are static binaries of about a megabyte that need nothing else on the router, and use 6 to 10 MB of memory. They are configured from a [UCI file](/edge/configuration/). Other firewalls and platforms can be added the same way: an edge only has to apply a list of addresses and prefixes with end times, and count what it drops.
 
-An edge stays connected to each agent it follows, over TLS, and the agent pushes every ban and lift as it happens: they reach the router within a fraction of a second. The edge reports back what it applied and what its firewall dropped, which the agent's UI shows. See [the edge protocol](/edge/protocol/).
+An edge stays connected to each agent it follows, over TLS, and the agent pushes every ban and lift as it happens: they reach the router within a fraction of a second. The edge reports back what it applied and what its firewall dropped, which the agent's UI shows. See [How agents and edges talk](/internals/edge-link/).
 
 - Edges connect out; nothing connects to them.
 - An edge follows any number of agents; what they block adds up, and what they allow is let through.

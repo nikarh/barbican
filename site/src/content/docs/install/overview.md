@@ -29,4 +29,4 @@ Every file is on the [releases page](https://github.com/nikarh/barbican/releases
 
 The `latest` pre-release is built from `main` on every push, with the same files signed the same way and a version such as `0.1.1-dev+abc1234`. It is never marked as GitHub's latest release, so `releases/latest/download/` keeps pointing at the newest `vX.Y.Z`. To try a build of main, download from `https://github.com/nikarh/barbican/releases/download/latest/<name>` instead.
 
-Agents and edges of one release speak the same [edge protocol](/edge/protocol/): update them together.
+Agents and edges of one release speak the same [edge protocol](/internals/edge-link/): update them together.

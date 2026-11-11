@@ -1,54 +1,56 @@
 ---
-title: How it works
-description: From a log line to a ban - sources, parsers, the rule set, the engine, storage, trust, and what happens at boot.
+title: How a log line becomes a ban
+description: Sources and cursors, parsing and matching, counting windows, trust, ban lengths, storage, what is kept in memory, boot, and importing history.
 sidebar:
   order: 1
 ---
 
-barbican is one process (tokio, with a few blocking threads) and one SQLite database.
-
 ```text
- logs ─► parser ─► rules ─► engine ─► SQLite
- (docker, file,     │          │
-  journald,     (in each   bans, trust
-  VictoriaLogs)  source)       │
-                               ▼
-                    nftables (this host) ── edge API ──► barbican-edge ─► nftables (router)
+ source ─► parser ─► rule match ─► engine ─► database
+                                     │
+                                     ├─► kernel sets on this host
+                                     └─► edge agents
 ```
 
-## Sources: parse and match where the lines are
+## Reading
 
-Each [source](/guides/sources/) runs on its own and reconnects when its input goes away. It parses each line and matches it against the rule set right there, reusing its buffers: parsers borrow from the line instead of copying it, and the result of matching is a 64-bit mask of the rules that matched (so at most 64 rules). Only lines that matched a rule, or are logins, go on to the engine as hits; the rest cost a parse and a few regular expression matches.
+Each [source](/guides/sources/) runs on its own. It reads lines from its input and keeps a cursor: a file's identity and offset, the journal's cursor, or the time of the last line read from Docker or VictoriaLogs. The cursor is saved every few seconds and when the agent stops, so after a restart reading continues where it stopped, without reading lines twice or skipping a gap (within what the input still has). When an input goes away (a container restarts, a file rotates, a log store is unreachable) the source reconnects with a growing pause.
 
-Each source saves a cursor (a file's inode and offset, the journal's cursor, the time of the last line) every few seconds and when the agent stops, and continues from it after a restart.
+The source parses each line and matches it against the rules right there. Most lines match nothing, and those cost one parse and a few pattern matches and go no further. Only lines that matched a rule, and logins, are passed on to the engine.
 
-## The engine: record, trust, count, ban
+## Deciding
 
-The engine takes hits in batches (up to 512, one transaction each). For each hit, judged at the time of its line:
+The engine handles those events in order of their time, in batches written to the database in one transaction each. For each event:
 
-1. An allowed address (the allow list, an allowing feed, the exempt networks) is ignored.
-2. The address is recorded with its country and network (from the geolocation databases, cached), and the event counted under the first rule it matched, per address, rule, source and hour, with "what it tried" (`GET example.com/x → 404`, a user name, a probe) stored once and referred to by id.
-3. A successful login, or a signed-in user's request, trusts the address for the policy's trust time.
-4. Unless the address is trusted or already banned, every banning rule that matched counts the hit in its window, per address; a rule whose threshold is reached bans. The ban's length comes from [the policy](/guides/rules/#the-policy), counting the address's earlier bans.
+1. If the address is allowed (allow list, allowing feed, exempt networks), it stops here.
+2. The address is recorded with its country and network, and the event is counted under the first rule it matched, per address, rule, source and hour. What it tried (`GET example.com/x → 404`, a user name, a probe's description) is stored once and referred to after that.
+3. A successful login, or a request of a signed-in Authelia user, makes the address trusted for the policy's trust time.
+4. Unless the address is trusted or already banned, every banning rule it matched counts the event in that rule's time window for the address. A rule that reaches its threshold bans.
 
-New events, bans and edge reports are pushed to the UIs that are open (the **Live** panel, the overview's counters).
+A ban's length is decided when it starts: the rule's length or the default, then the shortest length that applies for the address's country, network or the feeds that list it, multiplied for each earlier ban of the address (repeat offenders), up to the policy's maximum. Lifting a ban by hand or letting it expire keeps it in the history, where it counts as an earlier ban next time.
+
+Counting per hour keeps the database small: a scanner that sends the same request a thousand times in an hour is one row with a count of a thousand.
+
+## What should be blocked
+
+The agent keeps the current picture in memory: bans in force, allow and deny lists, exempt networks, the prefixes of blocked countries (from the geolocation database) and of blocking feeds. Countries and feeds are merged into one list with a version. When anything changes, only the difference goes to the [kernel](/internals/firewall/) and to the [edge agents](/internals/edge-link/).
+
+Open UIs get new events, bans and edge reports as they happen.
 
 ## Storage
 
-Everything is in SQLite: addresses (4 or 16 bytes), the distinct texts of what they tried, events counted per hour, bans with their history, trust, rules, the policy, feeds and their contents, the allow and deny lists, and the sources' cursors. Events older than the retention (a year by default) are deleted; bans and their addresses stay.
+Everything lives in one SQLite database: addresses (4 or 16 bytes each), the texts of what they tried, hourly event counts, bans with their history, trust, rules, the policy, feeds and their contents, allow and deny lists, drop counters, and the sources' cursors. Events older than the retention (a year by default) are deleted; bans and their addresses stay.
 
-## The state and the firewall
+## Boot and stop
 
-What should be blocked is kept in memory: bans in force, the allow and deny lists, the exempt networks, blocked countries' prefixes (from the country database) and feeds' prefixes. When it changes, the [firewall](/internals/firewall/) gets only the difference, and the [edge API](/edge/protocol/) pushes the change to every connected edge.
+The systemd unit starts before the network and Docker, and the agent reports itself ready only once its table holds every block. No packet reaches a service before the blocks are in place. Bans that expired while the host was down are left out.
 
-Countries and feeds are combined into one list of prefixes, merged, with a version: edges get it again only when its version changes.
-
-## At boot
-
-The unit starts before `network-pre.target` and Docker, and is of `Type=notify`: the agent reports itself ready only once its table is back with every block. No packet reaches a service before the blocks are in place. Bans that ran out while the host was down are left out; the kernel lifts the others on time.
-
-When the agent stops, the table stays: blocks hold while it restarts or is upgraded, and the kernel lifts bans on time. Removing the package removes the table.
+When the agent stops, its table stays. Blocks hold while it restarts or is upgraded, and the kernel keeps lifting bans on time. Removing the package removes the table.
 
 ## Dry run
 
-With `firewall.enabled = false` (or `--dry-run`) everything above happens except the firewall: no table is made or changed. The UI says **dry run**, and edges still get the bans (and block them, unless they run dry themselves).
+With `[firewall] enabled = false` (or `--dry-run`) the agent does everything above except touch the kernel. Edge agents still receive the bans and enforce them, unless they run dry themselves.
+
+## Importing history
+
+`barbican import` feeds old log lines through the same engine, at the times they were written. Events land in their hours, trust and bans are judged as they would have been, and bans end when they would have ended. A year-long ban from a month ago is still in force after the import; most short ones are long over. See [Importing old logs](/guides/import/).

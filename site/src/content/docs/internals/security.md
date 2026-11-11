@@ -1,24 +1,15 @@
 ---
 title: Security
-description: Who can reach what - the UI without a login and its Origin check, the edge API's pinned TLS and tokens, the service's sandbox, and reporting vulnerabilities.
+description: What barbican trusts, how the agent's service is sandboxed, and how to report a vulnerability.
 sidebar:
-  order: 3
+  order: 5
 ---
 
-barbican decides who may reach a server. What matters is who can change its decisions: the UI, whoever writes the logs it reads, and the edge API.
+barbican decides who may reach a server, so what matters is who can change its decisions: users of the UI, whoever writes the logs it reads, and the edge API.
 
 ## The UI
 
-The UI has **no login** of its own, and whoever can use it can ban, lift, allow, and change every rule. So nothing on the host can reach it but those allowed to:
-
-- **The agent serves it only on a unix socket**, never on a TCP port: a port, even on localhost, is open to every program on the host. The socket's directory and the socket belong to the group `barbican-ui` (modes 2770 and 0660), and the agent checks every connecting process' credentials as the kernel recorded them (`SO_PEERCRED`, `SO_PEERGROUPS`): root, the agent's own user, and members of the socket's group, as primary or supplementary group. Anyone else is refused and logged, whatever the file modes say.
-- **`barbican ui-proxy` serves it to browsers from a container**, on a network only your reverse proxy reaches, without a published port, the host's network or its IPC. It answers only requests from the reverse proxy's addresses (`--trusted-proxy`, which it requires) and, with `--user-header`, only those naming the user the proxy authenticated. Release builds have no way around that; only a development build can run the proxy without a trusted proxy.
-
-See [Behind a reverse proxy](/guides/reverse-proxy/).
-
-A proxy that authenticates by a cookie would let any site the user visits open the UI's WebSocket with that cookie. So the agent refuses a WebSocket whose `Origin` header doesn't match its `Host` (or `X-Forwarded-Host`): only pages of the UI's own origin can connect. Clients that send no `Origin` (scripts, not browsers) aren't checked; they still have to get past the proxy.
-
-The UI's image runs read-only, without capabilities, as an unprivileged user given the `barbican-ui` group.
+The UI has no login of its own and full control over barbican, so it is reachable only through a unix socket guarded by the kernel's peer credentials, and from browsers only through a proxy in a container behind your authenticating reverse proxy. [How the UI is protected](/internals/control-surface/) explains each layer and what an attacker in each position can do.
 
 ## Logs
 
@@ -28,10 +19,7 @@ Trust works the other way: a successful login keeps an address from being banned
 
 ## The edge API
 
-- TLS only. An edge accepts exactly the certificate whose SHA-256 fingerprint it is configured with (no certificate authority, so it works with bare LAN addresses): nobody between an edge and its agent can read the token, or feed the edge bans or allow lists.
-- Each edge has its own token, at least 16 characters, checked when it connects; a wrong token is refused.
-- Edges connect out; nothing connects to them.
-- What an agent sends an edge is only ever what that agent blocks and allows; what an edge reports only reaches the agent's UI.
+Edges connect out to the agent over TLS, accept only the certificate whose fingerprint they are configured with, and present a token of their own. See [How agents and edges talk](/internals/edge-link/#why-the-connection-is-safe).
 
 The self-signed certificate and its key are made on the first start next to the database, readable only by the agent. To change them, delete them (or set `edge.cert` and `edge.key`), restart, and give the edges the new fingerprint.
 
