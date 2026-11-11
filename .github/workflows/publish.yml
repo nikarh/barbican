@@ -117,7 +117,9 @@ jobs:
             "$PWD/ci/data/barbican.db" "$PWD/ci/run/ui.sock" "$PWD/ci/data/none.mmdb" > ci/config.toml
           ci-rootfs/amd64/barbican --dry-run --config ci/config.toml > ci/agent.log 2>&1 &
           for _ in $(seq 20); do [[ -S ci/run/ui.sock ]] && break; sleep 0.5; done
+          # It only serves a trusted reverse proxy: here the requests come from this runner, through Docker's bridge.
           docker run -d --name barbican-ui --read-only --cap-drop=ALL --security-opt no-new-privileges \
+            -e BARBICAN_TRUSTED_PROXIES=172.16.0.0/12 -e BARBICAN_USER_HEADER=Remote-User \
             --group-add "$(id -g)" -v "$PWD/ci/run:/run/barbican-ui:ro" -p 127.0.0.1:8080:8080 barbican:ci
           ok=
           for _ in $(seq 20); do
@@ -125,11 +127,12 @@ jobs:
             sleep 0.5
           done
           ws() {
-            curl -s -o /dev/null -w '%{http_code}' -m 3 "$@" -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+            curl -s -o /dev/null -w '%{http_code}' -m 3 -H 'Remote-User: ci' "$@" -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
               -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
               http://127.0.0.1:8080/api/ws || true
           }
-          if [[ -z $ok ]] || [[ $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/) != 200 ]] \
+          page() { curl -s -o /dev/null -w '%{http_code}' -m 3 "$@" http://127.0.0.1:8080/ || true; }
+          if [[ -z $ok ]] || [[ $(page -H 'Remote-User: ci') != 200 ]] || [[ $(page) != 403 ]] \
             || [[ $(ws) != 101 ]] || [[ $(ws -H 'Origin: https://elsewhere.example') != 403 ]]; then
             docker logs barbican-ui
             cat ci/agent.log
