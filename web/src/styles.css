@@ -75,6 +75,20 @@ body {
   color: var(--ink-faint);
 }
 
+/* Where a panel leads (Details, All bans), at the right of its title: as small as the title, and quiet until
+ * pointed at. */
+.panel-link {
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--ink-dim);
+  text-decoration: none;
+}
+
+.panel-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
 /* A screen that fills the height left below the header (and above the phone's tab bar): its last child, a grid,
  * takes what is left. */
 .fill {
