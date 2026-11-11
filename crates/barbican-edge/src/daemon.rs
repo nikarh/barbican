@@ -16,7 +16,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use barbican_common::edge::wire::{self, Frame, HEARTBEAT, SILENCE};
 use barbican_common::edge::{Mirror, merge};
-use barbican_common::net::{Net, aggregate};
+use barbican_common::net::{Family, Net, aggregate};
 use barbican_common::nft::Counters;
 use barbican_common::nft::Desired;
 use serde::Serialize;
@@ -512,7 +512,12 @@ impl Edge {
         }
         let desired = self.desired();
         self.status.blocks = desired.block.len();
-        self.status.listed = desired.lists.len();
+        // Prefixes, as the lists have them; without IPv6, its prefixes aren't loaded.
+        self.status.listed = desired
+            .lists
+            .iter()
+            .filter(|n| self.ipv6 || n.family() == Family::V4)
+            .count();
         if let Some(fw) = &mut self.firewall {
             match fw.reconcile(&desired, now) {
                 Ok(()) => {
