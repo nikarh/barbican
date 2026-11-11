@@ -53,11 +53,15 @@ function summary(s) {
 		return E('div', { 'class': 'alert-message warning' },
 			_('barbican-edge isn\'t running (no %s). Check its settings and "logread -e barbican".').format(STATUS));
 	}
+	var dry = !s.enabled;
 	var rows = [
-		[_('Blocked addresses and prefixes'), String(s.blocks)],
+		[_('Mode'), dry
+			? E('strong', { 'style': 'color:#c80' }, _('Dry run: following the agents, the firewall is left alone (Settings → Dry run)'))
+			: _('Enforcing')],
+		[_('Blocked addresses and prefixes'), dry ? _('%d (would be blocked)').format(s.blocks) : String(s.blocks)],
 		[_('Listed prefixes (countries, blocklists)'), String(s.listed)],
 		[_('Packets dropped'), _('%d blocked, %d listed').format(s.dropped_blocked, s.dropped_listed)],
-		[_('Firewall'), s.enabled ? (s.error ? E('span', { 'style': 'color:#c33' }, s.error) : _('applied %s').format(ago(s.applied))) : _('off')],
+		[_('Firewall'), s.enabled ? (s.error ? E('span', { 'style': 'color:#c33' }, s.error) : _('applied %s').format(ago(s.applied))) : _('not changed (dry run)')],
 		[_('Version'), s.version]
 	];
 	return E('table', { 'class': 'table' }, rows.map(function(r) {

@@ -16,15 +16,25 @@ return view.extend({
 		o.default = '1';
 		o.rmempty = false;
 
+		o = s.option(form.Flag, 'dry_run', _('Dry run'),
+			_('Follow the agents and keep their state, but change nothing in the firewall: to see first what it would block, and what that costs.'));
+		o.default = '0';
+		o.rmempty = false;
+
+		o = s.option(form.Flag, 'ipv6', _('IPv6'),
+			_('Block IPv6 too. Off, the agents send no IPv6 at all: on a router without IPv6 it would only take memory.'));
+		o.default = '1';
+		o.rmempty = false;
+
 		o = s.option(form.Flag, 'lists', _('Apply lists'),
 			_('Also block the agents\' blocked countries and blocking lists, not only their bans.'));
 		o.default = '1';
 		o.rmempty = false;
 
-		o = s.option(form.Value, 'persist_interval', _('Save at most every'),
-			_('Seconds. The state is put back at boot; it is written to flash only when it changed, and at most this often.'));
+		o = s.option(form.Value, 'persist_interval', _('Also save every'),
+			_('Seconds. The state is saved to flash when the agent stops cleanly (a reboot, an upgrade) and put back at boot, before any agent is reachable. 0: only then (flash wears; the agents send what changed once reachable).'));
 		o.datatype = 'uinteger';
-		o.placeholder = '3600';
+		o.placeholder = '0';
 
 		o = s.option(form.Value, 'table', _('nftables table'));
 		o.datatype = 'and(minlength(1),maxlength(64))';
