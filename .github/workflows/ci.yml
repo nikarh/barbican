@@ -203,9 +203,10 @@ jobs:
       - run: rustup toolchain install && rustup target add x86_64-unknown-linux-musl
       # cargo-zigbuild's linker wrappers are in every crate's fingerprint, and their path changes with the tools in
       # mise.toml: a cache from other tools would be restored as a full match, rebuilt from scratch and never saved.
+      # A key of its own: what it builds is the e2e profile's (the dependencies optimised, as in no other job).
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          key: musl-${{ hashFiles('mise.toml') }}
+          key: e2e-${{ hashFiles('mise.toml') }}
       - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
           install_args: zig github:rust-cross/cargo-zigbuild
