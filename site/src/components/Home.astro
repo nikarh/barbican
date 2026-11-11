@@ -1,5 +1,5 @@
 ---
-// The front page: what barbican does, next to its UI, then what it covers, how the pieces fit, how to install it, what
+// The front page: what barbican does, next to its UI, why use it, its parts, how they fit, how to install it, what
 // changed recently, and where to read on.
 import { Code, Tabs, TabItem } from '@astrojs/starlight/components';
 import Changelog from './Changelog.astro';
@@ -10,51 +10,37 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 const link = (path: string) => `${base}${path}`;
 const download = 'https://github.com/nikarh/barbican/releases/latest/download';
 
-const covers = [
+// What barbican is made of, each with what exists today.
+const parts = [
 	[
-		'Log sources',
-		'A container’s log through the Docker API, a file followed across rotation, the systemd journal, or a VictoriaLogs query. Parsers for Traefik, OpenSSH and Authelia, or a regular expression.',
-		'/guides/sources/',
+		'Log inputs',
+		'A container’s log through the Docker API, a file followed across rotation, the systemd journal, or a VictoriaLogs query for logs shipped from other machines.',
+		'/guides/sources/#inputs',
+	],
+	[
+		'Parsers',
+		'Traefik access logs, OpenSSH, Authelia, and a regular expression for anything else. Any parser works with any input.',
+		'/guides/sources/#parsers',
 	],
 	[
 		'Rules',
-		'Match paths, methods, statuses, hosts, user agents, user names and blocklists; ban once a threshold is reached in a window. Defaults cover exploit probes, scanners and password guessing.',
+		'Match paths, methods, statuses, hosts, user agents, user names and lists, and ban once a threshold is reached within a time window. The defaults catch exploit probes, scanners and password guessing.',
 		'/guides/rules/',
 	],
 	[
-		'Trust and ban lengths',
-		'Addresses people log in from are trusted. Lengths per rule, country, network and blocklist, longer for repeat offenders.',
-		'/guides/rules/#the-policy',
-	],
-	[
-		'nftables over netlink',
-		'One table of its own. Bans are set elements with timeouts, written over netlink one small change at a time; the kernel lifts them on time even with the agent stopped.',
-		'/internals/firewall/',
-	],
-	[
-		'Countries and feeds',
-		'Block countries and continents, and lists such as Spamhaus DROP. Allow lists too, such as Cloudflare’s ranges for sites behind its proxy.',
+		'Lists',
+		'Countries and continents from a geolocation database, and feeds such as Spamhaus DROP, FireHOL level 1, blocklist.de, Tor exits, or Cloudflare’s ranges to allow.',
 		'/guides/feeds/',
 	],
 	[
-		'A web UI',
-		'What every address tried and what was decided, live; rules, lengths, countries and lists are edited there. Works on a phone, and behind your proxy’s authentication.',
-		'/guides/ui/',
+		'Firewalls',
+		'nftables on the server and on OpenWrt; iptables with ipset on router firmware without nftables. Blocks are kernel sets with timeouts, so they hold while barbican is stopped.',
+		'/internals/firewall/',
 	],
 	[
-		'Edge agents',
-		'A small agent for OpenWrt, or iptables and ipset on other firmware, blocks what the agents ban for the whole network. Bans are pushed to it over a binary protocol.',
-		'/edge/overview/',
-	],
-	[
-		'History',
-		'Import months of old logs through the rules, as though they had been read live, straight from VictoriaLogs if that is where they are.',
-		'/guides/import/',
-	],
-	[
-		'Small',
-		'One process and a SQLite database: about 70 MB with 25 000 bans and three continents blocked. The edge agent is a megabyte, and uses 6 to 10 MB.',
-		'/reference/resources/',
+		'Packages',
+		'Debian and Arch packages and static binaries for x86_64 and aarch64; OpenWrt packages with LuCI pages for armv7, aarch64 and x86_64; the UI as a container image.',
+		'/install/overview/',
 	],
 ];
 ---
@@ -63,13 +49,12 @@ const covers = [
 	<section class="intro">
 		<div class="lead">
 			<p class="summary">
-				Bans addresses that abuse your services. barbican reads the logs of a reverse proxy, an SSH server and an
-				authentication portal, decides with rules what counts as abuse, and blocks offenders with nftables.
+				barbican reads your servers’ logs, decides with rules which addresses are abusing your services, and blocks
+				them in the kernel, on the server and on your router.
 			</p>
 			<p>
-				It blocks on the server and, through a small edge agent, on routers for the whole network. Countries and public
-				blocklists can be blocked as a whole. A web UI shows what every address tried and what was decided, and is where
-				the rules are edited. It is what fail2ban, a log pipeline and a dashboard do together, in one process.
+				It is one program with one configuration file and a web UI. Countries and public blocklists can be blocked as a
+				whole, people who log in are never locked out, and every ban says which rule made it and what the address did.
 			</p>
 			<div class="actions">
 				<a class="button primary" href={link('/start/quick-start/')}>Quick start</a>
@@ -86,11 +71,37 @@ const covers = [
 		</div>
 	</section>
 
+	<section class="why">
+		<h2>Why barbican</h2>
+		<ul>
+			<li>
+				<strong>Everything in one place.</strong> Bans from logs, country blocking and blocklists usually take three tools
+				and a dashboard. Here they share one set of rules, one allow list and one UI.
+			</li>
+			<li>
+				<strong>Blocks where traffic arrives.</strong> If your server sits behind a proxy or a router’s port forward, a ban
+				on the server alone may not stop anything. Edge agents apply the same blocks on the router.
+			</li>
+			<li>
+				<strong>Small enough for a router.</strong> Lists are merged into ranges before they reach the kernel, the edge agent
+				uses 6 to 10 MB, and it writes to flash only when it stops.
+			</li>
+			<li>
+				<strong>Hard to turn against you.</strong> The UI has no network port of its own, edges trust only your agent’s
+				certificate, and logins make an address trusted.
+			</li>
+		</ul>
+		<p><a href={link('/start/comparison/')}>Compared with fail2ban, CrowdSec and others</a></p>
+	</section>
+
 	<section class="covers">
-		<h2>What it does</h2>
+		<h2>What it is made of</h2>
+		<p class="covers-lead">
+			Each part has an interface of its own, and these are the implementations that exist today.
+		</p>
 		<dl>
 			{
-				covers.map(([term, text, href]) => (
+				parts.map(([term, text, href]) => (
 					<div>
 						<dt>
 							<a href={link(href!)}>{term}</a>
@@ -108,16 +119,19 @@ const covers = [
 			<pre
 				class="diagram"
 				role="img"
-				aria-label="Logs go through a parser and the rules into the engine, which records to SQLite and blocks with nftables on the host; an edge API pushes the blocks to edge agents, which block with nftables on routers.">{` logs ─► parser ─► rules ─► engine ─► SQLite
- (docker, file,     │          │
-  journald,     (in each   bans, trust
-  VictoriaLogs)  source)       │
-                               ▼
-                    nftables (this host) ── edge API ──► barbican-edge ─► nftables (router)`}</pre>
+				aria-label="Logs from each server reach the agent, which parses them, applies the rules, records to SQLite and blocks in the server's kernel; over TLS it pushes the blocks to edge agents on routers, which block in theirs.">{` server logs ─► agent: parse ─► rules ─► bans, trust ─► SQLite
+ (local, or shipped        │
+  from other servers)      ├─► kernel firewall on this server
+                           └─► TLS ─► edge agents ─► kernel firewall on routers`}</pre>
 			<p>
-				The <strong>agent</strong> runs on each server whose logs it reads and blocks there. <strong>Edge agents</strong> on
-				routers follow one or more agents and block the union of what they ban, so an address banned for probing one
-				server can’t reach any of them. See <a href={link('/internals/how-it-works/')}>How it works</a>.
+				One <strong>agent</strong> holds the rules, the lists and the history, and blocks on its own server. Logs from other
+				servers can be shipped to it. <strong>Edge agents</strong> on routers connect to it and block what it blocks, so an
+				address banned for probing one service can’t reach any of them. The <strong>UI</strong> talks to the agent through
+				a local socket, and reaches browsers only through your authenticating reverse proxy.
+			</p>
+			<p>
+				<a href={link('/guides/deployment/')}>Planning a deployment</a> ·{' '}
+				<a href={link('/internals/how-it-works/')}>How a log line becomes a ban</a>
 			</p>
 		</div>
 	</section>
@@ -126,9 +140,9 @@ const covers = [
 		<div class="phone-text">
 			<h2>On a phone</h2>
 			<p>
-				The UI is one page and one WebSocket, served by the agent or by a small container next to your other services.
-				It works under a path prefix and behind forward authentication, and its layout follows the screen: on a phone the
-				panels stack, the grids keep the columns that matter, and the tabs move to the bottom.
+				The UI is served by a small container next to your reverse proxy, behind its login. It works under a path prefix,
+				and its layout follows the screen: on a phone the panels stack, the grids keep the columns that matter, and the
+				tabs move to the bottom.
 			</p>
 			<p><a href={link('/guides/reverse-proxy/')}>Behind a reverse proxy</a> · <a href={link('/guides/ui/')}>The web UI</a></p>
 		</div>
@@ -192,10 +206,12 @@ apk add --allow-untrusted ./barbican-edge-armv7.apk ./luci-app-barbican.apk`}
 		<h2>Reading order</h2>
 		<ol>
 			<li><a href={link('/start/introduction/')}>Introduction</a>: the parts, and what barbican isn’t.</li>
+			<li><a href={link('/guides/deployment/')}>Planning a deployment</a>: where each part runs so that blocks work.</li>
 			<li><a href={link('/start/quick-start/')}>Quick start</a>: one server, one log, a dry run, then blocking.</li>
 			<li><a href={link('/guides/sources/')}>Sources</a> and <a href={link('/guides/rules/')}>rules</a>: what is read, and what counts as abuse.</li>
 			<li><a href={link('/edge/overview/')}>Edge agents</a>: blocking for the whole network on a router.</li>
 			<li><a href={link('/reference/configuration/')}>Configuration</a>: every setting.</li>
+			<li><a href={link('/internals/how-it-works/')}>How it works</a>: the engine, the firewall, the edge link and the UI’s protection.</li>
 		</ol>
 	</section>
 </div>
@@ -282,6 +298,29 @@ apk add --allow-untrusted ./barbican-edge-armv7.apk ./luci-app-barbican.apk`}
 		margin: 0;
 	}
 
+	.why ul {
+		margin: 0 0 1rem;
+		padding: 0;
+		list-style: none;
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 1rem 1.5rem;
+	}
+	.why li {
+		color: var(--sl-color-gray-2);
+		line-height: 1.6;
+	}
+	.why strong {
+		color: var(--sl-color-white);
+		font-weight: 650;
+	}
+	.why p {
+		margin: 0;
+	}
+	.covers-lead {
+		color: var(--sl-color-gray-2);
+		margin: 0 0 1rem;
+	}
 	.covers dl {
 		display: grid;
 		grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -336,6 +375,7 @@ apk add --allow-untrusted ./barbican-edge-armv7.apk ./luci-app-barbican.apk`}
 	}
 	.flow p {
 		margin: 0;
+		line-height: 1.65;
 		max-width: 50rem;
 	}
 
@@ -417,6 +457,9 @@ apk add --allow-untrusted ./barbican-edge-armv7.apk ./luci-app-barbican.apk`}
 		}
 	}
 	@media (max-width: 40rem) {
+		.why ul {
+			grid-template-columns: minmax(0, 1fr);
+		}
 		.covers dl {
 			grid-template-columns: minmax(0, 1fr);
 		}

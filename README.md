@@ -5,11 +5,10 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE-MIT)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE-APACHE)
 
-Bans addresses that abuse your services. barbican reads the logs of a reverse proxy, an SSH or SFTP server and an
-authentication portal; rules decide what counts as abuse; offenders are blocked with nftables, on the server and,
-through a small edge agent, on a router for the whole network. Countries and continents can be blocked as a whole,
-and public blocklists used, as blocks, allow lists or data for rules. A web UI shows what every address tried and
-what was decided, and is where rules, ban lengths, countries, lists and blocklists are edited.
+barbican reads your servers' logs, decides with rules which addresses are abusing your services, and blocks them in
+the kernel, on the server and, through small edge agents, on your router. Countries and public blocklists can be
+blocked as a whole. A web UI shows what every address tried and why it was banned, and is where rules, ban lengths,
+countries and lists are edited. It is one program with one configuration file and a SQLite database.
 
 **Documentation: <https://barbican.arhipov.net/>**
 
@@ -18,26 +17,27 @@ what was decided, and is where rules, ban lengths, countries, lists and blocklis
   <img alt="barbican's overview: bans and events of the last 30 days, recent bans, the firewall, geolocation and feeds." src="site/src/assets/screenshots/overview-light.webp">
 </picture>
 
-It is what fail2ban, a log pipeline and a dashboard do together, in one process with a SQLite database.
-
 ```text
- logs ─► parser ─► rules ─► engine ─► SQLite
- (docker, file,     │          │
-  journald,     (in each   bans, trust
-  VictoriaLogs)  source)       │
-                               ▼
-                    nftables (this host) ── edge API ──► barbican-edge ─► nftables (router)
+ server logs ─► agent: parse ─► rules ─► bans, trust ─► SQLite
+ (local, or shipped        │
+  from other servers)      ├─► kernel firewall on this server
+                           └─► TLS ─► edge agents ─► kernel firewall on routers
 ```
 
-- **Sources**: a container's log (through the Docker API), a file, the systemd journal, or a VictoriaLogs query.
-  **Parsers** for Traefik, OpenSSH's sshd and Authelia, or a regular expression of your own.
-- **Rules** match HTTP requests, logins and protocol probes, and ban once a threshold is reached in a time window.
-  Addresses someone logged in from are trusted; ban lengths can depend on the country, the network or a blocklist,
-  and grow for repeat offenders.
-- **The firewall**: one nftables table of its own, changed over netlink, element by element; the kernel lifts bans on
-  time. At boot the blocks are back before the network and Docker start.
-- **Edge agents** for OpenWrt (nftables, with LuCI pages) and for routers with iptables and ipset (Asuswrt-Merlin)
-  follow one or more agents over a pinned TLS connection; bans reach them within a fraction of a second.
+Each part is an interface with a few implementations today:
+
+| Part | Today |
+| --- | --- |
+| Log inputs | Docker API, files (followed across rotation), the systemd journal, VictoriaLogs queries |
+| Parsers | Traefik, OpenSSH, Authelia, regular expressions |
+| Lists | Countries and continents (DB-IP), Spamhaus DROP, FireHOL level 1, blocklist.de, Tor exits, Cloudflare's ranges (to allow), any URL |
+| Firewalls | nftables on the server and on OpenWrt; iptables with ipset on firmware without nftables (Asuswrt-Merlin) |
+| Packages | Debian, Arch, static binaries (x86_64, aarch64); OpenWrt with LuCI pages (armv7, aarch64, x86_64); the UI as a container image |
+
+Edge agents connect out to the agent over TLS with a pinned certificate and a token each. The UI has no network port:
+the agent serves it on a unix socket, and browsers reach it through a container behind your authenticating reverse
+proxy. [Compared with other tools](https://barbican.arhipov.net/start/comparison/) explains how it relates with fail2ban, CrowdSec
+and others.
 
 ## Install
 
@@ -55,12 +55,13 @@ Try it first without touching the firewall: `barbican --dry-run` (or `[firewall]
 The documentation is the site at <https://barbican.arhipov.net/>, built from [`site/`](site/), with a version for
 every release and one for `main`:
 
-- [Introduction](https://barbican.arhipov.net/start/introduction/) and [Quick start](https://barbican.arhipov.net/start/quick-start/)
+- [Introduction](https://barbican.arhipov.net/start/introduction/), [Compared with other tools](https://barbican.arhipov.net/start/comparison/) and [Quick start](https://barbican.arhipov.net/start/quick-start/)
+- [Planning a deployment](https://barbican.arhipov.net/guides/deployment/): where each part runs so that blocks work
 - [Sources and parsers](https://barbican.arhipov.net/guides/sources/), [Rules and policy](https://barbican.arhipov.net/guides/rules/), and [Countries, blocklists and allow lists](https://barbican.arhipov.net/guides/feeds/)
 - [The web UI](https://barbican.arhipov.net/guides/ui/), [Behind a reverse proxy](https://barbican.arhipov.net/guides/reverse-proxy/), and [Importing old logs](https://barbican.arhipov.net/guides/import/)
-- [Edge agents](https://barbican.arhipov.net/edge/overview/) and [the edge protocol](https://barbican.arhipov.net/edge/protocol/)
+- [Edge agents](https://barbican.arhipov.net/edge/overview/)
 - [Configuration](https://barbican.arhipov.net/reference/configuration/), [command line](https://barbican.arhipov.net/reference/cli/) and [resource use](https://barbican.arhipov.net/reference/resources/)
-- [The firewall](https://barbican.arhipov.net/internals/firewall/) and [Security](https://barbican.arhipov.net/internals/security/)
+- How it works: [the engine](https://barbican.arhipov.net/internals/how-it-works/), [the firewall](https://barbican.arhipov.net/internals/firewall/), [agents and edges](https://barbican.arhipov.net/internals/edge-link/), [the UI's protection](https://barbican.arhipov.net/internals/control-surface/) and [Security](https://barbican.arhipov.net/internals/security/)
 
 To preview it locally, run `mise run docs`. [Writing the docs](https://barbican.arhipov.net/project/docs/) explains
 how it is organized and published.
