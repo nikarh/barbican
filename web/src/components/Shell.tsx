@@ -10,6 +10,7 @@ import type { ReactNode } from 'react'
 
 import { useConnection, useMeta } from '../api/hooks'
 import { href, type Screen } from '../lib/router'
+import { useTabBarAutoHide } from '../lib/useTabBarAutoHide'
 import { ConnectionBanner } from './ConnectionBanner'
 import classes from './Shell.module.css'
 
@@ -44,6 +45,7 @@ export function Logo() {
 export function Shell({ screen, children }: { screen: Screen; children: ReactNode }) {
   const connection = useConnection()
   const meta = useMeta()
+  const tabBarHidden = useTabBarAutoHide(screen)
   // Not connected after at least one attempt failed: say so, and that what's shown isn't live.
   const offline = connection.state !== 'open' && connection.failures > 0
   let label = 'Live'
@@ -93,7 +95,7 @@ export function Shell({ screen, children }: { screen: Screen; children: ReactNod
           {children}
         </div>
       </main>
-      <nav className={classes.tabbar} aria-label="Main">
+      <nav className={classes.tabbar} aria-label="Main" data-hidden={tabBarHidden}>
         {TABS.filter((t) => t.phone).map(({ screen: s, label, icon: Icon }) => (
           <a
             key={s}
