@@ -55,18 +55,18 @@ function describe({ problem, failures, lostAt }: Connection): Description {
     case 'gateway':
       return {
         title: `The server answered ${String(problem.status)}`,
-        hint: "What's in front of barbican (a reverse proxy) can't reach it. Is the UI's container, or the agent, running?",
+        hint: "What's in front of Barbican (a reverse proxy) can't reach it. Is the UI's container, or the agent, running?",
       }
     case 'foreign':
       return {
-        title: "The server answered with a page that isn't barbican's",
+        title: "The server answered with a page that isn't Barbican's",
         hint: 'A sign-in page, perhaps: the session may have expired. Reload the page.',
         reload: true,
       }
     case 'server':
       return {
         title: "The server can't be reached",
-        hint: `Nothing answers at ${window.location.host}. Is barbican running (the agent, or the UI's container)? Is the network up?`,
+        hint: `Nothing answers at ${window.location.host}. Is Barbican running (the agent, or the UI's container)? Is the network up?`,
         reload: true,
       }
   }
