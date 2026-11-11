@@ -63,9 +63,13 @@ if [[ ! -f "${geo}" ]] || [[ -n $(find "${geo}" -mtime +31) ]]; then
   mv "${geo}.part" "${geo}"
 fi
 
+# The OpenWrt packages (apk's mkpkg runs in a container, seconds) are made while the server suite runs: only the
+# router suite needs them.
+packaged=
 if [[ -n "${router_up}" ]]; then
-  log "packaging the edge agent for OpenWrt"
-  scripts/package-openwrt.sh x86_64 "${bin}/barbican-edge" target/e2e-packages >/dev/null
+  log "packaging the edge agent for OpenWrt (meanwhile)"
+  scripts/package-openwrt.sh x86_64 "${bin}/barbican-edge" target/e2e-packages >/dev/null &
+  packaged=$!
 fi
 
 wait "${server_up}"
@@ -86,6 +90,11 @@ for suite in "${suites[@]}"; do
       "${vm}" server ssh 'sudo /opt/barbican/server.sh' || status=1
       ;;
     router)
+      if [[ -n "${packaged}" ]] && ! wait "${packaged}"; then
+        log "packaging the edge agent failed"
+        status=1
+        continue
+      fi
       log "router suite"
       e2e/router.sh target/e2e-packages || status=1
       ;;
