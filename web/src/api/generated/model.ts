@@ -133,7 +133,12 @@ blocks: number,
  */
 listed: number, 
 /**
- * Packets and bytes its firewall dropped for a ban, since its rules were made.
+ * When this agent started counting what the edge dropped: the `dropped_*` totals are since then, across the
+ * edge's restarts (it reports its firewall's counters, which start again from 0 with its rules).
+ */
+droppedSince: number, 
+/**
+ * Packets and bytes its firewall dropped for a ban, in total.
  */
 droppedBlocked: number, droppedBlockedBytes: number, 
 /**
@@ -279,7 +284,12 @@ blocks: number,
  * Prefixes of countries and blocking feeds that go into the list sets (without IPv6, its prefixes don't).
  * They are counted as the lists have them: the sets hold them merged into ranges, fewer elements.
  */
-listed: number, droppedBlocked: number, droppedListed: number, };
+listed: number, 
+/**
+ * Packets its firewall dropped for a ban, and for a country or a blocklist: in total, across restarts and
+ * reboots, since `dropped_since`.
+ */
+droppedBlocked: number, droppedListed: number, droppedSince: number | null, };
 
 export type GeoDatabase = { 
 /**

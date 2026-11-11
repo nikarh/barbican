@@ -284,12 +284,35 @@ say "a reboot"
 systemctl start barbican
 ${RPC} ban.create '{"net": "203.0.113.10", "secs": null, "reason": "e2e forever"}' >/dev/null
 wait_until 5 att_blocked || true
+# What was dropped: the kernel's counter of the ban rules, and the agent's total (the counters are read every second
+# here: check_interval).
+kernel_dropped() { nft -j list chain inet barbican prerouting | python3 -c 'import json,sys; print(sum(e["counter"]["packets"] for i in json.load(sys.stdin)["nftables"] if "rule" in i and i["rule"].get("comment") == "blocked" for e in i["rule"]["expr"] if "counter" in e))'; }
+total_dropped() { ${RPC} overview.get | python3 -c 'import json,sys; print(json.load(sys.stdin)["firewall"]["droppedBlocked"])'; }
+att_blocked || true
+before=$(kernel_dropped)
+total_seen() { (($(total_dropped) >= before)); }
+wait_until 5 total_seen || true
+total_before=$(total_dropped)
+systemctl restart barbican
+if ((before > 0)) && (($(kernel_dropped) >= before)); then
+  pass "a restart keeps the kernel's drop counters (${before} packets)"
+else
+  fail "the drop counters started again after a restart: ${before}, then $(kernel_dropped)"
+fi
+if (($(total_dropped) >= total_before)); then pass "and the total"; else fail "the total dropped: ${total_before}, then $(total_dropped)"; fi
 systemctl stop barbican
 # A reboot loses the table.
 nft delete table inet barbican
 if att; then pass "without the table, traffic passes"; else fail "blocked without the table"; fi
 systemctl start barbican
 if att_blocked; then pass "blocks are back by the time the agent reports ready"; else fail "blocks came back late"; fi
+# The table is new and its counters start from 0; the total goes on from where it was.
+total_kept() { (($(total_dropped) > total_before)); }
+if wait_until 5 total_kept; then
+  pass "the drop total survives the table being made anew ($(total_dropped) packets, kernel $(kernel_dropped))"
+else
+  fail "the total after the table was made anew: $(total_dropped), before ${total_before}"
+fi
 
 say "the edge API"
 if ! curl -s -m 3 -o /dev/null http://127.0.0.1:7380/; then

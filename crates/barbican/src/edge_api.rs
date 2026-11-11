@@ -323,6 +323,8 @@ fn report(edge: &Edge, client: &str, connection: u64, status: &wire::Status<'_>)
     let offset = received.saturating_sub(i64::try_from(status.report.at).unwrap_or(0));
     let r = &status.report;
     let text = |s: &str| (!s.is_empty()).then(|| s.to_owned());
+    // Its firewall's counters start again whenever its rules are made anew: the totals are this agent's.
+    let drops = crate::drops::record(&edge.app, client, received, r.dropped);
     let report = EdgeReport {
         received,
         uptime: r.uptime,
@@ -330,10 +332,11 @@ fn report(edge: &Edge, client: &str, connection: u64, status: &wire::Status<'_>)
         applied: local(r.applied, offset),
         blocks: r.blocks,
         listed: r.listed,
-        dropped_blocked: r.dropped.blocked.packets,
-        dropped_blocked_bytes: r.dropped.blocked.bytes,
-        dropped_listed: r.dropped.listed.packets,
-        dropped_listed_bytes: r.dropped.listed.bytes,
+        dropped_since: drops.since,
+        dropped_blocked: drops.total.blocked.packets,
+        dropped_blocked_bytes: drops.total.blocked.bytes,
+        dropped_listed: drops.total.listed.packets,
+        dropped_listed_bytes: drops.total.listed.bytes,
         error: text(status.error),
         upstreams: status
             .upstreams

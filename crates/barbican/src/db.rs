@@ -628,9 +628,127 @@ pub async fn feed_fetched(
     Ok(())
 }
 
+/// Every place's drop totals.
+pub async fn drops_load(
+    pool: &SqlitePool,
+) -> Result<std::collections::BTreeMap<String, crate::drops::Drops>, Error> {
+    use barbican_common::nft::{Counter, Counters};
+    let rows = sqlx::query!(
+        "SELECT place, since, blocked_packets, blocked_bytes, listed_packets, listed_bytes, last_blocked_packets,
+             last_blocked_bytes, last_listed_packets, last_listed_bytes FROM drops"
+    )
+    .fetch_all(pool)
+    .await?;
+    let n = |v: i64| u64::try_from(v).unwrap_or(0);
+    let counters = |bp, bb, lp, lb| Counters {
+        blocked: Counter {
+            packets: n(bp),
+            bytes: n(bb),
+        },
+        listed: Counter {
+            packets: n(lp),
+            bytes: n(lb),
+        },
+    };
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            (
+                r.place,
+                crate::drops::Drops {
+                    since: r.since,
+                    total: counters(
+                        r.blocked_packets,
+                        r.blocked_bytes,
+                        r.listed_packets,
+                        r.listed_bytes,
+                    ),
+                    last: counters(
+                        r.last_blocked_packets,
+                        r.last_blocked_bytes,
+                        r.last_listed_packets,
+                        r.last_listed_bytes,
+                    ),
+                },
+            )
+        })
+        .collect())
+}
+
+/// Saves a place's drop totals.
+pub async fn drops_save(
+    pool: &SqlitePool,
+    place: &str,
+    d: &crate::drops::Drops,
+) -> Result<(), Error> {
+    let i = |v: u64| i64::try_from(v).unwrap_or(i64::MAX);
+    let (bp, bb, lp, lb) = (
+        i(d.total.blocked.packets),
+        i(d.total.blocked.bytes),
+        i(d.total.listed.packets),
+        i(d.total.listed.bytes),
+    );
+    let (xbp, xbb, xlp, xlb) = (
+        i(d.last.blocked.packets),
+        i(d.last.blocked.bytes),
+        i(d.last.listed.packets),
+        i(d.last.listed.bytes),
+    );
+    sqlx::query!(
+        "INSERT INTO drops (place, since, blocked_packets, blocked_bytes, listed_packets, listed_bytes,
+             last_blocked_packets, last_blocked_bytes, last_listed_packets, last_listed_bytes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (place) DO UPDATE SET blocked_packets = excluded.blocked_packets,
+             blocked_bytes = excluded.blocked_bytes, listed_packets = excluded.listed_packets,
+             listed_bytes = excluded.listed_bytes, last_blocked_packets = excluded.last_blocked_packets,
+             last_blocked_bytes = excluded.last_blocked_bytes, last_listed_packets = excluded.last_listed_packets,
+             last_listed_bytes = excluded.last_listed_bytes",
+        place,
+        d.since,
+        bp,
+        bb,
+        lp,
+        lb,
+        xbp,
+        xbb,
+        xlp,
+        xlb
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn drop_totals_round_trip() {
+        use barbican_common::nft::{Counter, Counters};
+        let db = Db::memory().await;
+        let c = |p: u64| Counters {
+            blocked: Counter {
+                packets: p,
+                bytes: p * 60,
+            },
+            listed: Counter {
+                packets: p + 1,
+                bytes: 0,
+            },
+        };
+        let mut d = crate::drops::Drops::first(100, c(3));
+        drops_save(&db.pool, "", &d).await.unwrap();
+        d.add(c(1));
+        drops_save(&db.pool, "", &d).await.unwrap();
+        drops_save(&db.pool, "wifi", &crate::drops::Drops::first(7, c(9)))
+            .await
+            .unwrap();
+        let back = drops_load(&db.pool).await.unwrap();
+        assert_eq!(back[""], d);
+        assert_eq!(back["wifi"].since, 7);
+        assert_eq!(back[""].total.blocked.packets, 4);
+    }
 
     fn n(s: &str) -> Net {
         s.parse().unwrap()

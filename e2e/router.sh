@@ -114,8 +114,17 @@ say "another program changes the table"
 # The edge's next check of the ruleset's generation (every second here) notices, and it puts it right.
 router 'nft delete element inet barbican host4 "{ 203.0.113.77 }"'
 if wait_until 5 in_set; then pass "a block removed by hand is put back"; else fail "a block removed by hand stays removed"; fi
+edge_total() { rpc edges.list | python3 -c 'import json,sys; print([x for x in json.load(sys.stdin) if x["name"]=="router"][0]["report"]["droppedBlocked"])'; }
+edge_before=$(edge_total)
 router 'nft delete table inet barbican'
 if wait_until 5 in_set && attacker_blocked; then pass "a deleted table comes back with its blocks"; else fail "not repaired after deleting the table"; fi
+# The edge's counters started again from 0 with its new table: the agent's total for it goes on.
+edge_grew() { (($(edge_total) > edge_before)); }
+if wait_until 15 edge_grew; then
+  pass "the agent's drop total for the edge goes on ($(edge_total) packets, ${edge_before} before)"
+else
+  fail "the edge's total: $(edge_total), before ${edge_before}"
+fi
 
 say "lifting on the agent"
 lift_all

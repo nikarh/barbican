@@ -8,6 +8,7 @@ use std::time::Duration;
 use barbican_common::net::{Family, NetSet};
 use barbican_common::nft::{Firewall, NftCommand};
 
+use crate::api::FirewallStatus;
 use crate::app::{App, now};
 use crate::rules::RuleSet;
 
@@ -165,8 +166,10 @@ pub async fn apply(app: &Arc<App>, nft: Option<&Nft>) {
                 status.applied = Some(now);
                 status.error = None;
                 if let Some(c) = counters {
-                    status.dropped_blocked = c.blocked.packets;
-                    status.dropped_listed = c.listed.packets;
+                    set_dropped(
+                        &mut status,
+                        &crate::drops::record(app, crate::drops::HOST, now, c),
+                    );
                 }
                 if changes.added + changes.removed > 0 || changes.lists {
                     tracing::debug!(
@@ -186,6 +189,13 @@ pub async fn apply(app: &Arc<App>, nft: Option<&Nft>) {
             }
         }
     }
+}
+
+/// Shows this host's drop totals.
+fn set_dropped(status: &mut FirewallStatus, d: &crate::drops::Drops) {
+    status.dropped_blocked = d.total.blocked.packets;
+    status.dropped_listed = d.total.listed.packets;
+    status.dropped_since = Some(d.since);
 }
 
 /// Sets the table up. Run before the agent says it is ready, so blocks are in place before anything else starts.
@@ -225,8 +235,10 @@ async fn idle(app: &Arc<App>, nft: Option<&Nft>) {
     {
         status.applied = Some(now);
         if let Some(c) = counters {
-            status.dropped_blocked = c.blocked.packets;
-            status.dropped_listed = c.listed.packets;
+            set_dropped(
+                &mut status,
+                &crate::drops::record(app, crate::drops::HOST, now, c),
+            );
         }
     }
 }
