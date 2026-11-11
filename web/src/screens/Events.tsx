@@ -8,7 +8,7 @@ import type { EventRow, Kind } from '../api/generated/model'
 import { rpc } from '../api/rpc'
 import { InfiniteGrid } from '../components/Grid'
 import { Country } from '../components/ui'
-import { count, dateTime, KIND_LABELS, WIDEST } from '../lib/format'
+import { count, hourRange, KIND_LABELS, WIDEST } from '../lib/format'
 import { columnsFor, useTier, type Column } from '../lib/columns'
 import { navigate } from '../lib/router'
 
@@ -36,8 +36,9 @@ export function EventsScreen() {
       {
         headerName: 'Hour',
         field: 'hour',
-        fits: WIDEST.dateTime(),
-        valueFormatter: (p) => dateTime(Number(p.value ?? 0)),
+        fits: WIDEST.hourRange(),
+        valueFormatter: (p) => hourRange(Number(p.value ?? 0)),
+        headerTooltip: 'Events are counted per address, kind and hour',
       },
       {
         headerName: 'Address',
