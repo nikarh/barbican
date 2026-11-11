@@ -1,0 +1,15 @@
+/* Passes the height it is given on to the screen inside (a .fill screen fills it). */
+.kept {
+  position: relative;
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Hidden, but laid out at the size it would have: hidden with display: none, a grid would lose its size, and lay
+ * its columns out again (a frame without some of them) when it shows again. */
+.kept[data-hidden] {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+}

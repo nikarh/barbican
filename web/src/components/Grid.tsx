@@ -17,6 +17,7 @@ import { IconAlertTriangle, IconInbox } from '@tabler/icons-react'
 import { AgGridReact } from 'ag-grid-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
+import { useShown } from '../lib/shown'
 import classes from './Grid.module.css'
 
 ModuleRegistry.registerModules([
@@ -76,7 +77,9 @@ export interface Sort {
 const PLACEHOLDER_ROWS = 30
 
 /** A grid that loads its rows page by page as it scrolls (ag-grid's infinite row model). `fetch` gets an offset,
- * a limit and the order picked by a sortable column's header (`null`: the default one); whenever `query` changes (filters), the grid starts over.
+ * a limit and the order picked by a sortable column's header (`null`: the default one); whenever `query` changes
+ * (filters), the grid starts over. Whenever `version` changes (the data changed), and whenever its kept screen shows
+ * again, it fetches its rows again and shows the new ones in place of the old, without placeholders in between.
  * Until the first page is in, its rows are placeholders in the real columns, so nothing moves when the rows come;
  * then the rows, what `empty` says, or the error. It takes the height its parent (a `.fill` screen) has left, and
  * no less than a few rows. */
@@ -84,6 +87,7 @@ export function InfiniteGrid<T>({
   columns,
   fetch,
   query,
+  version = '',
   empty,
   onRowClick,
   pageSize = 100,
@@ -91,6 +95,7 @@ export function InfiniteGrid<T>({
   columns: ColDef<T>[]
   fetch: (offset: number, limit: number, sort: Sort | null) => Promise<PageResult<T>>
   query: string
+  version?: string
   empty: Empty
   onRowClick?: (row: T) => void
   pageSize?: number
@@ -138,6 +143,15 @@ export function InfiniteGrid<T>({
     queryRef.current = query
     api.current?.setGridOption('datasource', datasource)
   }, [query, datasource])
+
+  // Fresh rows, in place: after the data changed, and when the screen shows again (it was kept as it was).
+  const shown = useShown()
+  const seen = useRef({ version, shown })
+  useEffect(() => {
+    const before = seen.current
+    seen.current = { version, shown }
+    if (shown && (version !== before.version || !before.shown)) api.current?.refreshInfiniteCache()
+  }, [version, shown])
 
   const onReady = useCallback(
     (e: GridReadyEvent<T>) => {
