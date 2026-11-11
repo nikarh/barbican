@@ -73,7 +73,7 @@ networks:
 ```
 
 - **No published port, no host network, no shared IPC.** The container is on a network of its own with the reverse proxy alone; nothing on the host or in other containers reaches port 8080.
-- **`BARBICAN_TRUSTED_PROXIES`** (`--trusted-proxy <cidr>`, repeatable; comma-separated in the variable): the reverse proxy's addresses. Required. Give the reverse proxy a fixed address on the network, as above.
+- **`BARBICAN_TRUSTED_PROXIES`** (`--trusted-proxy <cidr>`, repeatable; comma-separated in the variable): the reverse proxy's addresses. Required. Give the reverse proxy a fixed address on the network, as above, and trust that address alone (`/32`): **never the network's whole subnet**, whose gateway address is the host itself, so that anything on the host could reach the proxy from it with a header of its choosing. Fixing the UI container's own address too keeps it from ever taking the reverse proxy's.
 - **`BARBICAN_USER_HEADER`** (`--user-header <name>`): only requests carrying this header with a value: the user your reverse proxy authenticated. Authelia's forward auth sets `Remote-User`. Without it, any request from the trusted addresses passes, authenticated or not; set it whenever your proxy names the user.
 - `read_only`, `cap_drop: [ALL]`, `no-new-privileges`: the image is one static binary (`FROM scratch`) that writes nothing and needs no privileges.
 - `user`: any uid works; `group_add` is what grants the socket. Connecting to a socket on a read-only mount works.
