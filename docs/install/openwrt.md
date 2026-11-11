@@ -49,8 +49,9 @@ it follows its agents and what it blocks. The edge stays connected to each agent
 shows it too (**Settings → Edges**): whether it is connected, what it applied, and what its firewall dropped. See
 [Connecting an edge to an agent](README.md#connecting-an-edge-to-an-agent).
 
-Without IPv6 on the router, `option ipv6 '0'` leaves it out: its country and blocklist prefixes would otherwise take
-about as much memory as IPv4's (roughly 140 bytes each; ~12 MB for Africa, Asia and South America).
+Without IPv6 on the router, `option ipv6 '0'` leaves it out (the agents then send no IPv6 at all): its country and
+blocklist ranges would otherwise take about as much memory as IPv4's (about 250 bytes each on a 32-bit router; ~14 MB
+for Africa, Asia and South America). See [Resource use](../../README.md#resource-use).
 
 Every minute (`option check_interval`, in seconds) the edge asks nftables for the ruleset's generation, one small
 request: when another program changed the ruleset (a firewall restart flushes it), the table is put right.
