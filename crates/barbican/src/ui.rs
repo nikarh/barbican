@@ -161,19 +161,18 @@ async fn days(pool: &sqlx::SqlitePool, since: i64) -> Result<Vec<DayStat>, RpcEr
             bans: 0,
         })
         .collect();
-    let events_by_day: Vec<(i64, i64)> = sqlx::query_as(
-        "SELECT hour / 24 AS day, sum(count) FROM event WHERE hour >= ? GROUP BY day",
+    let (events_by_day, bans_by_day) = tokio::try_join!(
+        sqlx::query_as::<_, (i64, i64)>(
+            "SELECT hour / 24 AS day, sum(count) FROM event WHERE hour >= ? GROUP BY day",
+        )
+        .bind(since / 3_600)
+        .fetch_all(pool),
+        sqlx::query_as::<_, (i64, i64)>(
+            "SELECT created / 86400 AS day, count(*) FROM ban WHERE created >= ? GROUP BY day",
+        )
+        .bind(since)
+        .fetch_all(pool),
     )
-    .bind(since / 3_600)
-    .fetch_all(pool)
-    .await
-    .map_err(internal)?;
-    let bans_by_day: Vec<(i64, i64)> = sqlx::query_as(
-        "SELECT created / 86400 AS day, count(*) FROM ban WHERE created >= ? GROUP BY day",
-    )
-    .bind(since)
-    .fetch_all(pool)
-    .await
     .map_err(internal)?;
     for (day, n) in events_by_day {
         if let Some(d) = days.iter_mut().find(|d| d.day / 86_400 == day) {
@@ -227,36 +226,46 @@ async fn overview(app: &Arc<App>) -> Result<Overview, RpcError> {
             .await
             .map_err(internal)
     };
-    let bans_today = scalar("SELECT count(*) FROM ban WHERE created >= ?", today).await?;
-    let events_today = scalar(
-        "SELECT coalesce(sum(count), 0) FROM event WHERE hour >= ?",
-        today / 3_600,
-    )
-    .await?;
-    let ips = scalar("SELECT count(*) FROM ip WHERE last_seen >= ?", 0).await?;
-
-    let days = days(pool, since).await?;
-    let countries: Vec<(Option<String>, i64)> = sqlx::query_as(
-        "SELECT ip.country, count(*) AS n FROM ban JOIN ip ON ip.id = ban.ip WHERE ban.created >= ?
-         GROUP BY ip.country ORDER BY n DESC LIMIT 12",
-    )
-    .bind(since)
-    .fetch_all(pool)
-    .await
-    .map_err(internal)?;
-    let rules: Vec<(i64, i64)> = sqlx::query_as(
-        "SELECT rule, sum(count) AS n FROM event WHERE hour >= ? AND rule != 0 GROUP BY rule ORDER BY n DESC",
-    )
-    .bind(since / 3_600)
-    .fetch_all(pool)
-    .await
-    .map_err(internal)?;
-    let recent_rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "{BAN_COLUMNS} ORDER BY ban.id DESC LIMIT 12"
-    )))
-    .fetch_all(pool)
-    .await
-    .map_err(internal)?;
+    // At once, on the pool's connections: the two scans of the month's events take most of the time.
+    let countries = async {
+        sqlx::query_as::<_, (Option<String>, i64)>(
+            "SELECT ip.country, count(*) AS n FROM ban JOIN ip ON ip.id = ban.ip WHERE ban.created >= ?
+             GROUP BY ip.country ORDER BY n DESC LIMIT 12",
+        )
+        .bind(since)
+        .fetch_all(pool)
+        .await
+        .map_err(internal)
+    };
+    let rules = async {
+        sqlx::query_as::<_, (i64, i64)>(
+            "SELECT rule, sum(count) AS n FROM event WHERE hour >= ? AND rule != 0 GROUP BY rule ORDER BY n DESC",
+        )
+        .bind(since / 3_600)
+        .fetch_all(pool)
+        .await
+        .map_err(internal)
+    };
+    let recent = async {
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "{BAN_COLUMNS} ORDER BY ban.id DESC LIMIT 12"
+        )))
+        .fetch_all(pool)
+        .await
+        .map_err(internal)
+    };
+    let counts = async {
+        let bans_today = scalar("SELECT count(*) FROM ban WHERE created >= ?", today).await?;
+        let events_today = scalar(
+            "SELECT coalesce(sum(count), 0) FROM event WHERE hour >= ?",
+            today / 3_600,
+        )
+        .await?;
+        let ips = scalar("SELECT count(*) FROM ip WHERE last_seen >= ?", 0).await?;
+        Ok::<_, RpcError>((bans_today, events_today, ips))
+    };
+    let ((bans_today, events_today, ips), days, countries, rules, recent_rows) =
+        tokio::try_join!(counts, days(pool, since), countries, rules, recent)?;
     let recent = recent_rows
         .iter()
         .map(ban_of_row)
