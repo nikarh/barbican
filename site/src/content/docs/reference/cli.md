@@ -10,9 +10,12 @@ sidebar:
 ```text
 barbican [--config <path>] [--dry-run]     run the agent
 barbican parse <parser> [<file>]           print what a parser makes of each line (of stdin without a file)
-barbican ui-proxy [--socket <path>] [--listen <address>]
+barbican ui-proxy [--socket <path>] [--listen <address>] --trusted-proxy <cidr>... [--user-header <name>]
                                            serve the UI (in a container) for an agent whose UI is on a unix
-                                           socket [default: /run/barbican-ui/ui.sock, 0.0.0.0:8080]
+                                           socket [default: /run/barbican-ui/ui.sock, 0.0.0.0:8080]. Only
+                                           requests from the authenticating reverse proxy's addresses
+                                           (required), and with --user-header only those naming a user
+                                           ($BARBICAN_TRUSTED_PROXIES, comma-separated, $BARBICAN_USER_HEADER)
 barbican healthcheck [--address <address>] exit 0 when the UI (or the proxy) answers [default: 127.0.0.1:8080]
 barbican edge-fingerprint [--config <path>]
                                            print the edge API certificate's fingerprint, for edges' configuration
@@ -35,7 +38,7 @@ barbican --version
 - **`parse`**: parsers `traefik`, `sshd`, `authelia`. Prints the address, the kind of event and what happened for each line understood, and how many were. See [Checking a parser](/guides/import/#checking-a-parser).
 - **`replay`** and **`import`**: see [Importing old logs](/guides/import/).
 - **`edge-fingerprint`**: reads the certificate the agent made on its first start with `[edge]`; it doesn't make one.
-- **`ui-proxy`** and **`healthcheck`**: what the container image runs; see [The UI in a container](/guides/reverse-proxy/#the-ui-in-a-container).
+- **`ui-proxy`** and **`healthcheck`**: what the container image runs, and only supported in a container; see [The UI container](/guides/reverse-proxy/#the-ui-container). It refuses to start without `--trusted-proxy`, and warns when it doesn't seem to run in a container. `/healthz` answers anyone (the healthcheck asks it); everything else only the trusted proxy.
 
 ## barbican-vlogs
 

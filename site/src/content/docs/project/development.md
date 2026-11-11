@@ -19,7 +19,9 @@ sidebar:
 | `mise run db:prepare` | Refresh `.sqlx/` after changing a query or a migration |
 | `mise run docs`, `docs:build`, `docs:screenshots` | The documentation: see [Writing the docs](/project/docs/) |
 
-`mise run dev` needs `dev/config.toml` first: a configuration with `database.path = "dev/barbican.db"`, `ui.listen = "127.0.0.1:7381"`, and file sources pointing at logs you can read. It never changes the firewall.
+`mise run dev` needs `dev/config.toml` first: a configuration with `database.path = "dev/barbican.db"`, `ui.socket = "dev/ui.sock"` (a socket path must be short: under about 100 characters), and file sources pointing at logs you can read. It never changes the firewall. The agent serves the UI only on that socket, as in production; the Vite dev server (http://localhost:5173) proxies `/api` straight to it (`$BARBICAN_UI_SOCKET` for another path), so development needs no TCP listener in the agent.
+
+To try `barbican ui-proxy` itself outside a container, a debug build (`cargo run -- ui-proxy ...`) accepts `--insecure-no-trusted-proxy`, which answers every request. Release builds don't have it: they always require `--trusted-proxy`.
 
 ## Layout
 

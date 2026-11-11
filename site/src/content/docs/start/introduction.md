@@ -12,7 +12,7 @@ It does what fail2ban, a log pipeline and a dashboard do together, in one proces
 ## The parts
 
 - **The agent** (`barbican`) runs on a server whose logs it reads. It parses them, matches the events against its rules, records what matched, bans, and keeps one nftables table of its own equal to what it blocks. It runs as a systemd service with one capability, `CAP_NET_ADMIN`.
-- **The UI** is served by the agent (`ui.listen`), or by a container next to your other ones (`barbican ui-proxy`, the image `ghcr.io/nikarh/barbican`) that reaches the agent over a unix socket. It has no login of its own: it goes behind your reverse proxy's authentication. See [the web UI](/guides/ui/).
+- **The UI** is served by the agent on a unix socket only its group may use, and to browsers by a container next to your other ones (`barbican ui-proxy`, the image `ghcr.io/nikarh/barbican`) that answers only your reverse proxy. It has no login of its own: it goes behind the reverse proxy's authentication. See [the web UI](/guides/ui/).
 - **Edge agents** (`barbican-edge` with nftables on OpenWrt, `barbican-edge-ipset` with iptables and ipset on firmware without nftables) follow one or more agents and block what they block on a router, for everything it forwards. See [edge agents](/edge/overview/).
 
 ```text

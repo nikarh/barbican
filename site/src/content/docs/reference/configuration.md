@@ -14,7 +14,8 @@ Every table is optional, and unknown settings are an error. A change takes effec
 path = "/var/lib/barbican/barbican.db"
 
 [ui]
-listen = "127.0.0.1:7381"
+socket = "/run/barbican-ui/ui.sock"
+socket_group = "barbican-ui"
 
 [edge]
 listen = "0.0.0.0:7380"
@@ -42,13 +43,14 @@ docker = { container = "traefik" }
 
 ## ui
 
-Without `[ui]` there is no UI. Set exactly one of `listen` and `socket`.
+Without `[ui]` there is no UI. The UI is full control over the agent, so it is served only on a unix socket, which [`barbican ui-proxy` in a container](/guides/reverse-proxy/) serves to browsers behind your reverse proxy's authentication.
 
 | Setting | Default | |
 | --- | --- | --- |
-| `listen` | | A TCP address for the UI and its WebSocket API, such as `127.0.0.1:7381`. It has no login: listen on localhost or a private address, behind a proxy with authentication |
-| `socket` | | Instead of `listen`: a unix socket for the API, for [the UI in a container](/guides/reverse-proxy/#the-ui-in-a-container) (`/run/barbican-ui/ui.sock`) |
-| `socket_group` | the agent's | The group that owns the socket (mode 0660): its members may use the UI. The packages make `barbican-ui` |
+| `socket` | | The unix socket the UI and its API are served on, such as `/run/barbican-ui/ui.sock`. Required |
+| `socket_group` | the agent's | The group that owns the socket (mode 0660): besides root and the agent's own user, only its members (as primary or supplementary group) may connect, which the agent checks on every connection. The packages make `barbican-ui` |
+
+`listen`, a TCP address for the UI, is no longer supported: any program on the host could have used it. A configuration that still has it is refused at start, with where to go instead.
 
 ## edge
 

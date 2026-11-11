@@ -9,11 +9,16 @@ barbican decides who may reach a server. What matters is who can change its deci
 
 ## The UI
 
-The UI has **no login**: anyone who reaches it can ban, lift, allow, and change every rule. Keep `ui.listen` on localhost, a private address or a Docker bridge's address, and put it behind a reverse proxy with authentication, or a VPN. See [Behind a reverse proxy](/guides/reverse-proxy/).
+The UI has **no login** of its own, and whoever can use it can ban, lift, allow, and change every rule. So nothing on the host can reach it but those allowed to:
+
+- **The agent serves it only on a unix socket**, never on a TCP port: a port, even on localhost, is open to every program on the host. The socket's directory and the socket belong to the group `barbican-ui` (modes 2770 and 0660), and the agent checks every connecting process' credentials as the kernel recorded them (`SO_PEERCRED`, `SO_PEERGROUPS`): root, the agent's own user, and members of the socket's group, as primary or supplementary group. Anyone else is refused and logged, whatever the file modes say.
+- **`barbican ui-proxy` serves it to browsers from a container**, on a network only your reverse proxy reaches, without a published port, the host's network or its IPC. It answers only requests from the reverse proxy's addresses (`--trusted-proxy`, which it requires) and, with `--user-header`, only those naming the user the proxy authenticated. Release builds have no way around that; only a development build can run the proxy without a trusted proxy.
+
+See [Behind a reverse proxy](/guides/reverse-proxy/).
 
 A proxy that authenticates by a cookie would let any site the user visits open the UI's WebSocket with that cookie. So the agent refuses a WebSocket whose `Origin` header doesn't match its `Host` (or `X-Forwarded-Host`): only pages of the UI's own origin can connect. Clients that send no `Origin` (scripts, not browsers) aren't checked; they still have to get past the proxy.
 
-With the UI in a container, the agent serves the API on a unix socket that only members of the `barbican-ui` group may use (mode 0660, in a directory of mode 2770), and the image runs read-only, without capabilities, as an unprivileged user. Nothing listens on a port of the host.
+The UI's image runs read-only, without capabilities, as an unprivileged user given the `barbican-ui` group.
 
 ## Logs
 
