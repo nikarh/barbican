@@ -6,6 +6,7 @@
 # QEMUs on 127.0.0.1, joins the VMs: the server is 10.99.0.1, the router 10.99.0.2.
 #
 #   e2e/vm.sh <server|router> up        boot the VM on a fresh disk, wait until it is ready
+#   e2e/vm.sh <server|router> start     boot it, without waiting (up then waits for the same VM)
 #   e2e/vm.sh <server|router> ssh ...   run a command in the VM, or open a shell
 #   e2e/vm.sh <server|router> put <local> <remote>   copy a file into the VM
 #   e2e/vm.sh <server|router> forward <port> <vm port>   forward 127.0.0.1:<port> here to 127.0.0.1:<vm port> in the
@@ -171,6 +172,14 @@ create_router() {
     gzip -dc "${base}.gz" >"${base}.part" || [[ $? -eq 2 ]]
     mv "${base}.part" "${base}"
   fi
+  # At every boot (and the suite reboots the router) GRUB waits 5 seconds for a choice, and OpenWrt's preinit 4 for a
+  # key that enters failsafe mode: neither here. Each setting is a few bytes of a text file in the image (grub.cfg on
+  # its boot filesystem, preinit's defaults on its root filesystem), replaced in place by as many bytes (ext4
+  # doesn't checksum file data).
+  local setting
+  for setting in 's/set timeout="5"/set timeout="0"/' 's/fs_failsafe_wait_timeout=4/fs_failsafe_wait_timeout=0/'; do
+    LC_ALL=C sed -i "${setting}" "${base}"
+  done
   qemu-img create -q -f qcow2 -F raw -b "${base}" "${DISK}" 512M
 }
 
@@ -213,7 +222,8 @@ boot() {
     )
   fi
   log "booting (console log: ${CONSOLE_LOG})"
-  qemu-system-x86_64 "${args[@]}"
+  # Without the boot lock's descriptor (start holds it): the daemon would keep it, and the lock, as long as it runs.
+  qemu-system-x86_64 "${args[@]}" 8>&-
 }
 
 wait_ready() { # <seconds>
@@ -227,7 +237,7 @@ wait_ready() { # <seconds>
       log "VM exited; see ${CONSOLE_LOG}"
       exit 1
     fi
-    sleep 1
+    sleep 0.2
   done
 }
 
@@ -241,20 +251,28 @@ wait_exit() { # <seconds>: until QEMU has exited
   rm -f "${PIDFILE}"
 }
 
-up() {
+# Boots the VM unless it runs already. One boot at a time per VM (CI starts them early, e2e/run.sh then waits).
+start() {
   mkdir -p "${DIR}"
   # Both VMs may boot at once.
   (
     flock 9
     [[ -f "${KEY}" ]] || ssh-keygen -q -t ed25519 -N '' -f "${KEY}"
   ) 9>"${STATE_DIR}/.key.lock"
-  if is_running; then
-    log "already running"
-  else
-    rm -f "${DISK}"
-    "create_${vm}"
-    boot
-  fi
+  (
+    flock 8
+    if is_running; then
+      log "already running"
+    else
+      rm -f "${DISK}"
+      "create_${vm}"
+      boot
+    fi
+  ) 8>"${DIR}/.boot.lock"
+}
+
+up() {
+  start
   log "waiting until it is ready"
   wait_ready 300
   log "ready"
@@ -288,7 +306,7 @@ router_ready() {
       uci commit network
       /etc/init.d/network reload
     fi
-    for _ in 1 2 3 4 5 6 7 8 9 10; do ip -4 addr show dev eth1 | grep -q 10.99.0.2 && exit 0; sleep 1; done
+    i=0; while [ $i -lt 50 ]; do ip -4 addr show dev eth1 | grep -q 10.99.0.2 && exit 0; sleep 0.2; i=$((i + 1)); done
     exit 1' 2>/dev/null
 }
 
@@ -327,9 +345,13 @@ destroy() {
 
 case "${cmd}" in
   up) up ;;
+  start) start ;;
   # The remote command's status is the result, not a failure of this script.
   ssh) shift 2; trap - EXIT; vm_ssh "$@" ;;
   put) put "$3" "$4" ;;
+  # Closes the shared SSH connection (after the VM rebooted, it is dead: commands over it would wait until it
+  # times out).
+  forget) ssh "${ssh_opts[@]}" -O exit "${SSH_USER}@127.0.0.1" 2>/dev/null || true ;;
   forward) trap - EXIT; forward "$3" "$4" ;;
   down) down ;;
   destroy) destroy ;;

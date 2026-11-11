@@ -24,7 +24,17 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The toolchain (with clippy and rustfmt) comes from rust-toolchain.toml.
+      # The toolchain (with clippy and rustfmt) comes from rust-toolchain.toml, kept between runs.
+      - id: env
+        run: |
+          echo "image=${ImageOS}-${ImageVersion}" >>"$GITHUB_OUTPUT"
+          echo "toolchain=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)-x86_64-unknown-linux-gnu" >>"$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.rustup/toolchains/${{ steps.env.outputs.toolchain }}
+            ~/.rustup/update-hashes
+          key: rustup-check-${{ steps.env.outputs.toolchain }}-${{ steps.env.outputs.image }}
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
@@ -56,7 +66,20 @@ jobs:
         with:
           # scripts/package.sh numbers a build of main by the commits up to it.
           fetch-depth: 0
-      - run: rustup toolchain install && rustup target add x86_64-unknown-linux-musl armv7-unknown-linux-musleabihf
+      # The toolchain of rust-toolchain.toml, kept between runs: installing it takes longer than restoring it.
+      # The runner image (for caches of what it installs) and the toolchain of rust-toolchain.toml (its directory is
+      # cached alone, not the ones the image comes with).
+      - id: env
+        run: |
+          echo "image=${ImageOS}-${ImageVersion}" >>"$GITHUB_OUTPUT"
+          echo "toolchain=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)-x86_64-unknown-linux-gnu" >>"$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.rustup/toolchains/${{ steps.env.outputs.toolchain }}
+            ~/.rustup/update-hashes
+          key: rustup-musl-${{ steps.env.outputs.toolchain }}-${{ steps.env.outputs.image }}
+      - run: rustup toolchain install && rustup target add x86_64-unknown-linux-musl
       # cargo-zigbuild's linker wrappers are in every crate's fingerprint, and their path changes with the tools in
       # mise.toml: a cache from other tools would be restored as a full match, rebuilt from scratch and never saved.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -79,7 +102,37 @@ jobs:
           barbican --version
           systemd-analyze verify /usr/lib/systemd/system/barbican.service
           sudo apt-get remove -y barbican
-      # The edge agents, with OpenWrt packages (apk mkpkg runs in an Alpine container).
+
+  # The edge agents, with OpenWrt packages (apk mkpkg runs in an Alpine container): a job of their own, beside the
+  # agent's packages rather than after them.
+  edge:
+    name: edge packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # scripts/package-openwrt.sh numbers a build of main by the commits up to it.
+          fetch-depth: 0
+      # The runner image (for caches of what it installs) and the toolchain of rust-toolchain.toml (its directory is
+      # cached alone, not the ones the image comes with).
+      - id: env
+        run: |
+          echo "image=${ImageOS}-${ImageVersion}" >>"$GITHUB_OUTPUT"
+          echo "toolchain=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)-x86_64-unknown-linux-gnu" >>"$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.rustup/toolchains/${{ steps.env.outputs.toolchain }}
+            ~/.rustup/update-hashes
+          key: rustup-armv7-${{ steps.env.outputs.toolchain }}-${{ steps.env.outputs.image }}
+      - run: rustup toolchain install && rustup target add armv7-unknown-linux-musleabihf armv7-unknown-linux-musleabi
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: edge-${{ hashFiles('mise.toml') }}
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        with:
+          install_args: zig github:rust-cross/cargo-zigbuild nfpm
       - run: mise x -- scripts/build-edge.sh armv7 ipset-armv7
 
   e2e:
@@ -88,29 +141,35 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install QEMU
-        # The runner's mirror or DNS fails now and then: apt retries each download, and the whole install is tried
-        # again after a pause.
+      # The runner image (for caches of what it installs) and the toolchain of rust-toolchain.toml (its directory is
+      # cached alone, not the ones the image comes with).
+      - id: env
         run: |
+          echo "image=${ImageOS}-${ImageVersion}" >>"$GITHUB_OUTPUT"
+          echo "toolchain=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)-x86_64-unknown-linux-gnu" >>"$GITHUB_OUTPUT"
+      # QEMU's packages, kept per runner image: installing from them needs no download (nor, usually, an index
+      # update). The runner's mirror or DNS fails now and then: without them apt retries, and the whole install is
+      # tried again after a pause.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/qemu-debs
+          key: qemu-debs-${{ steps.env.outputs.image }}
+      - name: Install QEMU
+        run: |
+          debs=~/.cache/qemu-debs
+          mkdir -p "${debs}/partial"
           install() {
-            sudo apt-get -o Acquire::Retries=5 update &&
-              sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends qemu-system-x86 qemu-utils genisoimage
+            sudo apt-get -o Acquire::Retries=5 -o Dir::Cache::Archives="${debs}" install -y --no-install-recommends \
+              qemu-system-x86 qemu-utils genisoimage
           }
-          install || { sleep 20; install; } || { sleep 60; install; }
+          install || { sudo apt-get -o Acquire::Retries=5 update && install; } || { sleep 20; sudo apt-get update && install; } ||
+            { sleep 60; sudo apt-get update && install; }
+          sudo chown -R "$(id -u):$(id -g)" "${debs}"
       - name: Allow the runner to use KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - run: rustup toolchain install && rustup target add x86_64-unknown-linux-musl
-      # cargo-zigbuild's linker wrappers are in every crate's fingerprint, and their path changes with the tools in
-      # mise.toml: a cache from other tools would be restored as a full match, rebuilt from scratch and never saved.
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          key: musl-${{ hashFiles('mise.toml') }}
-      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
-        with:
-          install_args: zig github:rust-cross/cargo-zigbuild
       # The images as e2e/vm.sh makes them: the server's provisioned (with the key it lets in), once per version
       # of vm.sh. Saved only when there was none.
       - name: Cache the VM images
@@ -122,6 +181,12 @@ jobs:
             ~/.cache/barbican-e2e/id_ed25519.pub
             ~/.cache/barbican-e2e/openwrt-*.img
           key: barbican-e2e-images-${{ hashFiles('e2e/vm.sh') }}
+      # The VMs boot while the toolchain is set up and the binaries build (e2e/run.sh then waits until they are
+      # ready).
+      - name: Boot the VMs
+        run: |
+          e2e/vm.sh server start
+          e2e/vm.sh router start
       - id: month
         run: echo "month=$(date -u +%Y-%m)" >>"$GITHUB_OUTPUT"
       - name: Cache the country database
@@ -129,6 +194,21 @@ jobs:
         with:
           path: ~/.cache/barbican-e2e/dbip-country-lite.mmdb
           key: barbican-e2e-dbip-${{ steps.month.outputs.month }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.rustup/toolchains/${{ steps.env.outputs.toolchain }}
+            ~/.rustup/update-hashes
+          key: rustup-musl-${{ steps.env.outputs.toolchain }}-${{ steps.env.outputs.image }}
+      - run: rustup toolchain install && rustup target add x86_64-unknown-linux-musl
+      # cargo-zigbuild's linker wrappers are in every crate's fingerprint, and their path changes with the tools in
+      # mise.toml: a cache from other tools would be restored as a full match, rebuilt from scratch and never saved.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: musl-${{ hashFiles('mise.toml') }}
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+        with:
+          install_args: zig github:rust-cross/cargo-zigbuild
       - run: e2e/run.sh
       - name: Keep the VMs' console logs
         if: failure()

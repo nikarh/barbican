@@ -14,7 +14,8 @@ suites=("${@:-server router}")
 read -r -a suites <<<"${suites[*]}"
 vm=e2e/vm.sh
 
-log() { printf '[e2e] %s\n' "$*" >&2; }
+started=$(date +%s%3N)
+log() { LC_ALL=C printf '[e2e %6.1fs] %s\n' "$(($(date +%s%3N) - started))e-3" "$*" >&2; }
 cleanup() { # <status> <the last command>
   local status=$1
   if ((status != 0)); then
@@ -47,8 +48,9 @@ if [[ " ${suites[*]} " == *" router "* ]]; then
 fi
 
 log "building static binaries"
-mise x -- cargo zigbuild --locked --release --target "${TARGET}" -p barbican -p barbican-edge
-bin="target/${TARGET}/release"
+# The e2e profile: release builds' settings, the workspace's crates unoptimised (they compile twice as fast).
+mise x -- cargo zigbuild --locked --profile e2e --target "${TARGET}" -p barbican -p barbican-edge
+bin="target/${TARGET}/e2e"
 
 # The country database, refreshed once a month (DB-IP's free database, CC BY 4.0).
 geo="${STATE_DIR}/dbip-country-lite.mmdb"

@@ -14,13 +14,17 @@ The host needs `qemu-system-x86_64`, `qemu-img`, `genisoimage` (or `mkisofs`), `
 image, OpenWrt's x86-64 image and DB-IP's country database, into `~/.cache/barbican-e2e`, and provisions the server's
 image there (cloud-init installs the packages and Docker, a minute or two): `server-<hash>.qcow2`, made again when the
 provisioning in `vm.sh` changes. Each run boots both VMs from their images on throwaway disks, while the binaries
-build. CI runs the same on a GitHub runner with KVM, with the images cached.
+build (the `e2e` cargo profile: release settings with the workspace's own crates unoptimised, twice as quick to
+compile). OpenWrt's image is used without its boot waits (GRUB's menu, preinit's failsafe key), so the router boots
+in a few seconds. CI runs the same on a GitHub runner with KVM, with the images, QEMU's packages and the toolchain
+cached, and starts the VMs before it sets up Rust. Each section of a suite prints how long it took.
 
-`e2e/vm.sh <server|router> <up|ssh|put|forward|down|destroy>` manages one VM. The two are joined by a UDP tunnel between their
+`e2e/vm.sh <server|router> <up|start|ssh|put|forward|forget|down|destroy>` manages one VM. The two are joined by a UDP tunnel between their
 QEMUs: the server is 10.99.0.1, the router's WAN 10.99.0.2. Each is reached over SSH through user-mode networking.
 
 The suites wait for what they check, not for a fixed time: a dropped connection is one that isn't answered within
-half a second (over a veth, an answer takes well under a millisecond), and a check that something did *not* happen
+150 ms on the server (over a veth, an answer takes well under a millisecond) or 300 ms over the link to the router,
+and a check that something did *not* happen
 waits until the agent has handled what came after it.
 
 ## The server suite (`server.sh`)
