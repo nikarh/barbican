@@ -211,9 +211,10 @@ packet reaches a service before the blocks are in place.
 An edge agent follows one or more agents' edge APIs and keeps its router's firewall equal to the union of what they
 block (with their allow lists): `barbican-edge` with nftables on OpenWrt, `barbican-edge-ipset` with iptables and ipset
 where there is no nftables. It stays connected to each agent, which pushes every ban and lift as it happens, so they
-reach the router within a fraction of a second; the edge reports back what it applied and what its firewall dropped.
-Its state is saved now and then (flash wears) and on a clean stop, and put back at boot before the network comes up, so
-blocks hold across reboots and while agents are unreachable. A router without a clock that keeps time boots in the
+reach the router within a fraction of a second; the edge reports back what it applied and what its firewall dropped,
+which the agent's UI shows (**Settings → Edges**, and the overview's **Edges** panel). Its state is saved now and then
+(flash wears) and on a clean stop, and put back at boot before the network comes up, so blocks hold across reboots and
+while agents are unreachable. A router without a clock that keeps time boots in the
 past: lengths are counted from when the state was saved. Installing and configuring:
 [OpenWrt](docs/install/openwrt.md), [without nftables](docs/install/iptables.md).
 

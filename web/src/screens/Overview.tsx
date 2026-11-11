@@ -1,12 +1,14 @@
-import { Alert, Group, SimpleGrid, Stack, Table, Text } from '@mantine/core'
+import { Alert, Group, SimpleGrid, Stack, Table, Text, Tooltip } from '@mantine/core'
 
 import { useEdges, useFeeds, useGeoStatus, useLive, useMeta, useOverview } from '../api/hooks'
-import type { Feed, Live } from '../api/generated/model'
+import type { EdgeStatus, Feed, FirewallStatus, Live } from '../api/generated/model'
 import { Bars } from '../components/Bars'
+import { EdgeLines } from '../components/Edges'
 import { GeoSummary } from '../components/Geo'
 import status from '../components/Status.module.css'
 import { Country, Panel, Stat } from '../components/ui'
-import { ago, count, KIND_LABELS, remaining } from '../lib/format'
+import { edgeDropped } from '../lib/edges'
+import { ago, compact, count, KIND_LABELS, remaining } from '../lib/format'
 import { href, ipHref } from '../lib/router'
 import { useNow } from '../lib/useNow'
 import classes from './Overview.module.css'
@@ -75,6 +77,61 @@ function FeedLine({ feed: f, now }: { feed: Feed; now: number }) {
   )
 }
 
+/** What firewalls dropped: this host's, and each edge's, each labelled; a total only as the sum of those parts. */
+function DroppedStat({ fw, edges }: { fw: FirewallStatus; edges: EdgeStatus[] }) {
+  const here = fw.droppedBlocked + fw.droppedListed
+  if (edges.length === 0) {
+    return (
+      <Stat
+        label="Dropped on this host"
+        value={count(here)}
+        hint={`${count(fw.droppedListed)} by countries and lists`}
+      />
+    )
+  }
+  const parts = edges.map((e) => ({ name: e.name, dropped: edgeDropped(e) }))
+  const total = here + parts.reduce((sum, p) => sum + (p.dropped ?? 0), 0)
+  const explained = [
+    `Dropped by this host’s firewall: ${count(here)} (${count(fw.droppedListed)} by countries and lists)`,
+    ...parts.map((p) =>
+      p.dropped === null
+        ? `The edge ${p.name} hasn’t reported yet`
+        : `Dropped by the edge ${p.name}’s firewall: ${count(p.dropped)}`,
+    ),
+  ]
+  return (
+    <Tooltip
+      label={
+        <Stack gap={2}>
+          {explained.map((line) => (
+            <span key={line}>{line}</span>
+          ))}
+        </Stack>
+      }
+      multiline
+      w={300}
+      openDelay={300}
+    >
+      <div className={classes.wide}>
+        <Stat
+          label="Dropped"
+          value={count(total)}
+          hint={
+            <span className={classes.parts}>
+              <span>this host {compact(here)}</span>
+              {parts.map((p) => (
+                <span key={p.name}>
+                  + at {p.name} {p.dropped === null ? '?' : compact(p.dropped)}
+                </span>
+              ))}
+            </span>
+          }
+        />
+      </div>
+    </Tooltip>
+  )
+}
+
 export function OverviewScreen() {
   const overview = useOverview()
   const geo = useGeoStatus()
@@ -98,11 +155,7 @@ export function OverviewScreen() {
         <Stat label="Events today" value={count(o.eventsToday)} hint="matched by a rule" />
         <Stat label="Addresses" value={count(o.ips)} hint="seen doing something" />
         <Stat label="Trusted" value={count(o.trusted)} hint="logged in recently" />
-        <Stat
-          label="Dropped"
-          value={count(fw.droppedBlocked + fw.droppedListed)}
-          hint={`${count(fw.droppedListed)} by countries and lists`}
-        />
+        <DroppedStat fw={fw} edges={edgeApi ? edges : []} />
       </SimpleGrid>
 
       {fw.error !== null && (
@@ -241,19 +294,15 @@ export function OverviewScreen() {
           </Panel>
 
           {edgeApi && edges.length > 0 && (
-            <Panel title="Edges">
-              <Stack gap={6} fz={13}>
-                {edges.map((e) => (
-                  <Group key={e.name} justify="space-between">
-                    <span>
-                      <strong>{e.name}</strong> <span className="mono">{e.address}</span>
-                    </span>
-                    <span className={classes.parser}>
-                      {e.connected ? 'connected' : `disconnected ${ago(e.since, now)}`}
-                    </span>
-                  </Group>
-                ))}
-              </Stack>
+            <Panel
+              title="Edges"
+              right={
+                <a className="panel-link" href={href('settings', { tab: 'edges' })}>
+                  Details
+                </a>
+              }
+            >
+              <EdgeLines edges={edges} now={now} />
             </Panel>
           )}
 

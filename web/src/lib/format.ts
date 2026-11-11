@@ -252,3 +252,17 @@ export const WIDEST = {
   count: ['999,999'],
   kind: (): string[] => Object.values(KIND_LABELS),
 }
+
+const BYTE_UNITS = ['B', 'kB', 'MB', 'GB', 'TB', 'PB']
+
+/** "3.4 MB": a size in bytes, in decimal units. */
+export function bytes(n: number): string {
+  let value = n
+  let unit = 0
+  while (value >= 1000 && unit < BYTE_UNITS.length - 1) {
+    value /= 1000
+    unit += 1
+  }
+  const digits = unit === 0 || value >= 100 ? 0 : 1
+  return `${value.toFixed(digits)} ${BYTE_UNITS[unit] ?? ''}`
+}
