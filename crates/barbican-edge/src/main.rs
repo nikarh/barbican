@@ -10,7 +10,7 @@ fn main() -> ExitCode {
             name: "barbican-edge",
             about: "applies the blocks of barbican agents on a router, with nftables",
             config: "/etc/config/barbican",
-            state: "/etc/barbican/state.json",
+            state: "/etc/barbican/state",
             status: "/var/run/barbican-edge.json",
         },
         backend::nft,

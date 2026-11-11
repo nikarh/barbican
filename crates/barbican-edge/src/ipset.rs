@@ -313,6 +313,10 @@ fn diff(
 }
 
 impl<E: Exec> Backend for Ipset<E> {
+    fn ipv6(&self) -> bool {
+        self.ip6tables.is_some()
+    }
+
     fn describe(&self) -> String {
         format!(
             "iptables chain mangle {} and ipsets {}-*",

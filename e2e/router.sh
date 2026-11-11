@@ -54,12 +54,11 @@ say "setup"
 router '[ -x /etc/init.d/barbican-edge ] && /etc/init.d/barbican-edge stop; true'
 server 'sudo ip link set enp0s3 up && sudo ip addr replace 10.99.0.1/24 dev enp0s3 && sudo ip addr replace 203.0.113.77/32 dev enp0s3'
 router 'ip route replace 203.0.113.77/32 dev eth1'
-router 'apk del barbican-edge luci-app-barbican >/dev/null 2>&1; rm -f /etc/barbican/state.json; nft delete table inet barbican 2>/dev/null; mkdir -p /etc/barbican; true'
+router 'apk del barbican-edge luci-app-barbican >/dev/null 2>&1; rm -f /etc/barbican/state /etc/barbican/state.lists; nft delete table inet barbican 2>/dev/null; mkdir -p /etc/barbican; true'
 fingerprint=$(server 'sudo /opt/barbican/barbican edge-fingerprint --config /etc/barbican/config.toml')
 cat >"${TMPDIR:-/tmp}/barbican-e2e-uci" <<EOF
 config barbican 'main'
 	option enabled '1'
-	option persist_interval '1'
 	option check_interval '1'
 
 config upstream 'server'
@@ -138,9 +137,7 @@ if wait_until 15 in_set && (($(ms) - start < 2500)); then
 else
   fail "the ban reached the router late, or not at all ($(($(ms) - start)) ms)"
 fi
-# The state is saved when it changed, at most every persist_interval (1 s here).
-saved() { router 'grep -q 203.0.113.77 /etc/barbican/state.json'; }
-wait_until 10 saved || true
+# The state is saved when the edge stops cleanly: the reboot below does that.
 server 'sudo systemctl stop barbican'
 router 'reboot' || true
 # Until the old system is gone (SSH answers for a while during the shutdown), then until the new one is up.
@@ -181,7 +178,7 @@ router 'apk del barbican-edge luci-app-barbican >/dev/null 2>&1; barbican-edge r
 if router '! pidof barbican-edge >/dev/null && [ ! -e /etc/rc.d/S11barbican-edge ] && [ -f /etc/config/barbican ]'; then
   pass "removing the package stops it and keeps the configuration"
 else
-  fail "removing the package"
+  fail "removing the package: $(router 'echo pid=$(pidof barbican-edge); ls /etc/rc.d | grep barbican; ls /etc/config/barbican' 2>&1 | tr '\n' ' ')"
 fi
 
 if ((failures > 0)); then

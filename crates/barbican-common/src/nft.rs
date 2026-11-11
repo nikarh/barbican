@@ -461,6 +461,12 @@ impl<R: Runner> Firewall<R> {
         self
     }
 
+    /// Whether IPv6 is blocked.
+    #[must_use]
+    pub fn ipv6(&self) -> bool {
+        self.ipv6
+    }
+
     fn mark(&self, version: &str) -> u32 {
         loaded_mark(version, self.ipv6)
     }

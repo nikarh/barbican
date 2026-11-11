@@ -374,7 +374,7 @@ config upstream 'server'
 	option token 'e2e-router-token-0123456789'
 EOF2
 sed -i "s/FINGERPRINT/${FINGERPRINT}/" /tmp/edge-ipset.conf
-rm -f /tmp/edge-ipset-state.json
+rm -f /tmp/edge-ipset-state.json /tmp/edge-ipset-state.lists
 EDGE="${DIR}/barbican-edge-ipset --config /tmp/edge-ipset.conf"
 setsid -f sh -c "exec ${EDGE} >/tmp/edge-ipset.log 2>&1" </dev/null
 in_ipset() { ipset list barbican-host4 2>/dev/null | grep -q '^203.0.113.10'; }

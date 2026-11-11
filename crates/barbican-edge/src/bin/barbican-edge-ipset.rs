@@ -11,7 +11,7 @@ fn main() -> ExitCode {
             name: "barbican-edge-ipset",
             about: "applies the blocks of barbican agents on a router, with iptables and ipset",
             config: "/jffs/barbican/barbican.conf",
-            state: "/jffs/barbican/state.json",
+            state: "/jffs/barbican/state",
             status: "/tmp/barbican-edge.json",
         },
         ipset::backend,
