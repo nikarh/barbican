@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Calls one method of barbican's WebSocket RPC and prints the result as JSON (exit status 1 on an error).
 
-    rpc.py [--url ws://127.0.0.1:7381/api/ws] <method> [<params as JSON>]
+    rpc.py [--socket /run/barbican-ui/ui.sock | --url ws://127.0.0.1:8080/api/ws] [-H 'Name: value']... <method>
+           [<params as JSON>]
+
+By default over the agent's UI socket (only root, the agent's user and members of its group may use it); with --url
+over TCP, through `barbican ui-proxy`.
 
 Only the standard library: a minimal WebSocket client (text frames, masked, no extensions)."""
 
@@ -14,14 +18,22 @@ import sys
 from urllib.parse import urlparse
 
 
-def connect(url):
-    u = urlparse(url)
-    sock = socket.create_connection((u.hostname, u.port or 80), timeout=30)
+def connect(url, unix, headers):
+    if unix is not None:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(30)
+        sock.connect(unix)
+        host, path = "localhost", "/api/ws"
+    else:
+        u = urlparse(url)
+        sock = socket.create_connection((u.hostname, u.port or 80), timeout=30)
+        host, path = f"{u.hostname}:{u.port}", u.path or "/"
     key = base64.b64encode(os.urandom(16)).decode()
+    extra = "".join(f"{h}\r\n" for h in headers)
     sock.sendall(
         (
-            f"GET {u.path or '/'} HTTP/1.1\r\nHost: {u.hostname}:{u.port}\r\nUpgrade: websocket\r\n"
-            f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
+            f"GET {path} HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\n"
+            f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n{extra}\r\n"
         ).encode()
     )
     response = b""
@@ -74,14 +86,20 @@ def frames(sock, buffer):
 
 def main():
     args = sys.argv[1:]
-    url = "ws://127.0.0.1:7381/api/ws"
-    if args[:1] == ["--url"]:
-        url, args = args[1], args[2:]
+    url, unix, headers = None, "/run/barbican-ui/ui.sock", []
+    while args[:1] in (["--url"], ["--socket"], ["-H"]):
+        if args[0] == "--url":
+            url, unix = args[1], None
+        elif args[0] == "--socket":
+            unix = args[1]
+        else:
+            headers.append(args[1])
+        args = args[2:]
     method = args[0]
     request = {"id": "1", "method": method}
     if len(args) > 1:
         request["params"] = json.loads(args[1])
-    sock, rest = connect(url)
+    sock, rest = connect(url, unix, headers)
     send(sock, json.dumps(request))
     for text in frames(sock, rest):
         message = json.loads(text)

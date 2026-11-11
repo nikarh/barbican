@@ -30,7 +30,7 @@ wait_until() {
 
 router() { "${vm}" router ssh "$@"; }
 server() { "${vm}" server ssh "$@"; }
-rpc() { server "python3 /opt/barbican/rpc.py $*"; }
+rpc() { server "sudo python3 /opt/barbican/rpc.py $*"; }
 ping_from() { server "ping -c 1 -W 1 -I $1 10.99.0.2 >/dev/null 2>&1"; }
 attacker_through() { ping_from 203.0.113.77; }
 attacker_blocked() { ! ping_from 203.0.113.77; }

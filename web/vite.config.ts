@@ -1,5 +1,13 @@
+import { resolve } from 'node:path'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+
+// The agent serves the UI only on a unix socket (ui.socket): dev/ui.sock by default, as dev/config.toml sets it.
+const socketPath = resolve(
+  import.meta.dirname,
+  '..',
+  process.env.BARBICAN_UI_SOCKET ?? 'dev/ui.sock',
+)
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -15,6 +23,7 @@ export default defineConfig({
   },
   server: {
     // The agent checks that a WebSocket's Origin matches its Host, so the Host isn't rewritten.
-    proxy: { '/api': { target: 'http://localhost:7381', ws: true } },
+    // host and port only fill the type: a socketPath is what the connection uses.
+    proxy: { '/api': { target: { socketPath, host: 'localhost', port: 80 }, ws: true } },
   },
 })

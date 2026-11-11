@@ -103,7 +103,8 @@ setup_barbican() {
   chmod 0644 "${LOG}"
   cat >/etc/barbican/config.toml <<'EOF'
 [ui]
-listen = "127.0.0.1:7381"
+socket = "/run/barbican-ui/ui.sock"
+socket_group = "barbican-ui"
 
 [edge]
 listen = "0.0.0.0:7380"
@@ -420,9 +421,7 @@ rm -f /etc/systemd/system/barbican.service.d/dry-run.conf
 systemctl daemon-reload
 systemctl restart barbican
 
-say "the UI in a container"
-sed -i 's#^listen = "127.0.0.1:7381"$#socket = "/run/barbican-ui/ui.sock"\nsocket_group = "barbican-ui"#' /etc/barbican/config.toml
-systemctl restart barbican
+say "the UI's socket"
 # Ready (sd_notify) comes before the UI's socket is bound.
 socket_ready() { [[ $(stat -c '%a %G' /run/barbican-ui/ui.sock 2>/dev/null) == "660 barbican-ui" ]]; }
 if wait_until 10 socket_ready; then
@@ -431,7 +430,38 @@ else
   fail "the socket: $(ls -la /run/barbican-ui 2>&1)"
 fi
 if ! sudo -u nobody test -x /run/barbican-ui; then pass "others can't enter its directory"; else fail "/run/barbican-ui is open to others"; fi
-if ! curl -s -m 2 -o /dev/null http://127.0.0.1:7381/; then pass "no UI port"; else fail "the UI still listens on its port"; fi
+if ! ss -Hltn | grep -q ':7381 '; then pass "no UI port"; else fail "the UI listens on a TCP port"; fi
+# A member through a supplementary group (as a container with group_add): let in.
+id e2e-ui-member >/dev/null 2>&1 || useradd -M -s /usr/sbin/nologin -G barbican-ui e2e-ui-member
+if sudo -u e2e-ui-member python3 "${DIR}/rpc.py" meta.get >/dev/null 2>&1; then
+  pass "a member of barbican-ui (supplementary group) may use the socket"
+else
+  fail "a member of barbican-ui was refused"
+fi
+# Someone else, even when the file's mode would let them: the agent checks the peer's credentials itself.
+since=$(date '+%F %T')
+chmod 0711 /run/barbican-ui
+chmod 0666 /run/barbican-ui/ui.sock
+if ! sudo -u nobody python3 "${DIR}/rpc.py" meta.get >/dev/null 2>&1 \
+  && journalctl -u barbican --since "${since}" | grep -q "Refused a connection to the UI socket"; then
+  pass "anyone else is refused on their credentials, whatever the socket's mode"
+else
+  fail "a stranger got through the socket ($(journalctl -u barbican --since "${since}" | tail -3))"
+fi
+chmod 2770 /run/barbican-ui
+chmod 0660 /run/barbican-ui/ui.sock
+if ${RPC} meta.get >/dev/null; then pass "root may use it"; else fail "root was refused"; fi
+printf '[ui]\nlisten = "127.0.0.1:7381"\n' >/tmp/ui-listen.toml
+# It exits with an error: the output first, then what it says (pipefail would fail a pipeline on that exit).
+refused=$(timeout 10 "${DIR}/barbican" --dry-run --config /tmp/ui-listen.toml 2>&1 || true)
+if grep -q 'ui.listen is no longer supported' <<<"${refused}"; then
+  pass "a configuration with ui.listen is refused, and says why"
+else
+  fail "ui.listen wasn't refused"
+fi
+rm -f /tmp/ui-listen.toml
+
+say "the UI in a container"
 mkdir -p /tmp/ui-image/ci-rootfs/amd64
 install -m 0755 "${DIR}/barbican" /tmp/ui-image/ci-rootfs/amd64/barbican
 docker build -q -f "${DIR}/Dockerfile.ci" -t barbican-e2e-ui /tmp/ui-image >/dev/null
@@ -443,8 +473,13 @@ ui_container() { # <name> <port> [docker run options]
   docker run -d --name "${name}" --read-only --cap-drop=ALL --security-opt no-new-privileges --user 65534:65534 \
     -v /run/barbican-ui:/run/barbican-ui:ro -p "127.0.0.1:${port}:8080" "$@" barbican-e2e-ui >/dev/null
 }
-ui_container e2e-ui 7382 --group-add "${gid}"
-ui_container e2e-ui-stranger 7383
+# A trusted proxy is required; here every address is one (the tests reach the containers through published ports).
+any_proxy=(-e BARBICAN_TRUSTED_PROXIES=0.0.0.0/0,::/0)
+ui_container e2e-ui 7382 --group-add "${gid}" "${any_proxy[@]}"
+ui_container e2e-ui-stranger 7383 "${any_proxy[@]}"
+# Only what an authenticating proxy forwarded: from its address, with the user it authenticated.
+ui_container e2e-ui-gated 7384 --group-add "${gid}" "${any_proxy[@]}" -e BARBICAN_USER_HEADER=Remote-User
+ui_container e2e-ui-elsewhere 7385 --group-add "${gid}" -e BARBICAN_TRUSTED_PROXIES=192.0.2.1/32 -e BARBICAN_USER_HEADER=Remote-User
 UI="python3 ${DIR}/rpc.py --url ws://127.0.0.1:7382/api/ws"
 healthy() { docker exec e2e-ui /barbican healthcheck; }
 if wait_until 10 healthy; then pass "the container is healthy (read-only, no capabilities, nobody)"; else fail "unhealthy: $(docker logs e2e-ui 2>&1 | tail -5)"; fi
@@ -459,6 +494,32 @@ ws() { # <port> [curl options]: the status of a WebSocket handshake
 }
 if [[ $(ws 7382 -H 'Origin: https://elsewhere.example') == 403 ]]; then pass "the agent still refuses another site's WebSocket"; else fail "a cross-site WebSocket got through the proxy"; fi
 if [[ $(ws 7383) == 502 ]]; then pass "a container without the group can't use the socket"; else fail "a container without barbican-ui reached the agent"; fi
+code() { curl -s -o /dev/null -w '%{http_code}' -m 3 "$@" || true; }
+gated_up() { [[ $(code http://127.0.0.1:7384/healthz) == 200 ]]; }
+wait_until 10 gated_up || true
+if [[ $(code http://127.0.0.1:7384/) == 403 && $(ws 7384) == 403 && $(code http://127.0.0.1:7384/api/proxy) == 403 ]]; then
+  pass "with a trusted proxy set, a request without a user is refused (page, WebSocket, status)"
+else
+  fail "the gated proxy let a request without a user through"
+fi
+if [[ $(code -H 'Remote-User: alice' http://127.0.0.1:7384/) == 200 ]] \
+  && python3 "${DIR}/rpc.py" --url ws://127.0.0.1:7384/api/ws -H 'Remote-User: alice' meta.get >/dev/null; then
+  pass "a request a trusted proxy forwarded with its user passes, the WebSocket too"
+else
+  fail "the gated proxy refused a forwarded request"
+fi
+if [[ $(code -H 'Remote-User: alice' http://127.0.0.1:7385/) == 403 && $(code http://127.0.0.1:7385/healthz) == 200 ]]; then
+  pass "from an address that isn't the trusted proxy: refused, but the healthcheck answers"
+else
+  fail "an untrusted address got through the gated proxy"
+fi
+docker rm -f e2e-ui-unguarded >/dev/null 2>&1 || true
+unguarded=$(timeout 10 docker run --rm --name e2e-ui-unguarded --read-only --cap-drop=ALL --user 65534:65534 barbican-e2e-ui 2>&1 || true)
+if grep -q -- '--trusted-proxy is required' <<<"${unguarded}"; then
+  pass "without a trusted proxy the UI proxy refuses to start"
+else
+  fail "the UI proxy started without a trusted proxy"
+fi
 systemctl restart barbican
 reconnects() { ${UI} bans.list '{"active": true}' >/dev/null 2>&1; }
 if wait_until 10 reconnects; then pass "the container reaches the agent again after it restarted"; else fail "lost the agent after its restart"; fi
@@ -468,10 +529,9 @@ if wait_until 5 att; then pass "a lift through the container"; else fail "still 
 start=${SECONDS}
 docker stop e2e-ui >/dev/null
 if ((SECONDS - start < 5)); then pass "it stops at once"; else fail "docker stop took $((SECONDS - start)) s"; fi
-docker rm -f e2e-ui e2e-ui-stranger >/dev/null
+docker rm -f e2e-ui e2e-ui-stranger e2e-ui-gated e2e-ui-elsewhere >/dev/null
 docker rmi barbican-e2e-ui >/dev/null
-sed -i 's#^socket = "/run/barbican-ui/ui.sock"$#listen = "127.0.0.1:7381"#; /^socket_group = /d' /etc/barbican/config.toml
-systemctl restart barbican
+userdel e2e-ui-member 2>/dev/null || true
 
 say "done"
 if ((failures > 0)); then

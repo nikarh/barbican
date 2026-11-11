@@ -20,12 +20,18 @@ wait_until() { # <seconds> <command...>
     sleep 0.2
   done
 }
+# The agent serves the UI only on its unix socket; `barbican ui-proxy` serves it on 127.0.0.1:7381 in this throwaway
+# VM (trusting only that address, where the SSH forward from the host arrives), for the browser on the host.
+socket_up() { [[ -S /run/barbican-ui/ui.sock ]] && ${RPC} meta.get >/dev/null 2>&1; }
 ui_up() { curl -fsS -o /dev/null http://127.0.0.1:7381/ 2>/dev/null; }
 
 start_agent() {
-  systemctl reset-failed barbican 2>/dev/null || true
+  systemctl reset-failed barbican barbican-ui 2>/dev/null || true
   systemd-run --quiet --unit barbican --property Type=exec "${DIR}/barbican" --config "${CONFIG}" --dry-run
-  wait_until 60 ui_up || { journalctl -u barbican --no-pager | tail -n 30 >&2; exit 1; }
+  wait_until 60 socket_up || { journalctl -u barbican --no-pager | tail -n 30 >&2; exit 1; }
+  systemctl is-active --quiet barbican-ui || systemd-run --quiet --unit barbican-ui --property Type=exec \
+    "${DIR}/barbican" ui-proxy --socket /run/barbican-ui/ui.sock --listen 127.0.0.1:7381 --trusted-proxy 127.0.0.1/32
+  wait_until 30 ui_up || { journalctl -u barbican-ui --no-pager | tail -n 30 >&2; exit 1; }
 }
 stop_agent() {
   systemctl stop barbican
@@ -36,7 +42,7 @@ calls() { # <phase of setup.json>
   done
 }
 
-systemctl stop barbican barbican-edge-gateway barbican-edge-branch barbican-live 2>/dev/null || true
+systemctl stop barbican barbican-ui barbican-edge-gateway barbican-edge-branch barbican-live 2>/dev/null || true
 rm -rf /var/lib/barbican /var/lib/barbican-edge /var/log/demo /etc/barbican /etc/barbican-edge
 mkdir -p /var/lib/barbican /var/log/demo /etc/barbican /etc/barbican-edge
 touch /var/log/demo/web.log /var/log/demo/ssh.log /var/log/demo/auth.log
@@ -46,7 +52,7 @@ cat >"${CONFIG}" <<'EOF'
 path = "/var/lib/barbican/barbican.db"
 
 [ui]
-listen = "127.0.0.1:7381"
+socket = "/run/barbican-ui/ui.sock"
 
 [edge]
 listen = "127.0.0.1:7380"
