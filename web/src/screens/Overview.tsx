@@ -142,11 +142,13 @@ function DroppedStat({ fw, edges }: { fw: FirewallStatus; edges: EdgeStatus[] })
 
 export function OverviewScreen() {
   const overview = useOverview()
-  const geo = useGeoStatus()
-  const feeds = useFeeds()
+  // The rest of the screen is asked for once the overview is in, so that it doesn't wait behind them.
+  const loaded = overview.data !== undefined
+  const geo = useGeoStatus(loaded)
+  const feeds = useFeeds(loaded)
   const meta = useMeta()
   const edgeApi = meta.data?.edgeApi === true
-  const edges = useEdges(edgeApi).data ?? []
+  const edges = useEdges(edgeApi && loaded).data ?? []
   const now = useNow(30_000)
   if (overview.error) return <Alert color="red">{overview.error.message}</Alert>
   const o = overview.data
@@ -269,7 +271,7 @@ export function OverviewScreen() {
             }
           >
             <Stack gap={6}>
-              {(feeds.data ?? []).length === 0 && (
+              {feeds.data?.length === 0 && (
                 <Text fz={13} c="var(--ink-dim)">
                   None yet
                 </Text>

@@ -14,7 +14,9 @@ use serde_json::Value;
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::{AbortHandle, JoinSet};
 
-use crate::api::{Call, ErrorCode, Request, RpcError, ServerMessage};
+use crate::api::{
+    Call, DEFLATE_MIN, DEFLATE_PROTOCOL, ErrorCode, Request, RpcError, ServerMessage,
+};
 use crate::app::App;
 
 /// Requests in one frame, at most.
@@ -34,6 +36,7 @@ pub async fn upgrade(
     }
     upgrade
         .max_message_size(1024 * 1024)
+        .protocols([DEFLATE_PROTOCOL])
         .on_upgrade(move |socket| serve(socket, app))
 }
 
@@ -54,7 +57,25 @@ fn origin_allowed(headers: &HeaderMap) -> bool {
         .any(|host| host.trim().eq_ignore_ascii_case(origin_host))
 }
 
+/// A message as a frame: compressed in a binary frame when the client asked for that and it's large enough.
+fn encode(message: &ServerMessage, deflate: bool) -> Result<Message, String> {
+    let text = serde_json::to_string(message).map_err(|e| e.to_string())?;
+    if !deflate || text.len() < DEFLATE_MIN {
+        return Ok(Message::Text(Utf8Bytes::from(text)));
+    }
+    let mut encoder = flate2::write::ZlibEncoder::new(
+        Vec::with_capacity(text.len() / 4),
+        flate2::Compression::default(),
+    );
+    std::io::Write::write_all(&mut encoder, text.as_bytes()).map_err(|e| e.to_string())?;
+    let bytes = encoder.finish().map_err(|e| e.to_string())?;
+    Ok(Message::Binary(bytes.into()))
+}
+
 pub async fn serve(socket: WebSocket, app: Arc<App>) {
+    let deflate = socket
+        .protocol()
+        .is_some_and(|p| p.as_bytes() == DEFLATE_PROTOCOL.as_bytes());
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::channel::<ServerMessage>(256);
 
@@ -64,8 +85,8 @@ pub async fn serve(socket: WebSocket, app: Arc<App>) {
         loop {
             let message = tokio::select! {
                 message = rx.recv() => match message {
-                    Some(message) => match serde_json::to_string(&message) {
-                        Ok(text) => Message::Text(Utf8Bytes::from(text)),
+                    Some(message) => match encode(&message, deflate) {
+                        Ok(frame) => frame,
                         Err(e) => {
                             tracing::error!(error = %e, "Serializing a response failed");
                             continue;
@@ -76,9 +97,12 @@ pub async fn serve(socket: WebSocket, app: Arc<App>) {
                 _ = ping.tick() => Message::Ping(axum::body::Bytes::new()),
             };
             if sink.send(message).await.is_err() {
-                break;
+                return;
             }
         }
+        // Answers the browser's close (or closes): without it the browser sees an unclean close (1006), and the
+        // proxies in between keep the connection until they notice.
+        let _ = sink.close().await;
     });
 
     let subscriptions: Subscriptions = Arc::default();
@@ -349,5 +373,27 @@ mod tests {
         assert!(matches!(&parsed[2], (Some(id), Err(_)) if id == "3"));
         assert!(matches!(parsed[3], (None, Err(_))));
         assert!(matches!(&parse("42")[..], [(None, Err(_))]));
+    }
+
+    #[test]
+    fn compresses_large_messages_for_clients_that_ask() {
+        let small = ServerMessage::Result {
+            id: "1".into(),
+            result: Value::Null,
+        };
+        let large = ServerMessage::Result {
+            id: "2".into(),
+            result: Value::String("x".repeat(DEFLATE_MIN)),
+        };
+        assert!(matches!(encode(&small, true), Ok(Message::Text(_))));
+        assert!(matches!(encode(&large, false), Ok(Message::Text(_))));
+        let Ok(Message::Binary(bytes)) = encode(&large, true) else {
+            panic!("expected a binary frame");
+        };
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut flate2::read::ZlibDecoder::new(&bytes[..]), &mut text)
+            .unwrap();
+        assert_eq!(text, serde_json::to_string(&large).unwrap());
+        assert!(bytes.len() < text.len() / 4);
     }
 }
