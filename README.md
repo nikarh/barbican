@@ -67,6 +67,7 @@ database. A full example is [`dist/config.toml`](dist/config.toml).
 | `firewall.table` | `barbican` | The `inet` table barbican owns. |
 | `firewall.priority` | `-190` | Of its prerouting chain: after connection tracking (-200), before NAT (-100). |
 | `firewall.nft` | `nft` | |
+| `firewall.ipv6` | `true` | `false`: nothing of IPv6 goes into nftables. Its country and blocklist prefixes take about as much kernel memory as IPv4's (roughly 140 bytes each, ~12 MB for Africa, Asia and South America), for nothing on a host without IPv6. |
 | `firewall.check_interval` | `60` | Seconds between checks whether another program changed nftables, and readings of the drop counters. |
 | `geoip.country`, `geoip.asn` | `/var/lib/barbican/dbip-*-lite.mmdb` | Databases in the MaxMind DB format (DB-IP Lite, or MaxMind's GeoLite2). |
 | `geoip.download` | `true` | Download DB-IP's free databases when missing, and again once a month. |

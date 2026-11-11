@@ -29,6 +29,8 @@ enabled = true
 table = "barbican"
 priority = -190
 nft = "nft"
+# false: block IPv4 only. On a host without IPv6, its country and blocklist prefixes would only take kernel memory.
+ipv6 = true
 # Seconds between checks whether another program changed nftables (one small request).
 check_interval = 60
 

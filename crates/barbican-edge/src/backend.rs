@@ -94,9 +94,12 @@ pub fn nft(config: &Config) -> Result<Box<dyn Backend>, String> {
         None => -190,
     };
     let program = config.main.option("nft").unwrap_or("nft").to_owned();
+    // On unless `ipv6` is `0`: without IPv6, its list prefixes would only take the router's memory.
+    let ipv6 = config.main.option("ipv6") != Some("0");
     Ok(Box::new(Nft(Firewall::new(
         NftCommand::new(&program),
         &table,
         priority,
-    ))))
+    )
+    .with_ipv6(ipv6))))
 }

@@ -46,6 +46,9 @@ config upstream 'server'
 then `/etc/init.d/barbican-edge restart`. **Services → Barbican → Status** (or `barbican-edge status`) shows whether
 it follows its agents and what it blocks. See [Connecting an edge to an agent](README.md#connecting-an-edge-to-an-agent).
 
+Without IPv6 on the router, `option ipv6 '0'` leaves it out: its country and blocklist prefixes would otherwise take
+about as much memory as IPv4's (roughly 140 bytes each; ~12 MB for Africa, Asia and South America).
+
 Every minute (`option check_interval`, in seconds) the edge asks nftables for the ruleset's generation, one small
 request: when another program changed the ruleset (a firewall restart flushes it), the table is put right.
 
