@@ -41,6 +41,9 @@ pub fn rebuild_rules(app: &App) {
                 .filter(|e| e.allow && e.until.is_none_or(|u| u > now))
                 .map(|e| e.net),
         );
+        for feed in state.allowing_feeds() {
+            allowed.extend(feed.loaded.nets.iter().copied());
+        }
         let feeds: Vec<(&str, Arc<NetSet>)> = state
             .feeds
             .iter()

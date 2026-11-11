@@ -69,7 +69,9 @@ function FeedLine({ feed: f, now }: { feed: Feed; now: number }) {
     <div className={status.line} title={f.error ?? undefined}>
       <span className={status.dot} data-ok={ok || !f.def.enabled} data-off={!f.def.enabled} />
       <span className={status.value}>{f.def.name}</span>
-      <span className={status.faint}>{count(f.count)} prefixes</span>
+      <span className={status.faint}>
+        {count(f.count)} prefixes{f.def.allow ? ' · allowed' : f.def.block ? '' : ' · data'}
+      </span>
       <span className={status.when} data-bad={f.error !== null && f.def.enabled}>
         {when}
       </span>
@@ -253,7 +255,7 @@ export function OverviewScreen() {
           </Panel>
 
           <Panel
-            title="Blocklists"
+            title="Feeds"
             right={
               <a className="panel-link" href={href('settings', { tab: 'feeds' })}>
                 Details

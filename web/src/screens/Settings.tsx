@@ -8,10 +8,10 @@ import {
   Group,
   Modal,
   NumberInput,
+  SegmentedControl,
   Select,
   SimpleGrid,
   Stack,
-  Switch,
   Tabs,
   Text,
   TextInput,
@@ -714,6 +714,7 @@ const NEW_FEED: FeedDef = {
   url: '',
   enabled: true,
   block: false,
+  allow: false,
   refreshSecs: 6 * 3_600,
   username: null,
   password: null,
@@ -752,14 +753,30 @@ function FeedEditor({ feed, onClose }: { feed: FeedDef; onClose: () => void }) {
           required
           classNames={{ input: 'mono' }}
         />
-        <Switch
-          label="Block what it lists"
-          description="Otherwise it is only data, for rules and for the address pages"
-          checked={f.block}
-          onChange={(e) => {
-            set({ block: e.currentTarget.checked })
-          }}
-        />
+        <Stack gap={4}>
+          <Text fz={14} fw={500}>
+            What it does
+          </Text>
+          <SegmentedControl
+            fullWidth
+            value={f.block ? 'block' : f.allow ? 'allow' : 'data'}
+            onChange={(v) => {
+              set({ block: v === 'block', allow: v === 'allow' })
+            }}
+            data={[
+              { value: 'block', label: 'Block' },
+              { value: 'allow', label: 'Allow' },
+              { value: 'data', label: 'Data only' },
+            ]}
+          />
+          <Text fz={12} c="var(--ink-dim)">
+            {f.block
+              ? 'Every address it lists is dropped, here and on the edges, like a blocked country.'
+              : f.allow
+                ? 'Every address it lists is never banned and is let through before any block, here and on the edges, like the allow list: for a proxy in front of your sites (Cloudflare), whose addresses carry everyone’s traffic.'
+                : 'Only data: for rules (“listed in”) and for the address pages.'}
+          </Text>
+        </Stack>
         <LengthInput
           label="Fetch every"
           value={f.refreshSecs}
@@ -855,10 +872,12 @@ function FeedsTab() {
   return (
     <Stack gap="md">
       <Text fz={13} c="var(--ink-dim)" maw={700}>
-        Public lists of bad addresses. A list that blocks is applied as a whole, like a blocked
-        country; the others are data for rules (“listed in”) and for the address pages. CrowdSec’s
-        blocklists can be added through a “blocklist integration” of a CrowdSec console account: its
-        URL, user and password.
+        Lists of addresses fetched from the internet. A list that blocks is applied as a whole, like
+        a blocked country; one that allows is never banned and is let through first, like the allow
+        list (Cloudflare’s, when a site is behind its proxy: visitors then arrive from its
+        addresses); the others are data for rules (“listed in”) and for the address pages.
+        CrowdSec’s blocklists can be added through a “blocklist integration” of a CrowdSec console
+        account: its URL, user and password.
       </Text>
       <Group gap="xs">
         <Button
@@ -877,7 +896,7 @@ function FeedsTab() {
               save.mutate(p)
             }}
           >
-            {p.name}
+            {p.allow ? `Allow ${p.name}` : p.name}
           </Button>
         ))}
       </Group>
@@ -923,7 +942,13 @@ function FeedsTab() {
             >
               {f.def.name}
             </Anchor>
-            {f.def.block ? <Badge color="brass">Blocks</Badge> : <Badge color="gray">Data</Badge>}
+            {f.def.block ? (
+              <Badge color="brass">Blocks</Badge>
+            ) : f.def.allow ? (
+              <Badge color="green">Allows</Badge>
+            ) : (
+              <Badge color="gray">Data</Badge>
+            )}
             {!f.def.enabled && <Badge color="gray">Off</Badge>}
           </Group>
           <Text fz={12} c="var(--ink-faint)" className="mono" truncate>
@@ -1004,7 +1029,7 @@ export function SettingsScreen({ tab }: { tab: string | null }) {
       <Tabs.List mb="md">
         <Tabs.Tab value="policy">Lengths and countries</Tabs.Tab>
         <Tabs.Tab value="lists">Allow and deny</Tabs.Tab>
-        <Tabs.Tab value="feeds">Blocklists</Tabs.Tab>
+        <Tabs.Tab value="feeds">Feeds</Tabs.Tab>
         <Tabs.Tab value="geoip">Geolocation</Tabs.Tab>
         {meta.data?.edgeApi === true && <Tabs.Tab value="edges">Edges</Tabs.Tab>}
         <Tabs.Tab value="about">About</Tabs.Tab>
