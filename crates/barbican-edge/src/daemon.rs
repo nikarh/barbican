@@ -139,7 +139,9 @@ pub fn load_config(path: &Path, defaults: &Defaults) -> Result<Config, String> {
     }
     Ok(Config {
         program: defaults.name,
-        enabled: flag("enabled", true),
+        // `dry_run`: run, follow and save as usual, but change nothing in the firewall (to see first what it would
+        // block, and what that costs).
+        enabled: flag("enabled", true) && !flag("dry_run", false),
         lists: flag("lists", true),
         state: PathBuf::from(main.option("state").unwrap_or(defaults.state)),
         status: PathBuf::from(main.option("status").unwrap_or(defaults.status)),
@@ -795,6 +797,15 @@ mod tests {
         .unwrap();
         let c = load_config(&path, &DEFAULTS).unwrap();
         assert!(c.enabled && !c.lists);
+        let dry = dir.join("dry");
+        std::fs::write(
+            &dry,
+            "config barbican 'main'
+	option dry_run '1'
+",
+        )
+        .unwrap();
+        assert!(!load_config(&dry, &DEFAULTS).unwrap().enabled);
         assert_eq!(c.main.option("priority"), Some("-250"));
         assert_eq!(c.state, PathBuf::from("/tmp/state.json"));
         assert_eq!(c.upstreams.len(), 2);
