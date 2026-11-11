@@ -49,6 +49,8 @@ pub struct App {
     /// Every configured edge client, by name: connected or not, and what it last reported.
     pub edges: watch::Sender<BTreeMap<String, EdgeStatus>>,
     pub firewall: Mutex<FirewallStatus>,
+    /// What the firewalls dropped in total, by place (this host's `drops::HOST`, or an edge's name).
+    pub drops: Mutex<BTreeMap<String, crate::drops::Drops>>,
     pub geo_updates: Mutex<GeoUpdates>,
     pub http: reqwest::Client,
     pub dry_run: bool,
@@ -125,6 +127,7 @@ impl App {
             source_counters: Mutex::new(BTreeMap::new()),
             unsaved_cursors: Mutex::new(BTreeMap::new()),
             edges,
+            drops: Mutex::new(BTreeMap::new()),
             firewall: Mutex::new(FirewallStatus {
                 enabled,
                 ..FirewallStatus::default()

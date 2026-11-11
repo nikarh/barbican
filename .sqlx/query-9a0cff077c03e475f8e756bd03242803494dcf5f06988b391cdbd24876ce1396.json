@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO drops (place, since, blocked_packets, blocked_bytes, listed_packets, listed_bytes,\n             last_blocked_packets, last_blocked_bytes, last_listed_packets, last_listed_bytes)\n         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n         ON CONFLICT (place) DO UPDATE SET blocked_packets = excluded.blocked_packets,\n             blocked_bytes = excluded.blocked_bytes, listed_packets = excluded.listed_packets,\n             listed_bytes = excluded.listed_bytes, last_blocked_packets = excluded.last_blocked_packets,\n             last_blocked_bytes = excluded.last_blocked_bytes, last_listed_packets = excluded.last_listed_packets,\n             last_listed_bytes = excluded.last_listed_bytes",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "9a0cff077c03e475f8e756bd03242803494dcf5f06988b391cdbd24876ce1396"
+}

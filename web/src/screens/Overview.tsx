@@ -8,7 +8,7 @@ import { GeoSummary } from '../components/Geo'
 import status from '../components/Status.module.css'
 import { Country, Panel, Stat } from '../components/ui'
 import { edgeDropped } from '../lib/edges'
-import { ago, compact, count, KIND_LABELS, remaining } from '../lib/format'
+import { ago, compact, count, day, KIND_LABELS, remaining } from '../lib/format'
 import { href, ipHref } from '../lib/router'
 import { useNow } from '../lib/useNow'
 import classes from './Overview.module.css'
@@ -79,6 +79,11 @@ function FeedLine({ feed: f, now }: { feed: Feed; now: number }) {
   )
 }
 
+/** ", since <date>" for totals counted since then (they go on across restarts and reboots). */
+function since(unix: number | null): string {
+  return unix === null ? '' : `, since ${day(unix)}`
+}
+
 /** What firewalls dropped: this host's, and each edge's, each labelled; a total only as the sum of those parts. */
 function DroppedStat({ fw, edges }: { fw: FirewallStatus; edges: EdgeStatus[] }) {
   const here = fw.droppedBlocked + fw.droppedListed
@@ -87,19 +92,20 @@ function DroppedStat({ fw, edges }: { fw: FirewallStatus; edges: EdgeStatus[] })
       <Stat
         label="Dropped on this host"
         value={count(here)}
-        hint={`${count(fw.droppedListed)} by countries and lists`}
+        hint={`${count(fw.droppedListed)} by countries and lists${since(fw.droppedSince)}`}
       />
     )
   }
   const parts = edges.map((e) => ({ name: e.name, dropped: edgeDropped(e) }))
   const total = here + parts.reduce((sum, p) => sum + (p.dropped ?? 0), 0)
   const explained = [
-    `Dropped by this host’s firewall: ${count(here)} (${count(fw.droppedListed)} by countries and lists)`,
-    ...parts.map((p) =>
-      p.dropped === null
-        ? `The edge ${p.name} hasn’t reported yet`
-        : `Dropped by the edge ${p.name}’s firewall: ${count(p.dropped)}`,
-    ),
+    `Dropped by this host’s firewall: ${count(here)} (${count(fw.droppedListed)} by countries and lists)${since(fw.droppedSince)}`,
+    ...edges.map((e) => {
+      const dropped = edgeDropped(e)
+      return dropped === null || e.report === null
+        ? `The edge ${e.name} hasn’t reported yet`
+        : `Dropped by the edge ${e.name}’s firewall: ${count(dropped)}${since(e.report.droppedSince)}`
+    }),
   ]
   return (
     <Tooltip

@@ -7,6 +7,7 @@ mod api;
 mod app;
 mod config;
 mod db;
+mod drops;
 mod edge_api;
 mod engine;
 mod feeds;

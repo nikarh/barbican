@@ -394,6 +394,14 @@ pub async fn run(config: Config, dry_run: bool) -> Result<(), String> {
         *current = Arc::new(geo);
     }
     load(&app).await?;
+    match crate::db::drops_load(&app.db.pool).await {
+        Ok(drops) => {
+            if let Ok(mut current) = app.drops.lock() {
+                *current = drops;
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, "Reading the drop totals failed; counting from now"),
+    }
     firewall::rebuild_rules(&app);
     firewall::refresh_countries(&app).await;
 

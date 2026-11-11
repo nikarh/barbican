@@ -1,0 +1,134 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT place, since, blocked_packets, blocked_bytes, listed_packets, listed_bytes, last_blocked_packets,\n             last_blocked_bytes, last_listed_packets, last_listed_bytes FROM drops",
+  "describe": {
+    "columns": [
+      {
+        "name": "place",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "drops",
+            "name": "place"
+          }
+        }
+      },
+      {
+        "name": "since",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "drops",
+            "name": "since"
+          }
+        }
+      },
+      {
+        "name": "blocked_packets",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "drops",
+            "name": "blocked_packets"
+          }
+        }
+      },
+      {
+        "name": "blocked_bytes",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "drops",
+            "name": "blocked_bytes"
+          }
+        }
+      },
+      {
+        "name": "listed_packets",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "drops",
+            "name": "listed_packets"
+          }
+        }
+      },
+      {
+        "name": "listed_bytes",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "drops",
+            "name": "listed_bytes"
+          }
+        }
+      },
+      {
+        "name": "last_blocked_packets",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "drops",
+            "name": "last_blocked_packets"
+          }
+        }
+      },
+      {
+        "name": "last_blocked_bytes",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "drops",
+            "name": "last_blocked_bytes"
+          }
+        }
+      },
+      {
+        "name": "last_listed_packets",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "drops",
+            "name": "last_listed_packets"
+          }
+        }
+      },
+      {
+        "name": "last_listed_bytes",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "drops",
+            "name": "last_listed_bytes"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "732da69c11afb384393d624cdfc12ddd909457af2a0d5eb45d9b3ba63f42bd63"
+}

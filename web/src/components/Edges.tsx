@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 
 import type { EdgeStatus } from '../api/generated/model'
 import { edgeDropped } from '../lib/edges'
-import { ago, approx, bytes, compact, count } from '../lib/format'
+import { ago, approx, bytes, compact, count, day } from '../lib/format'
 import classes from './Edges.module.css'
 import status from './Status.module.css'
 
@@ -125,7 +125,8 @@ export function EdgeCard({ e, now }: { e: EdgeStatus; now: number }) {
             <Fact label={`Dropped at ${e.name}`}>
               <span title={`Dropped by the edge ${e.name}’s firewall`}>
                 {count(r.droppedBlocked)} packets ({bytes(r.droppedBlockedBytes)}) for bans,{' '}
-                {count(r.droppedListed)} ({bytes(r.droppedListedBytes)}) for countries and lists
+                {count(r.droppedListed)} ({bytes(r.droppedListedBytes)}) for countries and lists,
+                since {day(r.droppedSince)}
               </span>
             </Fact>
             <Fact label="Running">

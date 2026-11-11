@@ -377,10 +377,14 @@ pub struct FirewallStatus {
     /// They are counted as the lists have them: the sets hold them merged into ranges, fewer elements.
     #[cfg_attr(test, ts(type = "number"))]
     pub listed: u64,
+    /// Packets its firewall dropped for a ban, and for a country or a blocklist: in total, across restarts and
+    /// reboots, since `dropped_since`.
     #[cfg_attr(test, ts(type = "number"))]
     pub dropped_blocked: u64,
     #[cfg_attr(test, ts(type = "number"))]
     pub dropped_listed: u64,
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub dropped_since: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Clone, Default)]
@@ -451,7 +455,11 @@ pub struct EdgeReport {
     /// merged into ranges, fewer elements.
     #[cfg_attr(test, ts(type = "number"))]
     pub listed: u64,
-    /// Packets and bytes its firewall dropped for a ban, since its rules were made.
+    /// When this agent started counting what the edge dropped: the `dropped_*` totals are since then, across the
+    /// edge's restarts (it reports its firewall's counters, which start again from 0 with its rules).
+    #[cfg_attr(test, ts(type = "number"))]
+    pub dropped_since: i64,
+    /// Packets and bytes its firewall dropped for a ban, in total.
     #[cfg_attr(test, ts(type = "number"))]
     pub dropped_blocked: u64,
     #[cfg_attr(test, ts(type = "number"))]
