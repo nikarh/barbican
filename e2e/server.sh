@@ -208,8 +208,12 @@ policy=$(${RPC} policy.get | python3 -c 'import json,sys; p=json.load(sys.stdin)
 ${RPC} policy.update "${policy}" >/dev/null
 if wait_until 30 cn_blocked; then pass "a blocked country's address is dropped"; else fail "a blocked country gets through"; fi
 if att; then pass "other countries get through"; else fail "an address of another country is blocked"; fi
-count=$(nft -j list set inet barbican list4 | python3 -c 'import json,sys; print(sum(len(i["set"].get("elem",[])) for i in json.load(sys.stdin)["nftables"] if "set" in i))')
-if ((count > 1000)); then pass "the country's ${count} prefixes are in the set"; else fail "only ${count} prefixes"; fi
+# Its prefixes merged into ranges: runs of adjacent prefixes that are no prefix together are one element each.
+read -r count ranges < <(nft -j list set inet barbican list4 | python3 -c '
+import json, sys
+elems = [e for i in json.load(sys.stdin)["nftables"] if "set" in i for e in i["set"].get("elem", [])]
+print(len(elems), sum(1 for e in elems if isinstance(e, dict) and "range" in e))')
+if ((count > 1000 && ranges > 0)); then pass "the country is in the set as ${count} elements, ${ranges} of them ranges"; else fail "${count} elements, ${ranges} ranges"; fi
 policy=$(${RPC} policy.get | python3 -c 'import json,sys; p=json.load(sys.stdin); p["blockedCountries"]=[]; print(json.dumps(p))')
 ${RPC} policy.update "${policy}" >/dev/null
 if wait_until 30 cn; then pass "unblocked"; else fail "still blocked after unblocking the country"; fi
