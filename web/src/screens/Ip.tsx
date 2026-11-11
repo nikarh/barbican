@@ -21,7 +21,7 @@ import { InfiniteGrid, type Sort } from '../components/Grid'
 import { Kept } from '../components/Kept'
 import { BanDialog, Country } from '../components/ui'
 import { columnsFor, useTier, type Column } from '../lib/columns'
-import { ago, count, dateTime, KIND_LABELS, remaining, WIDEST } from '../lib/format'
+import { ago, count, dateTime, hourRange, KIND_LABELS, remaining, WIDEST } from '../lib/format'
 import { href, navigate } from '../lib/router'
 import { useNow } from '../lib/useNow'
 import classes from './Ip.module.css'
@@ -80,8 +80,9 @@ function ActivityGrid({ d }: { d: IpDetail }) {
       {
         headerName: 'First',
         field: 'first',
-        fits: WIDEST.dateTime(),
-        valueFormatter: (p) => dateTime(Number(p.value ?? 0)),
+        fits: WIDEST.hourRange(),
+        valueFormatter: (p) => hourRange(Number(p.value ?? 0)),
+        headerTooltip: 'Events are counted per hour',
         sortable: true,
       },
       {

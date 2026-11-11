@@ -187,6 +187,16 @@ export function dateTime(unix: number): string {
   })
 }
 
+/** "11 Nov 2026, 10:00–11:00": the hour that starts at `unix`. Events are counted per hour, so this is all that is
+ * known of when one happened. */
+export function hourRange(unix: number): string {
+  const end = new Date((unix + 3600) * 1000).toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+  return `${dateTime(unix)}–${end}`
+}
+
 export function day(unix: number): string {
   return new Date(unix * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
@@ -225,6 +235,10 @@ export const KIND_LABELS = {
 
 /** The widest texts of `dateTime`, `ago` and `remaining`, for sizing the columns that show them. */
 export const WIDEST = {
+  hourRange: (): string[] =>
+    Array.from({ length: 12 }, (_, month) =>
+      hourRange(new Date(2026, month, 28, 22, 0).getTime() / 1000),
+    ),
   dateTime: (): string[] =>
     Array.from({ length: 12 }, (_, month) =>
       dateTime(new Date(2026, month, 28, 23, 58).getTime() / 1000),
