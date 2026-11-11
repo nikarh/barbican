@@ -52,7 +52,7 @@ Try it first without touching the firewall: `barbican --dry-run` (or `[firewall]
 
 ## Documentation
 
-<https://barbican.arhipov.net/>, for each release:
+<https://barbican.arhipov.net/> (a version for each release). Start with:
 
 - [Introduction](https://barbican.arhipov.net/start/introduction/), [Compared with other tools](https://barbican.arhipov.net/start/comparison/) and [Quick start](https://barbican.arhipov.net/start/quick-start/)
 - [Planning a deployment](https://barbican.arhipov.net/guides/deployment/): where each part runs so that blocks work
