@@ -3,11 +3,13 @@ import {
   Alert,
   Anchor,
   Badge,
+  Box,
   Button,
   Group,
   Modal,
   NumberInput,
   Select,
+  SimpleGrid,
   Stack,
   Switch,
   Tabs,
@@ -144,7 +146,7 @@ function LengthsPanel({ p, set }: { p: Policy; set: (patch: Partial<Policy>) => 
             onChange={(v) => {
               set({ repeatMultiplier: Math.max(1, Number(v) || 1) })
             }}
-            w={180}
+            w={{ base: '100%', sm: 180 }}
           />
           <LengthInput
             label="At most"
@@ -552,7 +554,7 @@ function PolicyForm({ policy }: { policy: Policy }) {
             onChange={(v) => {
               set({ retentionDays: Math.max(1, Number(v) || 1) })
             }}
-            w={140}
+            w={{ base: '100%', sm: 140 }}
           />
         </Group>
       </Panel>
@@ -661,7 +663,7 @@ function EntriesTab() {
                 }}
                 required
                 classNames={{ input: 'mono' }}
-                style={{ flex: '2 1 180px' }}
+                flex={{ base: '1 1 100%', sm: '2 1 180px' }}
               />
               <Select
                 aria-label="List"
@@ -674,7 +676,7 @@ function EntriesTab() {
                   setAllow(v !== 'deny')
                 }}
                 allowDeselect={false}
-                w={100}
+                flex={{ base: '1 1 100%', sm: '0 0 100px' }}
               />
               <TextInput
                 placeholder="Note"
@@ -683,11 +685,11 @@ function EntriesTab() {
                 onChange={(e) => {
                   setNote(e.currentTarget.value)
                 }}
-                style={{ flex: '2 1 140px' }}
+                flex={{ base: '1 1 100%', sm: '2 1 140px' }}
               />
-              <div style={{ flex: '1 1 130px' }}>
+              <Box flex={{ base: '1 1 100%', sm: '1 1 130px' }}>
                 <LengthSelect label="For" hideLabel value={secs} onChange={setSecs} />
-              </div>
+              </Box>
               <Button
                 type="submit"
                 variant="default"
@@ -763,7 +765,7 @@ function FeedEditor({ feed, onClose }: { feed: FeedDef; onClose: () => void }) {
             set({ refreshSecs })
           }}
         />
-        <Group grow>
+        <SimpleGrid cols={{ base: 1, sm: 2 }} style={{ alignItems: 'end' }}>
           <TextInput
             label="User"
             description="For lists behind an account"
@@ -781,7 +783,7 @@ function FeedEditor({ feed, onClose }: { feed: FeedDef; onClose: () => void }) {
               set({ password: e.currentTarget.value })
             }}
           />
-        </Group>
+        </SimpleGrid>
         <Group justify="flex-end">
           <Button variant="default" onClick={onClose}>
             Cancel

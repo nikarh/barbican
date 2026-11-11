@@ -1,5 +1,6 @@
 import {
   Autocomplete,
+  type StyleProp,
   Badge,
   Button,
   Group,
@@ -129,14 +130,15 @@ export function LengthInput({
   description,
   value,
   onChange,
-  w = 160,
+  // Full width on a phone, like every input there.
+  w = { base: '100%', sm: 160 },
   'aria-label': ariaLabel,
 }: {
   label?: string
   description?: string
   value: number
   onChange: (secs: number) => void
-  w?: number | string
+  w?: StyleProp<number | string>
   'aria-label'?: string
 }) {
   const [text, setText] = useState(lengthInWords(value))
