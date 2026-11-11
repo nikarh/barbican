@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use barbican_common::net::NetSet;
+use barbican_common::net::{Family, NetSet};
 use barbican_common::nft::{Firewall, NftCommand};
 
 use crate::app::{App, now};
@@ -19,11 +19,10 @@ pub type Nft = Arc<Mutex<Firewall<NftCommand>>>;
 pub fn new(app: &App) -> Option<Nft> {
     let config = &app.config.firewall;
     (config.enabled && !app.dry_run).then(|| {
-        Arc::new(Mutex::new(Firewall::new(
-            NftCommand::new(&config.nft),
-            &config.table,
-            config.priority,
-        )))
+        Arc::new(Mutex::new(
+            Firewall::new(NftCommand::new(&config.nft), &config.table, config.priority)
+                .with_ipv6(config.ipv6),
+        ))
     })
 }
 
@@ -125,7 +124,16 @@ pub async fn apply(app: &Arc<App>, nft: Option<&Nft>) {
     }
 
     let blocks = desired.block.len() as u64;
-    let listed = desired.lists.len() as u64;
+    // What the list sets hold: without IPv6, its prefixes aren't loaded.
+    let listed = if app.config.firewall.ipv6 {
+        desired.lists.len()
+    } else {
+        desired
+            .lists
+            .iter()
+            .filter(|n| n.family() == Family::V4)
+            .count()
+    } as u64;
     let result = match nft {
         None => Ok(None),
         Some(nft) => {

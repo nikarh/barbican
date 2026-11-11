@@ -370,18 +370,28 @@ fn lists_mark(version: &str) -> u32 {
     })
 }
 
-/// The prefixes of a family that go into its list set.
-fn listed(lists: &[Net], family: Family) -> impl Iterator<Item = Net> + '_ {
+/// The mark of a version of the lists as loaded: without IPv6, the same lists load otherwise.
+fn loaded_mark(version: &str, ipv6: bool) -> u32 {
+    if ipv6 {
+        lists_mark(version)
+    } else {
+        lists_mark(&format!("{version} without IPv6"))
+    }
+}
+
+/// The prefixes of a family that go into its list set: none of IPv6 when it is off.
+fn listed(lists: &[Net], family: Family, ipv6: bool) -> impl Iterator<Item = Net> + '_ {
+    let on = ipv6 || family == Family::V4;
     lists
         .iter()
-        .filter(move |n| n.family() == family && !n.is_never_blocked())
+        .filter(move |n| on && n.family() == family && !n.is_never_blocked())
         .copied()
 }
 
 /// What is in `new` and not in `old`, and what is in `old` and not in `new`, both sorted.
-fn list_diff(old: &[Net], new: &[Net], family: Family) -> (Vec<Net>, Vec<Net>) {
+fn list_diff(old: &[Net], new: &[Net], family: Family, ipv6: bool) -> (Vec<Net>, Vec<Net>) {
     let sorted = |l: &[Net]| {
-        let mut v: Vec<Net> = listed(l, family).collect();
+        let mut v: Vec<Net> = listed(l, family, ipv6).collect();
         v.sort_unstable();
         v.dedup();
         v
@@ -425,6 +435,9 @@ pub struct Firewall<R: Runner> {
     /// The last netlink failure reported, and one not reported yet.
     netlink_failure: Option<String>,
     notice: Option<String>,
+    /// Whether IPv6 is blocked at all. Off, nothing of IPv6 goes into the kernel (the sets stay, empty): on a host
+    /// without IPv6, its list prefixes would take as much kernel memory as IPv4's for traffic that never comes.
+    ipv6: bool,
 }
 
 impl<R: Runner> Firewall<R> {
@@ -437,7 +450,19 @@ impl<R: Runner> Firewall<R> {
             model: None,
             netlink_failure: None,
             notice: None,
+            ipv6: true,
         }
+    }
+
+    /// Whether IPv6 is blocked (on by default). See [`Self::ipv6`].
+    #[must_use]
+    pub fn with_ipv6(mut self, on: bool) -> Self {
+        self.ipv6 = on;
+        self
+    }
+
+    fn mark(&self, version: &str) -> u32 {
+        loaded_mark(version, self.ipv6)
     }
 
     pub fn table(&self) -> &str {
@@ -564,7 +589,10 @@ impl<R: Runner> Firewall<R> {
     }
 
     fn reconcile_once(&mut self, desired: &Desired, now: u64) -> Result<Changes, Error> {
-        let wanted = wanted(desired, now);
+        let mut wanted = wanted(desired, now);
+        if !self.ipv6 {
+            wanted.retain(|(_, family), _| *family == Family::V4);
+        }
         if self.runner.netlink().is_some() {
             match self.reconcile_netlink(&wanted, desired, now) {
                 Err(Error::Netlink(e)) => self.netlink_failed(e),
@@ -619,7 +647,7 @@ impl<R: Runner> Firewall<R> {
                 // From what they hold, only the difference; or else filled anew.
                 let set = match applied {
                     Some((_, old)) => {
-                        let (add, remove) = list_diff(old, &desired.lists, family);
+                        let (add, remove) = list_diff(old, &desired.lists, family, self.ipv6);
                         SetChanges {
                             remove: remove.into_iter().map(Key::Net).collect(),
                             add: add.into_iter().map(|n| (n, None)).collect(),
@@ -628,7 +656,9 @@ impl<R: Runner> Firewall<R> {
                     }
                     None => SetChanges {
                         remove: Vec::new(),
-                        add: listed(&desired.lists, family).map(|n| (n, None)).collect(),
+                        add: listed(&desired.lists, family, self.ipv6)
+                            .map(|n| (n, None))
+                            .collect(),
                         flush: true,
                     },
                 };
@@ -636,7 +666,7 @@ impl<R: Runner> Firewall<R> {
                     plan.sets.push(((Set::List, family), set));
                 }
             }
-            plan.lists = Some(lists_mark(&desired.lists_version));
+            plan.lists = Some(self.mark(&desired.lists_version));
             changes.lists = true;
         }
         Ok((plan, changes))
@@ -767,11 +797,12 @@ impl<R: Runner> Firewall<R> {
             Err(Error::Nft(_)) => None,
             Err(e) => return Err(e),
         };
+        let ipv6 = self.ipv6;
         let holds = |version: &str, lists: &[Net]| {
-            mark == Some(lists_mark(version))
+            mark == Some(loaded_mark(version, ipv6))
                 && has
                     .iter()
-                    .all(|(family, has)| *has == listed(lists, *family).next().is_some())
+                    .all(|(family, has)| *has == listed(lists, *family, ipv6).next().is_some())
         };
         self.lists = match self.lists.take() {
             Some((version, lists)) if holds(&version, &lists) => Some((version, lists)),
@@ -1714,6 +1745,39 @@ mod tests {
         let elem = wire::Elem::key(wire::Key::of_u32(lists_mark(version)));
         w.elements(true, "barbican", LISTS_MARK, &[(elem, None)]);
         w.into_bytes()
+    }
+
+    #[test]
+    fn without_ipv6_nothing_of_it_is_written() {
+        let fake = WithNetlink::default();
+        let mut fw = Firewall::new(&fake, "barbican", -190).with_ipv6(false);
+        let desired = Desired {
+            block: vec![
+                Block {
+                    net: net("198.51.100.7"),
+                    until: None,
+                },
+                Block {
+                    net: net("2001:db8::7"),
+                    until: None,
+                },
+            ],
+            allow: vec![net("2001:db8:1::/48")],
+            lists: Arc::new(vec![net("203.0.113.0/24"), net("2001:db8:2::/48")]),
+            lists_version: "v1".to_owned(),
+        };
+        fw.reconcile(&desired, 1_000).unwrap();
+        let written = changes_of(&fake.nl.batches.borrow()[0]);
+        assert!(
+            written
+                .iter()
+                .all(|c| !c.1.ends_with('6') || c.2 == "flush"),
+            "{written:?}"
+        );
+        assert!(written.contains(&ch(ADD, "host4", "198.51.100.7")));
+        assert!(written.contains(&ch(ADD, "list4", "203.0.113.0")));
+        // The same lists loaded with IPv6 have another mark: a restart with it on fills them again.
+        assert_ne!(fw.mark("v1"), lists_mark("v1"));
     }
 
     #[test]

@@ -106,6 +106,9 @@ pub struct Firewall {
     /// Seconds between checks whether another program changed nftables (one small request each), and between
     /// readings of the drop counters.
     pub check_interval: u64,
+    /// Block IPv6 too. Off, nothing of IPv6 goes into nftables: on a host without IPv6 its country and blocklist
+    /// prefixes would only take kernel memory (about as much as IPv4's).
+    pub ipv6: bool,
 }
 
 impl Default for Firewall {
@@ -116,6 +119,7 @@ impl Default for Firewall {
             priority: -190,
             nft: "nft".to_owned(),
             check_interval: 60,
+            ipv6: true,
         }
     }
 }
