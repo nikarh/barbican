@@ -52,8 +52,7 @@ Try it first without touching the firewall: `barbican --dry-run` (or `[firewall]
 
 ## Documentation
 
-The documentation is the site at <https://barbican.arhipov.net/>, built from [`site/`](site/), with a version for
-every release and one for `main`:
+<https://barbican.arhipov.net/>, for each release:
 
 - [Introduction](https://barbican.arhipov.net/start/introduction/), [Compared with other tools](https://barbican.arhipov.net/start/comparison/) and [Quick start](https://barbican.arhipov.net/start/quick-start/)
 - [Planning a deployment](https://barbican.arhipov.net/guides/deployment/): where each part runs so that blocks work
@@ -63,15 +62,9 @@ every release and one for `main`:
 - [Configuration](https://barbican.arhipov.net/reference/configuration/), [command line](https://barbican.arhipov.net/reference/cli/) and [resource use](https://barbican.arhipov.net/reference/resources/)
 - How it works: [the engine](https://barbican.arhipov.net/internals/how-it-works/), [the firewall](https://barbican.arhipov.net/internals/firewall/), [agents and edges](https://barbican.arhipov.net/internals/edge-link/), [the UI's protection](https://barbican.arhipov.net/internals/control-surface/) and [Security](https://barbican.arhipov.net/internals/security/)
 
-To preview it locally, run `mise run docs`. [Writing the docs](https://barbican.arhipov.net/project/docs/) explains
-how it is organized and published.
+## Contributing
 
-## Development
-
-[mise](https://mise.jdx.dev) installs the tools and runs the tasks (`mise tasks`): `mise run dev` (the agent in dry
-run and the UI's dev server), `mise run check` (everything CI checks), `mise run build`, and `mise run e2e` (the
-end-to-end suites, in throwaway VMs: [`e2e/README.md`](e2e/README.md)). See
-[Development](https://barbican.arhipov.net/project/development/).
+See [Development](https://barbican.arhipov.net/project/development/) for building, testing and the end-to-end suites.
 
 ## Attribution and license
 
