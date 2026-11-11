@@ -41,7 +41,9 @@ container's log. It checks that:
   and nothing falls back to the `nft` program;
 - bans run out in the kernel with the agent stopped;
 - after a reboot (the table deleted), the blocks are back by the time the agent reports ready;
-- the edge API refuses requests without a token, and gives an edge the whole state;
+- the edge API is TLS only, serves the certificate `edge-fingerprint` names, refuses an edge with an unknown token,
+  gives an edge the whole state, and the agent sees that edge (connected, in dry run, with its blocks) through the
+  RPC, and sees it go;
 - with the UI on a unix socket, the image's UI proxy, run read-only, without capabilities, as nobody with the
   `barbican-ui` group, serves the UI and reaches the agent (bans and lifts through it, also after the agent
   restarts), the Origin check still holds, and a container without the group is refused.
@@ -50,6 +52,9 @@ container's log. It checks that:
 
 Runs from the host after the server suite: barbican-edge and its LuCI pages are installed in the OpenWrt VM and
 follow the server's agent. The attacker is 203.0.113.77 on the server's link to the router; probes are pings to the
-router's WAN address. It checks that a ban reaches the router and is dropped there for that address only, that a
-block removed by hand and a deleted table are put back, that a lift reaches it within the long poll, that after a
-reboot with the agent down the blocks are back, and that it follows the agent again once it returns. It checks that the LuCI views are served too.
+router's WAN address. It checks that a ban reaches the router and is dropped there for that address only, that the
+agent sees the edge through the RPC (connected, enforcing, its backend, blocks and drop counters, the agents it
+follows), that the edge connects again when the agent restarts and keeps its blocks, that a block removed by hand and a
+deleted table are put back, that a lift and a ban reach it pushed (in well under 2.5 seconds, SSH round trips
+included), that after a reboot with the agent down the blocks are back, and that it follows the agent again once it
+returns. It checks that the LuCI views are served too.

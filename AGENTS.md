@@ -22,7 +22,7 @@ development machine. `mise run e2e` boots throwaway VMs and runs everything ther
   (`db`), geolocation (`geo`), blocklists (`feeds`), the firewall (`firewall`), the edge API (`edge_api`), the
   WebSocket RPC for the UI (`api.rs` holds every type of it, `rpc.rs` runs it) and the embedded UI (`web.rs`).
 - `crates/barbican-edge` - the router agent: follows agents' edge APIs and applies the result. Plain threads and
-  blocking I/O, no TLS, configured from a UCI file.
+  blocking I/O, no tokio, configured from a UCI file.
 - `web/` - the React UI. `web/src/api/generated/` is generated from `crates/barbican/src/api.rs` by
   `mise run bindings` (`cargo test` does it too); never edit it by hand.
 - `luci/luci-app-barbican` - the LuCI pages of the edge agent (JavaScript views, menu, ACL).

@@ -104,7 +104,10 @@ pub async fn call(app: &Arc<App>, call: Call) -> Result<Value, RpcError> {
             Ok(Value::Null)
         }
         // Handled by the connection itself.
-        Call::LiveSubscribe | Call::Unsubscribe(_) => Err(bad("not a plain call")),
+        Call::EdgesList => json(app.edges()),
+        Call::LiveSubscribe | Call::EdgesSubscribe | Call::Unsubscribe(_) => {
+            Err(bad("not a plain call"))
+        }
     }
 }
 
@@ -280,11 +283,6 @@ async fn overview(app: &Arc<App>) -> Result<Overview, RpcError> {
         trusted,
         firewall: app.firewall.lock().map(|f| f.clone()).unwrap_or_default(),
         sources: sources(app),
-        edges: app
-            .edges
-            .lock()
-            .map(|e| e.values().cloned().collect())
-            .unwrap_or_default(),
         days,
         countries: countries
             .into_iter()

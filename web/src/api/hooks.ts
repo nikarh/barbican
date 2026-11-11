@@ -2,7 +2,7 @@ import { notifications } from '@mantine/notifications'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
-import type { Live } from './generated/model'
+import type { EdgeStatus, Live } from './generated/model'
 import { rpc, type Connection, type Params, type Result } from './rpc'
 
 export function useConnection(): Connection {
@@ -121,4 +121,25 @@ export function useLive(max: number): Live[] {
     [],
   )
   return events
+}
+
+/** Every configured edge, connected or not, with what it last reported: kept current by a subscription. */
+export function useEdges(enabled = true) {
+  const client = useQueryClient()
+  useEffect(() => {
+    if (!enabled) return undefined
+    return rpc.subscribe(
+      'edges.subscribe',
+      (edges: EdgeStatus[]) => {
+        client.setQueryData(['edges'], edges)
+      },
+      () => undefined,
+    )
+  }, [client, enabled])
+  return useQuery({
+    queryKey: ['edges'],
+    queryFn: () => rpc.call('edges.list'),
+    staleTime: Infinity,
+    enabled,
+  })
 }

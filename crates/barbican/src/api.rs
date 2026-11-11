@@ -121,6 +121,12 @@ pub enum Call {
     /// Result: `null`, then [`Live`] events.
     #[serde(rename = "live.subscribe")]
     LiveSubscribe,
+    /// Result: `EdgeStatus[]`: every configured edge client, connected or not.
+    #[serde(rename = "edges.list")]
+    EdgesList,
+    /// Result: `null`, then `EdgeStatus[]` events: all edges, at once and whenever one of them changes.
+    #[serde(rename = "edges.subscribe")]
+    EdgesSubscribe,
     /// Result: `null`. Ends the subscription started by the request with this id.
     #[serde(rename = "unsubscribe")]
     Unsubscribe(UnsubscribeParams),
@@ -394,17 +400,85 @@ pub struct SourceStatus {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Serialize, Clone, Default)]
+/// An edge agent allowed to follow this agent (an `[[edge.client]]`), and what it last said about itself.
+#[derive(Debug, Serialize, Clone, Default, PartialEq)]
 #[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
 #[serde(rename_all = "camelCase")]
 pub struct EdgeStatus {
     pub name: String,
-    pub address: String,
-    #[cfg_attr(test, ts(type = "number"))]
-    pub last_poll: i64,
+    pub connected: bool,
+    /// While connected: since when; otherwise since when it isn't. `null`: it hasn't connected since this agent
+    /// started.
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub since: Option<i64>,
+    /// The address it connects from.
+    pub address: Option<String>,
+    /// The last of this agent's changes it was sent.
     #[cfg_attr(test, ts(type = "number"))]
     pub seq: u64,
-    pub agent: Option<String>,
+    /// The edge agent's version, `barbican-edge` or `barbican-edge-ipset`'s.
+    pub version: Option<String>,
+    /// The firewall it changes, e.g. `nftables table inet barbican`.
+    pub backend: Option<String>,
+    /// It changes its firewall; `false`: a dry run. `null`: not known yet.
+    pub enforcing: Option<bool>,
+    /// Its last status report.
+    pub report: Option<EdgeReport>,
+}
+
+/// What an edge reports about itself. Times are this agent's clock.
+#[derive(Debug, Serialize, Clone, Default, PartialEq)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct EdgeReport {
+    /// When it arrived.
+    #[cfg_attr(test, ts(type = "number"))]
+    pub received: i64,
+    /// Seconds since the edge agent started.
+    #[cfg_attr(test, ts(type = "number"))]
+    pub uptime: u64,
+    /// Its resident memory, in bytes.
+    #[cfg_attr(test, ts(type = "number"))]
+    pub rss: u64,
+    /// When it last brought its firewall up to date.
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub applied: Option<i64>,
+    /// Addresses and prefixes it blocks for bans and deny lists, of all the agents it follows.
+    #[cfg_attr(test, ts(type = "number"))]
+    pub blocks: u64,
+    /// Country and blocklist prefixes it holds.
+    #[cfg_attr(test, ts(type = "number"))]
+    pub listed: u64,
+    /// Packets and bytes its firewall dropped for a ban, since its rules were made.
+    #[cfg_attr(test, ts(type = "number"))]
+    pub dropped_blocked: u64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub dropped_blocked_bytes: u64,
+    /// Packets and bytes its firewall dropped for a country or a blocklist.
+    #[cfg_attr(test, ts(type = "number"))]
+    pub dropped_listed: u64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub dropped_listed_bytes: u64,
+    /// Why its firewall can't be updated, while it can't.
+    pub error: Option<String>,
+    /// Every agent it follows, this one included.
+    pub upstreams: Vec<EdgeUpstream>,
+}
+
+/// An agent an edge follows, as the edge sees it.
+#[derive(Debug, Serialize, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct EdgeUpstream {
+    /// The edge's name for it.
+    pub name: String,
+    /// It is this agent.
+    pub this: bool,
+    pub connected: bool,
+    /// When the edge last heard from it.
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub last_contact: Option<i64>,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -445,7 +519,6 @@ pub struct Overview {
     pub trusted: i64,
     pub firewall: FirewallStatus,
     pub sources: Vec<SourceStatus>,
-    pub edges: Vec<EdgeStatus>,
     /// The last 30 days, oldest first.
     pub days: Vec<DayStat>,
     /// Countries of the addresses banned in the last 30 days.

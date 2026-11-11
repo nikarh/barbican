@@ -179,6 +179,10 @@ async fn run(
             subscribe_live(app, id, tx, subscriptions).await?;
             Ok(None)
         }
+        Call::EdgesSubscribe => {
+            subscribe_edges(app, id, tx, subscriptions).await?;
+            Ok(None)
+        }
         Call::Unsubscribe(p) => {
             let handle = subscriptions.lock().ok().and_then(|mut s| s.remove(&p.id));
             if let Some(handle) = handle {
@@ -190,6 +194,64 @@ async fn run(
     }
 }
 
+fn check_new(id: &str, subscriptions: &Subscriptions) -> Result<(), RpcError> {
+    if subscriptions.lock().is_ok_and(|s| s.contains_key(id)) {
+        return Err(RpcError {
+            code: ErrorCode::BadRequest,
+            message: "a subscription with this id exists".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn keep(id: &str, task: &tokio::task::JoinHandle<()>, subscriptions: &Subscriptions) {
+    if let Ok(mut subscriptions) = subscriptions.lock() {
+        subscriptions.insert(id.to_owned(), task.abort_handle());
+    } else {
+        task.abort();
+    }
+}
+
+/// Answers the call, then pushes the edges as they are, and again whenever one of them changes.
+async fn subscribe_edges(
+    app: &Arc<App>,
+    id: &str,
+    tx: &mpsc::Sender<ServerMessage>,
+    subscriptions: &Subscriptions,
+) -> Result<(), RpcError> {
+    check_new(id, subscriptions)?;
+    let mut edges = app.edges.subscribe();
+    let _ = tx
+        .send(ServerMessage::Result {
+            id: id.to_owned(),
+            result: Value::Null,
+        })
+        .await;
+    let tx = tx.clone();
+    let task_id = id.to_owned();
+    let task = tokio::spawn(async move {
+        loop {
+            let list: Vec<_> = edges.borrow_and_update().values().cloned().collect();
+            let Ok(event) = serde_json::to_value(&list) else {
+                return;
+            };
+            if tx
+                .send(ServerMessage::Event {
+                    id: task_id.clone(),
+                    event,
+                })
+                .await
+                .is_err()
+                || edges.changed().await.is_err()
+            {
+                return;
+            }
+        }
+    });
+    keep(id, &task, subscriptions);
+    Ok(())
+}
+
 /// Answers the call, then pushes live events, so the client sees the result first.
 async fn subscribe_live(
     app: &Arc<App>,
@@ -197,12 +259,7 @@ async fn subscribe_live(
     tx: &mpsc::Sender<ServerMessage>,
     subscriptions: &Subscriptions,
 ) -> Result<(), RpcError> {
-    if subscriptions.lock().is_ok_and(|s| s.contains_key(id)) {
-        return Err(RpcError {
-            code: ErrorCode::BadRequest,
-            message: "a subscription with this id exists".to_owned(),
-        });
-    }
+    check_new(id, subscriptions)?;
     let mut events = app.live.subscribe();
     let _ = tx
         .send(ServerMessage::Result {
@@ -235,11 +292,7 @@ async fn subscribe_live(
             }
         }
     });
-    if let Ok(mut subscriptions) = subscriptions.lock() {
-        subscriptions.insert(id.to_owned(), task.abort_handle());
-    } else {
-        task.abort();
-    }
+    keep(id, &task, subscriptions);
     Ok(())
 }
 

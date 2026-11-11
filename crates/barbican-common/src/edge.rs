@@ -1,13 +1,22 @@
 //! The edge protocol: how an edge agent (on a router) follows what an agent blocks.
 //!
-//! The edge agent polls `GET /api/edge/v1/changes?epoch=<e>&since=<seq>&wait=<secs>` with a bearer token. The agent
-//! answers with [`Changes`]: everything since `seq`, or, when it can't (another epoch, which means the agent
-//! restarted; or changes too old to still be in its journal), the whole state with `full` set. With nothing new it
-//! holds the request for up to `wait` seconds (long polling). The combined list of countries and blocklists is
-//! fetched from `GET /api/edge/v1/list` only when its `version` changed: a text body with one prefix per line.
+//! An edge keeps one TLS connection to each agent it follows (the agent's certificate pinned by its fingerprint),
+//! and speaks the binary frames of [`wire`] over it. It opens with a [`wire::Hello`]: its token, where its copy of
+//! the agent's state is (`epoch` and `seq`), the version of the list it has, and what it is (version, backend,
+//! enforcing or dry run). The agent checks the token and answers with a [`wire::Welcome`], then with what the edge
+//! needs: everything since `seq` from its [`Journal`], or, when it can't (another epoch, which means the agent
+//! restarted; or changes too old to still be in its journal), the whole state with `full` set. The combined list of
+//! countries and blocklists follows when the edge's version isn't the agent's. From then on the agent pushes each
+//! change as it happens, and the list when it changes; the edge sends status reports (what it applied, what its
+//! firewall dropped, the other agents it follows) when connected, when something changed, and every minute. Both
+//! sides ping after [`wire::HEARTBEAT`] without sending anything else, and give up on a connection that was silent
+//! for [`wire::SILENCE`]; the edge then connects again, backing off while it fails.
 //!
-//! Times are unix seconds of the agent's clock; [`Changes::now`] says what that was when it answered, so an edge
-//! with a wrong clock (a router without a battery-backed clock, before NTP) still counts the remaining time right.
+//! Times are unix seconds of the sender's clock. Changes say what the agent's clock was when they were sent, so an
+//! edge with a wrong clock (a router without a battery-backed clock, before NTP) still counts the remaining time
+//! right; status reports do the same the other way round.
+
+pub mod wire;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
@@ -16,12 +25,8 @@ use serde::{Deserialize, Serialize};
 use crate::net::Net;
 use crate::nft::Block;
 
-/// Bumped on incompatible changes. An agent answers older edge agents in the protocol they ask for, or refuses.
-pub const PROTOCOL_VERSION: u32 = 1;
-pub const CHANGES_PATH: &str = "/api/edge/v1/changes";
-pub const LIST_PATH: &str = "/api/edge/v1/list";
-/// The longest an agent holds a poll.
-pub const MAX_WAIT_SECS: u64 = 120;
+/// Bumped on incompatible changes. An agent refuses edges that speak another one, telling them which it speaks.
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// A block as sent to edges.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,9 +43,9 @@ pub struct ListRef {
     pub count: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// What an edge needs to catch up: written as [`wire::ChangesFrame`]s.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Changes {
-    pub protocol: u32,
     /// Changes when the agent restarts; ask with it next time.
     pub epoch: String,
     /// The state's sequence number; ask for what comes after it next time.
@@ -49,15 +54,10 @@ pub struct Changes {
     pub now: u64,
     /// `block` and `allow` are the whole state: forget what came before from this agent.
     pub full: bool,
-    #[serde(default)]
     pub block: Vec<EdgeBlock>,
-    #[serde(default)]
     pub unblock: Vec<Net>,
-    #[serde(default)]
     pub allow: Vec<Net>,
-    #[serde(default)]
     pub unallow: Vec<Net>,
-    pub list: ListRef,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,7 +156,7 @@ impl Journal {
         }
         if self.list != list {
             self.list = list;
-            // Not a change to mirror element by element, but polls waiting for news must see it.
+            // Not a change to mirror element by element, but connections waiting for news must see it.
             self.seq += 1;
         }
         self.seq != before
@@ -166,7 +166,6 @@ impl Journal {
     #[must_use]
     pub fn since(&self, epoch: &str, since: u64, now: u64) -> Changes {
         let mut changes = Changes {
-            protocol: PROTOCOL_VERSION,
             epoch: self.epoch.clone(),
             seq: self.seq,
             now,
@@ -175,7 +174,6 @@ impl Journal {
             unblock: Vec::new(),
             allow: Vec::new(),
             unallow: Vec::new(),
-            list: self.list.clone(),
         };
         // The log must reach back to the change right after `since`.
         let covered = self
@@ -229,10 +227,10 @@ impl Journal {
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ApplyError {
-    #[error("the agent speaks protocol {0}, this edge agent {PROTOCOL_VERSION}")]
-    Protocol(u32),
     #[error("changes of another epoch, or not following the last ones")]
     OutOfOrder,
+    #[error("the frames of one change disagree on what they are")]
+    Inconsistent,
 }
 
 /// The edge's side: its copy of one agent's state. Times are kept in the edge's own clock.
@@ -243,44 +241,66 @@ pub struct Mirror {
     /// Unix seconds of the edge's clock; `None` for never.
     pub blocks: BTreeMap<Net, Option<u64>>,
     pub allows: BTreeSet<Net>,
-    pub list: ListRef,
 }
 
 impl Mirror {
-    /// Applies changes received at `local_now` (the edge's clock).
-    pub fn apply(&mut self, changes: &Changes, local_now: u64) -> Result<(), ApplyError> {
-        if changes.protocol != PROTOCOL_VERSION {
-            return Err(ApplyError::Protocol(changes.protocol));
+    /// Applies the frames of one change (all of them: the last without `more`), received at `local_now` (the
+    /// edge's clock). Returns whether anything changed.
+    pub fn apply(
+        &mut self,
+        frames: &[wire::ChangesFrame<'_>],
+        local_now: u64,
+    ) -> Result<bool, ApplyError> {
+        let Some(first) = frames.first() else {
+            return Ok(false);
+        };
+        if frames
+            .iter()
+            .any(|f| f.seq != first.seq || f.epoch != first.epoch || f.full != first.full)
+        {
+            return Err(ApplyError::Inconsistent);
         }
         let local = |until: Option<u64>| {
-            until.map(|u| u.saturating_sub(changes.now).saturating_add(local_now))
+            until.map(|u| u.saturating_sub(first.now).saturating_add(local_now))
         };
-        if changes.full {
-            self.blocks = changes
-                .block
-                .iter()
-                .map(|b| (b.net, local(b.until)))
-                .collect();
-            self.allows = changes.allow.iter().copied().collect();
+        let changed;
+        if first.full {
+            let before = (
+                std::mem::take(&mut self.blocks),
+                std::mem::take(&mut self.allows),
+            );
+            for f in frames {
+                self.blocks
+                    .extend(f.blocks.iter().map(|b| (b.net, local(b.until))));
+                self.allows.extend(f.allows.iter());
+            }
+            changed = before.0 != self.blocks || before.1 != self.allows;
         } else {
-            if changes.epoch != self.epoch || changes.seq < self.seq {
+            if first.epoch != self.epoch || first.seq < self.seq {
                 return Err(ApplyError::OutOfOrder);
             }
-            for net in &changes.unblock {
-                self.blocks.remove(net);
+            changed = frames.iter().any(|f| {
+                !(f.blocks.is_empty()
+                    && f.unblocks.is_empty()
+                    && f.allows.is_empty()
+                    && f.unallows.is_empty())
+            });
+            for f in frames {
+                for net in f.unblocks.iter() {
+                    self.blocks.remove(&net);
+                }
+                for b in f.blocks.iter() {
+                    self.blocks.insert(b.net, local(b.until));
+                }
+                for net in f.unallows.iter() {
+                    self.allows.remove(&net);
+                }
+                self.allows.extend(f.allows.iter());
             }
-            for b in &changes.block {
-                self.blocks.insert(b.net, local(b.until));
-            }
-            for net in &changes.unallow {
-                self.allows.remove(net);
-            }
-            self.allows.extend(changes.allow.iter().copied());
         }
-        self.epoch.clone_from(&changes.epoch);
-        self.seq = changes.seq;
-        self.list = changes.list.clone();
-        Ok(())
+        first.epoch.clone_into(&mut self.epoch);
+        self.seq = first.seq;
+        Ok(changed)
     }
 
     /// Drops blocks that ran out by `local_now`.
@@ -307,7 +327,7 @@ pub fn merge<'a>(mirrors: impl IntoIterator<Item = &'a Mirror>) -> (Vec<Block>, 
     (blocks, allows)
 }
 
-/// The text body of the list endpoint: a header with the version, then one prefix per line.
+/// A list as text, as the agent stores lists: a header with the version, then one prefix per line.
 #[must_use]
 pub fn render_list(version: &str, nets: &[Net]) -> String {
     let mut out = String::with_capacity(nets.len() * 18 + 32);
@@ -348,6 +368,22 @@ mod tests {
         Block { net: net(s), until }
     }
 
+    /// Sends changes over the wire and applies what arrives.
+    fn apply(mirror: &mut Mirror, changes: &Changes, local_now: u64) -> Result<bool, ApplyError> {
+        let mut buf = Vec::new();
+        wire::encode_changes(&mut buf, changes);
+        let mut frames = Vec::new();
+        let mut rest = buf.as_slice();
+        while let Some(n) = wire::complete(rest).unwrap() {
+            let wire::Frame::Changes(c) = wire::decode(&rest[4..n]).unwrap() else {
+                panic!("not changes");
+            };
+            frames.push(c);
+            rest = &rest[n..];
+        }
+        mirror.apply(&frames, local_now)
+    }
+
     #[test]
     fn mirror_follows_the_journal() {
         let mut journal = Journal::new("e1".to_owned(), 100);
@@ -367,9 +403,8 @@ mod tests {
         let first = journal.since("", 0, 1_000);
         assert!(first.full);
         // The edge's clock is 50 seconds ahead.
-        mirror.apply(&first, 1_050).unwrap();
+        assert!(apply(&mut mirror, &first, 1_050).unwrap());
         assert_eq!(mirror.blocks[&net("192.0.2.1")], Some(2_050));
-        assert_eq!(mirror.list, list);
 
         assert!(!journal.set(
             &[
@@ -392,7 +427,7 @@ mod tests {
         assert_eq!(changes.unblock, vec![net("198.51.100.0/24")]);
         assert_eq!(changes.unallow, vec![net("10.0.0.0/8")]);
         assert_eq!(changes.block.len(), 2);
-        mirror.apply(&changes, 1_100).unwrap();
+        assert!(apply(&mut mirror, &changes, 1_100).unwrap());
         assert_eq!(mirror.blocks.len(), 2);
         assert_eq!(mirror.blocks[&net("192.0.2.1")], Some(5_000));
         assert!(mirror.allows.is_empty());
@@ -400,7 +435,11 @@ mod tests {
         // Nothing new: an empty answer at the same seq.
         let changes = journal.since("e1", mirror.seq, 1_200);
         assert!(!changes.full && changes.block.is_empty() && changes.unblock.is_empty());
-        mirror.apply(&changes, 1_200).unwrap();
+        assert!(!apply(&mut mirror, &changes, 1_200).unwrap());
+
+        // The same whole state again changes nothing.
+        let mut again = mirror.clone();
+        assert!(!apply(&mut again, &journal.since("", 0, 1_100), 1_100).unwrap());
 
         mirror.expire(3_500);
         assert_eq!(mirror.blocks.len(), 1);
@@ -436,17 +475,14 @@ mod tests {
         let mut journal = Journal::new("e".to_owned(), 10);
         journal.set(&[block("192.0.2.1", None)], &[], ListRef::default());
         let mut mirror = Mirror::default();
-        mirror.apply(&journal.since("", 0, 0), 0).unwrap();
+        apply(&mut mirror, &journal.since("", 0, 0), 0).unwrap();
         let mut stale = journal.since("e", mirror.seq, 0);
         stale.epoch = "x".to_owned();
-        assert_eq!(mirror.apply(&stale, 0), Err(ApplyError::OutOfOrder));
-        let mut newer = journal.since("e", mirror.seq, 0);
-        newer.protocol = 99;
-        assert_eq!(mirror.apply(&newer, 0), Err(ApplyError::Protocol(99)));
+        assert_eq!(apply(&mut mirror, &stale, 0), Err(ApplyError::OutOfOrder));
     }
 
     #[test]
-    fn list_change_wakes_pollers() {
+    fn list_change_wakes_followers() {
         let mut journal = Journal::new("e".to_owned(), 10);
         let seq = journal.seq();
         assert!(journal.set(
@@ -458,7 +494,6 @@ mod tests {
             }
         ));
         assert!(journal.seq() > seq);
-        assert_eq!(journal.since("e", seq, 0).list.version, "v2");
     }
 
     #[test]
@@ -481,19 +516,5 @@ mod tests {
         assert_eq!(parse_list(&body).unwrap(), ("abc".to_owned(), nets));
         assert!(parse_list("198.51.100.0/24\n").is_err());
         assert!(parse_list("# barbican list x\nnope\n").is_err());
-    }
-
-    #[test]
-    fn changes_json_shape() {
-        let mut journal = Journal::new("e".to_owned(), 10);
-        journal.set(&[block("192.0.2.1", Some(99))], &[], ListRef::default());
-        let json = serde_json::to_value(journal.since("", 0, 5)).unwrap();
-        assert_eq!(
-            json["block"][0],
-            serde_json::json!({"net": "192.0.2.1", "until": 99})
-        );
-        assert_eq!(json["full"], true);
-        let back: Changes = serde_json::from_value(json).unwrap();
-        assert_eq!(back.seq, journal.seq());
     }
 }

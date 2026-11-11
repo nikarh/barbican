@@ -210,19 +210,24 @@ packet reaches a service before the blocks are in place.
 
 An edge agent follows one or more agents' edge APIs and keeps its router's firewall equal to the union of what they
 block (with their allow lists): `barbican-edge` with nftables on OpenWrt, `barbican-edge-ipset` with iptables and ipset
-where there is no nftables. It polls with long polling, so a ban or a lift reaches the router within a second. Its
-state is saved now and then (flash wears) and on a clean stop, and put back at boot before the network comes up, so
+where there is no nftables. It stays connected to each agent, which pushes every ban and lift as it happens, so they
+reach the router within a fraction of a second; the edge reports back what it applied and what its firewall dropped.
+Its state is saved now and then (flash wears) and on a clean stop, and put back at boot before the network comes up, so
 blocks hold across reboots and while agents are unreachable. A router without a clock that keeps time boots in the
 past: lengths are counted from when the state was saved. Installing and configuring:
 [OpenWrt](docs/install/openwrt.md), [without nftables](docs/install/iptables.md).
 
-**Security**: edges only pull, nothing can push to them. The edge API is TLS only, and an edge accepts exactly the
+**Security**: edges connect out, nothing connects to them; what an agent sends them is only ever what that agent
+blocks and allows. The edge API is TLS only, and an edge accepts exactly the
 certificate whose fingerprint it is configured with (no CA, so it works with bare LAN addresses): nobody between an
 edge and its agent can read the tokens or feed the edge bans or allow lists. Each edge has its own token (at least
-16 characters), and the API only reads.
+16 characters), and what an edge reports only reaches the agent's UI.
 
-The edge API (`GET /api/edge/v1/changes?epoch=&since=&wait=`, `GET /api/edge/v1/list`, both with
-`Authorization: Bearer <token>`) is described in [`crates/barbican-common/src/edge.rs`](crates/barbican-common/src/edge.rs).
+The edge API is a binary protocol over one long-lived TLS connection per edge and agent (a hello with the token and
+where the edge's copy of the agent's state is, then changes pushed by the agent and status reports from the edge,
+with heartbeats both ways), described in [`crates/barbican-common/src/edge.rs`](crates/barbican-common/src/edge.rs)
+and [`edge/wire.rs`](crates/barbican-common/src/edge/wire.rs). Both sides must speak the same protocol version: update
+agents and edges together.
 
 ## Behind a reverse proxy
 
@@ -303,7 +308,7 @@ services:
 - `mise run db:prepare` after changing a query or a migration; `mise run bindings` after changing the UI's API
 
 The workspace has three crates: `barbican` (the agent, and the UI proxy of the image), `barbican-edge` (the router
-agents: plain threads, its own small HTTPS client, about a megabyte) and `barbican-common` (addresses, the edge protocol, nftables). The UI is React with Mantine
+agents: plain threads, blocking I/O over its own small TLS client, about a megabyte) and `barbican-common` (addresses, the edge protocol, nftables). The UI is React with Mantine
 and ag-grid in `web/`; the LuCI pages are in `luci/`.
 
 ## Attribution and license

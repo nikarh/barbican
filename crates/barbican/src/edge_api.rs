@@ -1,30 +1,24 @@
-//! The API edge agents follow (see `barbican_common::edge`): changes since a sequence number, long polled, and
-//! the combined list. Only over TLS: edges pin the agent's certificate by its fingerprint, so nobody between them can
-//! read the tokens or put words in the agent's mouth. Every request needs one of the configured clients' tokens.
+//! The edge API: edge agents connect, say hello with one of the configured clients' tokens, and stay connected; the
+//! agent pushes its changes and its list to them as they happen, and keeps what each reports about itself for the
+//! UI. The protocol is `barbican_common::edge`'s. Only over TLS: edges pin the agent's certificate by its
+//! fingerprint, so nobody between them can read the tokens or put words in the agent's mouth.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use axum::Extension;
-use axum::Router;
-use axum::extract::{Query, State};
-use axum::http::{HeaderMap, StatusCode, header};
-use axum::response::{IntoResponse, Response};
-use axum::routing::get;
-use barbican_common::edge::{CHANGES_PATH, LIST_PATH, MAX_WAIT_SECS, render_list};
+use barbican_common::edge::PROTOCOL_VERSION;
+use barbican_common::edge::wire::{self, Frame, HEARTBEAT, SILENCE};
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use serde::Deserialize;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::time::{Instant, sleep_until, timeout};
 
-use crate::api::EdgeStatus;
+use crate::api::{EdgeReport, EdgeUpstream};
 use crate::app::{App, now};
-
-/// The address an edge connects from.
-#[derive(Debug, Clone, Copy)]
-struct Peer(SocketAddr);
 
 /// The certificate and key the edge API serves, and the certificate's fingerprint.
 pub struct Identity {
@@ -107,16 +101,12 @@ struct Edge {
     app: Arc<App>,
     /// Token to client name.
     tokens: HashMap<String, String>,
-}
-
-#[derive(Deserialize)]
-struct ChangesQuery {
-    #[serde(default)]
-    epoch: String,
-    #[serde(default)]
-    since: u64,
-    #[serde(default)]
-    wait: u64,
+    /// Numbers connections, so a connection that ends doesn't mark a newer one of the same edge disconnected.
+    connections: AtomicU64,
+    /// Each edge's newest connection.
+    current: std::sync::Mutex<HashMap<String, u64>>,
+    /// The list as last written, by version: written once for every edge that needs it.
+    list: std::sync::Mutex<Option<(String, Arc<Vec<u8>>)>>,
 }
 
 /// Compares in constant time, so a token can't be guessed byte by byte from response times.
@@ -124,13 +114,11 @@ fn same(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
+/// The largest hello: nothing bigger is read before the token is known.
+const MAX_HELLO: usize = 64 * 1024;
+
 impl Edge {
-    fn client(&self, headers: &HeaderMap) -> Option<&str> {
-        let token = headers
-            .get(header::AUTHORIZATION)?
-            .to_str()
-            .ok()?
-            .strip_prefix("Bearer ")?;
+    fn client(&self, token: &str) -> Option<&str> {
         let mut found = None;
         for (t, name) in &self.tokens {
             if same(t.as_bytes(), token.as_bytes()) {
@@ -139,61 +127,299 @@ impl Edge {
         }
         found
     }
+
+    /// The list's frames, written when its version is new.
+    fn list_frames(&self) -> (String, Arc<Vec<u8>>) {
+        let lists = self.app.lists.read().map(|l| l.clone()).unwrap_or_default();
+        let Ok(mut cached) = self.list.lock() else {
+            let mut out = Vec::new();
+            wire::encode_list(&mut out, &lists.version, &lists.nets);
+            return (lists.version, Arc::new(out));
+        };
+        if let Some((version, frames)) = cached.as_ref()
+            && *version == lists.version
+        {
+            return (version.clone(), Arc::clone(frames));
+        }
+        let mut out = Vec::new();
+        wire::encode_list(&mut out, &lists.version, &lists.nets);
+        let frames = Arc::new(out);
+        *cached = Some((lists.version.clone(), Arc::clone(&frames)));
+        (lists.version, frames)
+    }
 }
 
-async fn changes(
-    State(edge): State<Arc<Edge>>,
-    Extension(Peer(peer)): Extension<Peer>,
-    headers: HeaderMap,
-    Query(query): Query<ChangesQuery>,
-) -> Response {
-    let Some(client) = edge.client(&headers) else {
-        return StatusCode::UNAUTHORIZED.into_response();
-    };
+/// Reads one frame into `buf` (its type and payload).
+async fn read_frame<R: AsyncRead + Unpin>(
+    r: &mut R,
+    buf: &mut Vec<u8>,
+    limit: usize,
+) -> Result<(), String> {
+    let mut header = [0u8; 4];
+    r.read_exact(&mut header).await.map_err(|e| e.to_string())?;
+    let len = wire::frame_len(header).map_err(|e| e.to_string())?;
+    if len > limit {
+        return Err(format!("a frame of {len} bytes"));
+    }
+    buf.resize(len, 0);
+    r.read_exact(buf).await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+async fn write<W: AsyncWrite + Unpin>(w: &mut W, bytes: &[u8]) -> Result<(), String> {
+    timeout(SILENCE, async {
+        w.write_all(bytes).await?;
+        w.flush().await
+    })
+    .await
+    .map_err(|_| "the edge stopped reading".to_owned())?
+    .map_err(|e| e.to_string())
+}
+
+/// Turns a time of the edge's clock into this agent's.
+fn local(t: Option<u64>, offset: i64) -> Option<i64> {
+    t.and_then(|t| i64::try_from(t).ok())
+        .map(|t| t.saturating_add(offset))
+}
+
+/// Where an edge is, as its hello said.
+struct Start {
+    client: String,
+    epoch: String,
+    seq: u64,
+    list_version: String,
+    lists: bool,
+}
+
+/// Pushes what the edge needs: what it missed, then every change as it happens, and the list when it changed.
+async fn push<W: AsyncWrite + Unpin>(
+    edge: &Edge,
+    w: &mut W,
+    start: Start,
+    connection: u64,
+) -> Result<(), String> {
     let app = &edge.app;
-    let mut seq = app.journal_seq.subscribe();
-    let current = *seq.borrow_and_update();
-    let epoch_matches = app.journal.lock().is_ok_and(|j| j.epoch() == query.epoch);
-    // Nothing new for this edge: wait for news, or until the wait runs out.
-    if epoch_matches && query.since == current && query.wait > 0 {
-        let wait = Duration::from_secs(query.wait.min(MAX_WAIT_SECS));
-        let _ = tokio::time::timeout(wait, seq.changed()).await;
+    let mut out = Vec::new();
+    wire::Welcome {
+        client: &start.client,
+        version: crate::VERSION,
     }
-    let Ok(changes) = app
-        .journal
-        .lock()
-        .map(|j| j.since(&query.epoch, query.since, u64::try_from(now()).unwrap_or(0)))
-    else {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    };
-    if let Ok(mut edges) = app.edges.lock() {
-        edges.insert(
-            client.to_owned(),
-            EdgeStatus {
-                name: client.to_owned(),
-                address: peer.ip().to_string(),
-                last_poll: now(),
-                seq: changes.seq,
-                agent: headers
-                    .get(header::USER_AGENT)
-                    .and_then(|v| v.to_str().ok())
-                    .map(str::to_owned),
-            },
-        );
+    .encode(&mut out);
+    let mut news = app.journal_seq.subscribe();
+    news.borrow_and_update();
+    let (mut epoch, mut seq, mut list_version) = (start.epoch, start.seq, start.list_version);
+    let mut first = true;
+    loop {
+        let unix = u64::try_from(now()).unwrap_or(0);
+        let changes = app
+            .journal
+            .lock()
+            .map_err(|_| "the journal's lock is poisoned".to_owned())?
+            .since(&epoch, seq, unix);
+        let news_for_it = first
+            || changes.full
+            || changes.seq != seq
+            || !(changes.block.is_empty()
+                && changes.unblock.is_empty()
+                && changes.allow.is_empty()
+                && changes.unallow.is_empty());
+        if news_for_it {
+            wire::encode_changes(&mut out, &changes);
+            epoch.clone_from(&changes.epoch);
+            seq = changes.seq;
+        }
+        first = false;
+        write(w, &out).await?;
+        out.clear();
+        if news_for_it {
+            edge.update(&start.client, connection, |e| e.seq = seq);
+        }
+        if start.lists {
+            let version = app
+                .lists
+                .read()
+                .map(|l| l.version.clone())
+                .unwrap_or_default();
+            // An empty version: not computed yet since the agent started; the edge keeps what it has meanwhile.
+            if !version.is_empty() && version != list_version {
+                let (version, frames) = edge.list_frames();
+                write(w, &frames).await?;
+                list_version = version;
+            }
+        }
+        let mut quiet = Instant::now() + HEARTBEAT;
+        loop {
+            tokio::select! {
+                changed = news.changed() => {
+                    changed.map_err(|_| "stopping".to_owned())?;
+                    break;
+                }
+                () = sleep_until(quiet) => {
+                    wire::encode_ping(&mut out);
+                    write(w, &out).await?;
+                    out.clear();
+                    quiet = Instant::now() + HEARTBEAT;
+                }
+            }
+        }
     }
-    axum::Json(changes).into_response()
 }
 
-async fn list(State(edge): State<Arc<Edge>>, headers: HeaderMap) -> Response {
-    if edge.client(&headers).is_none() {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    let lists = edge.app.lists.read().map(|l| l.clone()).unwrap_or_default();
-    (
-        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-        render_list(&lists.version, &lists.nets),
+/// Takes in a status report.
+fn report(edge: &Edge, client: &str, connection: u64, status: &wire::Status<'_>) {
+    let received = now();
+    let offset = received.saturating_sub(i64::try_from(status.report.at).unwrap_or(0));
+    let r = &status.report;
+    let text = |s: &str| (!s.is_empty()).then(|| s.to_owned());
+    let report = EdgeReport {
+        received,
+        uptime: r.uptime,
+        rss: r.rss,
+        applied: local(r.applied, offset),
+        blocks: r.blocks,
+        listed: r.listed,
+        dropped_blocked: r.dropped.blocked.packets,
+        dropped_blocked_bytes: r.dropped.blocked.bytes,
+        dropped_listed: r.dropped.listed.packets,
+        dropped_listed_bytes: r.dropped.listed.bytes,
+        error: text(status.error),
+        upstreams: status
+            .upstreams
+            .iter()
+            .map(|u| EdgeUpstream {
+                name: u.name.to_owned(),
+                this: u.this,
+                connected: u.connected,
+                last_contact: local(u.last_contact, offset),
+                error: text(u.error),
+            })
+            .collect(),
+    };
+    edge.update(client, connection, |e| {
+        e.version = Some(status.version.to_owned());
+        e.backend = Some(status.backend.to_owned());
+        e.enforcing = Some(r.enforcing);
+        e.report = Some(report);
+    });
+}
+
+/// Serves one edge: its hello, then its reports while pushing what it needs, until either side goes quiet.
+async fn connection<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    edge: Arc<Edge>,
+    stream: S,
+    peer: SocketAddr,
+) {
+    let (mut r, mut w) = tokio::io::split(stream);
+    let mut buf = Vec::new();
+    let refuse = async |w: &mut tokio::io::WriteHalf<S>, reason: &str| {
+        tracing::warn!(address = %peer.ip(), reason, "Refused an edge");
+        let mut out = Vec::new();
+        wire::encode_refuse(&mut out, reason);
+        let _ = timeout(Duration::from_secs(5), async {
+            let _ = w.write_all(&out).await;
+            let _ = w.shutdown().await;
+        })
+        .await;
+    };
+    match timeout(
+        Duration::from_secs(10),
+        read_frame(&mut r, &mut buf, MAX_HELLO),
     )
-        .into_response()
+    .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return refuse(&mut w, &format!("expected a hello: {e}")).await,
+        Err(_) => return refuse(&mut w, "no hello within 10 s").await,
+    }
+    let hello = match wire::decode(&buf) {
+        Ok(Frame::Hello(hello)) => hello,
+        Err(wire::Error::Protocol(theirs)) => {
+            let reason = format!(
+                "the edge speaks protocol {theirs}, this agent {PROTOCOL_VERSION}: update the older one"
+            );
+            return refuse(&mut w, &reason).await;
+        }
+        Ok(_) => return refuse(&mut w, "expected a hello").await,
+        Err(e) => return refuse(&mut w, &format!("a broken hello: {e}")).await,
+    };
+    let Some(client) = edge.client(hello.token).map(str::to_owned) else {
+        return refuse(&mut w, "unknown token").await;
+    };
+    let connection = edge.connections.fetch_add(1, Ordering::Relaxed) + 1;
+    if let Ok(mut current) = edge.current.lock() {
+        current.insert(client.clone(), connection);
+    }
+    let start = Start {
+        client: client.clone(),
+        epoch: hello.epoch.to_owned(),
+        seq: hello.seq,
+        list_version: hello.list_version.to_owned(),
+        lists: hello.lists,
+    };
+    tracing::info!(edge = %client, address = %peer.ip(), version = hello.version, "Edge connected");
+    edge.update(&client, connection, |e| {
+        e.connected = true;
+        e.since = Some(now());
+        e.address = Some(peer.ip().to_string());
+        e.seq = hello.seq;
+        e.version = Some(hello.version.to_owned());
+        e.backend = Some(hello.backend.to_owned());
+        e.enforcing = Some(hello.enforcing);
+    });
+
+    let mut pusher = {
+        let edge = Arc::clone(&edge);
+        tokio::spawn(async move { push(&edge, &mut w, start, connection).await })
+    };
+    let reason = loop {
+        let read = tokio::select! {
+            pushed = &mut pusher => break match pushed {
+                Ok(Err(e)) => e,
+                _ => "stopped".to_owned(),
+            },
+            read = timeout(SILENCE, read_frame(&mut r, &mut buf, wire::MAX_FRAME)) => read,
+        };
+        match read {
+            Err(_) => break format!("silent for {} s", SILENCE.as_secs()),
+            Ok(Err(e)) => break e,
+            Ok(Ok(())) => {}
+        }
+        match wire::decode(&buf) {
+            Ok(Frame::Ping) => {}
+            Ok(Frame::Status(status)) => report(&edge, &client, connection, &status),
+            Ok(_) => break "an unexpected frame".to_owned(),
+            Err(e) => break format!("a broken frame: {e}"),
+        }
+    };
+    pusher.abort();
+    tracing::info!(edge = %client, address = %peer.ip(), reason, "Edge disconnected");
+    edge.update(&client, connection, |e| {
+        e.connected = false;
+        e.since = Some(now());
+    });
+}
+
+impl Edge {
+    /// Changes an edge's status, unless a newer connection of the same edge took over.
+    fn update(
+        &self,
+        client: &str,
+        connection: u64,
+        change: impl FnOnce(&mut crate::api::EdgeStatus),
+    ) {
+        let current = self
+            .current
+            .lock()
+            .is_ok_and(|c| c.get(client) == Some(&connection));
+        if !current {
+            return;
+        }
+        self.app.edges.send_modify(|edges| {
+            let e = edges.entry(client.to_owned()).or_default();
+            client.clone_into(&mut e.name);
+            change(e);
+        });
+    }
 }
 
 /// Serves the edge API until the process ends.
@@ -221,33 +447,31 @@ pub async fn serve(app: Arc<App>, config: &crate::config::Edge) -> Result<(), St
     .with_single_cert(identity.certs, identity.key)
     .map_err(|e| format!("the edge API's certificate: {e}"))?;
     let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls));
-    let edge = Arc::new(Edge { app, tokens });
-    let router = Router::new()
-        .route(CHANGES_PATH, get(changes))
-        .route(LIST_PATH, get(list))
-        .with_state(edge);
+    let edge = Arc::new(Edge {
+        app,
+        tokens,
+        connections: AtomicU64::new(0),
+        current: std::sync::Mutex::new(HashMap::new()),
+        list: std::sync::Mutex::new(None),
+    });
     let listener = crate::run::bind(config.listen, "Edge API (TLS)").await;
     loop {
         let Ok((tcp, peer)) = listener.accept().await else {
             tokio::time::sleep(Duration::from_millis(100)).await;
             continue;
         };
+        let _ = tcp.set_nodelay(true);
         let acceptor = acceptor.clone();
-        let service = router.clone().layer(Extension(Peer(peer)));
+        let edge = Arc::clone(&edge);
         tokio::spawn(async move {
-            let Ok(Ok(stream)) =
-                tokio::time::timeout(Duration::from_secs(10), acceptor.accept(tcp)).await
+            let Ok(Ok(stream)) = timeout(Duration::from_secs(10), acceptor.accept(tcp)).await
             else {
                 return;
             };
-            let service = hyper_util::service::TowerToHyperService::new(service);
-            let _ = hyper::server::conn::http1::Builder::new()
-                .serve_connection(hyper_util::rt::TokioIo::new(stream), service)
-                .await;
+            connection(edge, stream, peer).await;
         });
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

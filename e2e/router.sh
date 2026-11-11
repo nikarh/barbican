@@ -36,6 +36,13 @@ attacker_through() { ping_from 203.0.113.77; }
 attacker_blocked() { ! ping_from 203.0.113.77; }
 in_set() { router "nft list set inet barbican host4 2>/dev/null | grep -q '203.0.113.77'"; }
 not_in_set() { ! in_set; }
+# The agent's view of the router's edge agent (edges.list), checked by a Python expression on `e`.
+edge_is() {
+  local json
+  json=$(rpc edges.list) || return 1
+  python3 -c "import json,sys; e={x['name']: x for x in json.loads(sys.argv[1])}['router']; sys.exit(0 if ($1) else 1)" "${json}"
+}
+ms() { date +%s%3N; }
 lift_all() { # every active ban of the attacker's address
   local id
   for id in $(rpc bans.list "'{\"active\": true}'" | python3 -c 'import json,sys; print(" ".join(str(b["id"]) for b in json.load(sys.stdin)["rows"] if b["net"] == "203.0.113.77"))'); do
@@ -81,6 +88,29 @@ else
   fail "status: ${status}"
 fi
 
+say "the agent sees the edge"
+if wait_until 10 edge_is 'e["connected"] and e["enforcing"] is True and "nftables" in e["backend"] and e["report"]["blocks"] >= 1'; then
+  pass "connected, enforcing, with its backend and blocks"
+else
+  fail "edges.list: $(rpc edges.list)"
+fi
+attacker_blocked || true
+if wait_until 15 edge_is 'e["report"]["droppedBlocked"] >= 1 and e["report"]["droppedBlockedBytes"] > 0'; then
+  pass "its drop counters reach the agent ($(rpc edges.list | python3 -c 'import json,sys; print([x for x in json.load(sys.stdin) if x["name"]=="router"][0]["report"]["droppedBlocked"])') packets)"
+else
+  fail "no drops reported: $(rpc edges.list)"
+fi
+if edge_is 'any(u["this"] and u["connected"] for u in e["report"]["upstreams"])'; then
+  pass "it reports the agents it follows"
+else
+  fail "upstreams: $(rpc edges.list)"
+fi
+
+say "the agent restarts"
+server 'sudo systemctl restart barbican'
+if wait_until 30 edge_is 'e["connected"]'; then pass "the edge connects again"; else fail "not connected after the restart: $(rpc edges.list)"; fi
+if in_set && attacker_blocked; then pass "and keeps the block"; else fail "the block is gone after the agent restarted"; fi
+
 say "another program changes the table"
 # The edge's next check of the ruleset's generation (every second here) notices, and it puts it right.
 router 'nft delete element inet barbican host4 "{ 203.0.113.77 }"'
@@ -89,14 +119,25 @@ router 'nft delete table inet barbican'
 if wait_until 5 in_set && attacker_blocked; then pass "a deleted table comes back with its blocks"; else fail "not repaired after deleting the table"; fi
 
 say "lifting on the agent"
-start=${SECONDS}
 lift_all
-if wait_until 10 not_in_set; then pass "a lift reaches the router in $((SECONDS - start)) s (long poll)"; else fail "the lift didn't reach the router"; fi
+start=$(ms)
+# Pushed as it happens: from when the agent answered to when the set no longer has it, the time to ask over SSH
+# included.
+if wait_until 10 not_in_set && (($(ms) - start < 2500)); then
+  pass "a lift reaches the router in $(($(ms) - start)) ms"
+else
+  fail "the lift reached the router late, or not at all ($(($(ms) - start)) ms)"
+fi
 if wait_until 5 attacker_through; then pass "lifted on the router"; else fail "still blocked on the router"; fi
 
 say "a reboot without the agent"
 rpc ban.create "'{\"net\": \"203.0.113.77\", \"secs\": null, \"reason\": \"e2e edge reboot\"}'" >/dev/null
-wait_until 15 in_set || true
+start=$(ms)
+if wait_until 15 in_set && (($(ms) - start < 2500)); then
+  pass "a ban reaches the router in $(($(ms) - start)) ms"
+else
+  fail "the ban reached the router late, or not at all ($(($(ms) - start)) ms)"
+fi
 # The state is saved when it changed, at most every persist_interval (1 s here).
 saved() { router 'grep -q 203.0.113.77 /etc/barbican/state.json'; }
 wait_until 10 saved || true
@@ -116,8 +157,8 @@ else
 fi
 server 'sudo systemctl start barbican'
 connected() { router 'barbican-edge status' | grep -q '"connected":true'; }
-if wait_until 30 connected; then
-  pass "it follows the agent again once it is back"
+if wait_until 30 connected && wait_until 10 edge_is 'e["connected"]'; then
+  pass "it follows the agent again once it is back, and the agent sees it"
 else
   fail "didn't reconnect"
 fi

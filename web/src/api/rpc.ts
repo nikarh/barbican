@@ -8,6 +8,7 @@ import type {
   Activity,
   Ban,
   BlockCoverage,
+  EdgeStatus,
   Entry,
   EventRow,
   Feed,
@@ -59,12 +60,15 @@ interface Results {
   'feed.delete': null
   'feed.refresh': null
   'live.subscribe': null
+  'edges.list': EdgeStatus[]
+  'edges.subscribe': null
   unsubscribe: null
 }
 
 /** The events of each subscription method. */
 interface Events {
   'live.subscribe': Live
+  'edges.subscribe': EdgeStatus[]
 }
 
 // Fails to compile when the server gains a method that isn't listed above.

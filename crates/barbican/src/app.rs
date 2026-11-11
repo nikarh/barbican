@@ -38,7 +38,7 @@ pub struct App {
     pub countries_wake: Notify,
     pub feeds_wake: Notify,
     pub journal: Mutex<Journal>,
-    /// The journal's sequence number, for edge polls waiting for news.
+    /// The journal's sequence number, for edge connections waiting for news.
     pub journal_seq: watch::Sender<u64>,
     pub live: broadcast::Sender<Live>,
     pub sources: Mutex<BTreeMap<String, SourceStatus>>,
@@ -46,7 +46,8 @@ pub struct App {
     pub source_counters: Mutex<BTreeMap<String, Arc<SourceCounters>>>,
     /// Where each source got to, not saved yet (saved every few seconds, and as the agent stops).
     pub unsaved_cursors: Mutex<BTreeMap<String, Arc<Mutex<Option<String>>>>>,
-    pub edges: Mutex<BTreeMap<String, EdgeStatus>>,
+    /// Every configured edge client, by name: connected or not, and what it last reported.
+    pub edges: watch::Sender<BTreeMap<String, EdgeStatus>>,
     pub firewall: Mutex<FirewallStatus>,
     pub geo_updates: Mutex<GeoUpdates>,
     pub http: reqwest::Client,
@@ -90,6 +91,22 @@ impl App {
         let (live, _) = broadcast::channel(1_024);
         let (rules, _) = watch::channel(Arc::new(RuleSet::default()));
         let enabled = config.firewall.enabled && !dry_run;
+        let (edges, _) = watch::channel(
+            config
+                .edge
+                .iter()
+                .flat_map(|e| &e.clients)
+                .map(|c| {
+                    (
+                        c.name.clone(),
+                        EdgeStatus {
+                            name: c.name.clone(),
+                            ..EdgeStatus::default()
+                        },
+                    )
+                })
+                .collect(),
+        );
         Arc::new(Self {
             config,
             db,
@@ -107,7 +124,7 @@ impl App {
             sources: Mutex::new(BTreeMap::new()),
             source_counters: Mutex::new(BTreeMap::new()),
             unsaved_cursors: Mutex::new(BTreeMap::new()),
-            edges: Mutex::new(BTreeMap::new()),
+            edges,
             firewall: Mutex::new(FirewallStatus {
                 enabled,
                 ..FirewallStatus::default()
@@ -121,6 +138,11 @@ impl App {
 
     pub fn geo(&self) -> Arc<Geo> {
         self.geo.read().map(|g| Arc::clone(&g)).unwrap_or_default()
+    }
+
+    /// Every configured edge client, by name.
+    pub fn edges(&self) -> Vec<crate::api::EdgeStatus> {
+        self.edges.borrow().values().cloned().collect()
     }
 
     /// Sends to the UI's live subscribers, if any.
