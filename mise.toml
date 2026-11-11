@@ -101,3 +101,18 @@ CARGO="$(command -v cargo)" cargo-sqlx sqlx prepare --workspace -- --all-targets
 [tasks.changelog]
 description = "Regenerate CHANGELOG.md from the commits"
 run = "git cliff --offline -o CHANGELOG.md"
+
+[tasks.docs]
+description = "Serve the docs site locally with live reload, at http://localhost:4321"
+dir = "site"
+run = ["npm install --no-audit --no-fund", "npm run dev"]
+
+[tasks."docs:build"]
+description = "Build the docs site as CI does, into site/dist, and check its links"
+dir = "site"
+env = { DOCS_VERSION = "main" }
+run = ["npm install --no-audit --no-fund", "npm run build"]
+
+[tasks."docs:screenshots"]
+description = "Screenshots of the UI for the docs, from synthetic data, in a throwaway VM (see scripts/screenshots.sh)"
+run = "scripts/screenshots.sh"

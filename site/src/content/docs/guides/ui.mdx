@@ -1,0 +1,73 @@
+---
+title: The web UI
+description: "A tour of barbican's UI: the overview, addresses and what they did, events, bans, rules and settings, on a desktop and a phone."
+sidebar:
+  order: 4
+---
+
+import Screenshot from '../../../components/Screenshot.astro';
+
+The UI is one page and one WebSocket (`/api/ws`), served by the agent at `ui.listen` or by [`barbican ui-proxy`](/guides/reverse-proxy/#the-ui-in-a-container). Everything it shows is live: new events, bans and edge reports arrive as they happen. It has no login: anyone who reaches it can change everything, so put it behind [authentication](/guides/reverse-proxy/).
+
+The screens are **Overview**, **Addresses**, **Bans**, **Events**, **Rules** and **Settings**. On a phone they are a tab bar at the bottom (without Events), which hides while you scroll. The header shows whether the UI is connected (**Live**); when the agent can't be reached, a banner says so and why, and the UI reconnects on its own.
+
+The screenshots on this site are made from synthetic data (`mise run docs:screenshots`).
+
+## Overview
+
+<Screenshot name="overview" alt="The overview on a desktop: counters, bars of bans and events over 30 days, recent bans, the live feed, and panels for the firewall, geolocation, feeds, sources, edges, banned countries and events by rule." />
+
+- **Counters**: bans in force (and how many started today), events today, addresses seen, trusted addresses, and packets dropped, on this host and on each edge.
+- **Last 30 days**: bans and events per day.
+- **Recent bans**, with their address or prefix, country, reason, when they started and how long they have left.
+- **Live**: events as they are read, with the address, the source, what happened and the rule that matched.
+- **Firewall**: whether it is applied (or in dry run, or failing, with the error), how many addresses and prefixes are blocked, and how many country and list prefixes are loaded.
+- **Geolocation** and **Feeds**: the databases and lists in use, when they were last fetched, and their errors.
+- **Sources**: each source's input, how many lines it read and matched, when the last came, and its error.
+- **Edges**: each edge that follows the agent, connected or not, enforcing or in dry run, what it holds and dropped.
+- **Banned, by country** and **Events, by rule**, over the last 30 days.
+
+<Screenshot name="overview-phone" alt="The overview on a phone: the counters in two columns and the panels one under another, with the tab bar at the bottom." />
+
+## Addresses
+
+Every address a source saw doing something that a rule matched, or logging in. The list searches by address, prefix, country code, `AS1234` or network name, filters to banned or trusted addresses, and sorts by when they were last or first seen, by how active they were, or by country.
+
+<Screenshot name="addresses" alt="The Addresses screen: a grid of addresses with their country, network, hits, last and first seen, and whether they are banned or trusted, with a search field, filters and a sort order." />
+
+An address's page says where it is (country, network), when it was first and last seen, and its state: banned (until when), trusted (by whom), allowed, on the deny list, in a blocked country, or listed in feeds. **Activity** is everything it did, grouped by what it was, the rule, and the source, with how many times and when first and last; **Bans** is its ban history. From here it can be banned, its ban lifted, allowed, or no longer trusted.
+
+<Screenshot name="address" alt="An address's page: the address, its country and network, when it was seen, badges for its state, buttons to lift its ban or allow it, and its activity: what it requested, which rule matched, from which source, and how often." />
+
+<Screenshot name="address-phone" alt="An address's page on a phone: the address and its facts in a compact header, the state and actions in one line, and the activity grid below." />
+
+## Events
+
+Every recorded event, by hour, newest first: the address and its country, the kind (HTTP request, failed or successful login, unknown user, probe), what happened (`GET example.com/wp-login.php → 404`, a user name, a probe's description), the rule it was recorded under, the source, and how many times within that hour. It searches what happened, and filters by kind, rule and source. Clicking a row opens the address.
+
+<Screenshot name="events" alt="The Events screen: a grid of events by hour, with address, country, kind, what happened, rule, source and count, and filters for kind, rule and source." />
+
+## Bans
+
+Bans in force (or all of them, lifted and expired too), newest first: what is blocked (an address or a prefix), its country, the reason (the rule, or the reason given by hand), when it started, and when it ends. It searches by address, prefix, country code or reason. **Ban** bans an address or a prefix by hand, for a length you choose.
+
+<Screenshot name="bans" alt="The Bans screen: bans in force with the blocked address or prefix, its country, the rule that banned it, when it started and when it ends." />
+
+<Screenshot name="bans-phone" alt="The Bans screen on a phone: the search, the in-force and all switch, the Ban button, and a narrower grid of bans." />
+
+## Rules
+
+The rules in the order they are tried, each with a switch, what it looks at, its threshold and ban. They can be reordered, edited, added and deleted, and deleted defaults added back. See [Rules and policy](/guides/rules/).
+
+## Settings
+
+- **Lengths and countries**: the [policy](/guides/rules/#the-policy): ban lengths, repeat offenders, lengths per country, network and blocklist, countries and continents blocked as a whole, trust and event retention.
+- **Allow and deny**: the [allow and deny lists](/guides/feeds/#allow-and-deny-lists).
+- **Feeds**: [lists fetched from the internet](/guides/feeds/#feeds).
+- **Geolocation**: the country and network databases: which ones are in use, from when, when they were downloaded, whether downloads are on and when the agent looks for new ones next, and download errors.
+- **Edges** (with the edge API on): every configured edge client and what it reports: see [Edge agents](/edge/overview/).
+- **About**: the version, the sources, whether the firewall is on or in dry run, whether the edge API is on, and its certificate's fingerprint, which edges are configured with.
+
+<Screenshot name="settings-geoip" alt="Settings, Geolocation: the country and network databases in use, their state, build month and when they were downloaded, and whether downloads are on." />
+
+<Screenshot name="settings-about" alt="Settings, About: the version, the sources, the firewall's mode, the edge API and its certificate's fingerprint, and the geolocation attribution." />

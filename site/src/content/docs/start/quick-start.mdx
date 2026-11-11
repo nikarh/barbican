@@ -1,0 +1,80 @@
+---
+title: Quick start
+description: Install the agent on a server, point it at one log, watch what it would ban in dry run, then let it block.
+sidebar:
+  order: 2
+---
+
+import Screenshot from '../../../components/Screenshot.astro';
+
+This sets barbican up on one server with SSH, in dry run first: it decides and records everything, and changes nothing in the firewall until you turn that on.
+
+## 1. Install the agent
+
+On Debian or Ubuntu (other systems: [Installation](/install/overview/)):
+
+```bash
+arch=$(dpkg --print-architecture)    # amd64 or arm64
+curl -fLO "https://github.com/nikarh/barbican/releases/latest/download/barbican_${arch}.deb"
+sudo apt install "./barbican_${arch}.deb"
+```
+
+The package installs the binary, the systemd unit and `/etc/barbican/config.toml`, and starts nothing.
+
+## 2. Say where the logs are, in dry run
+
+Replace the example sources in `/etc/barbican/config.toml` with your own, and turn the firewall off for now. For an SSH server logging to the journal:
+
+```toml title="/etc/barbican/config.toml"
+[ui]
+listen = "127.0.0.1:7381"
+
+[firewall]
+# Decide and record, but leave nftables alone.
+enabled = false
+
+[[source]]
+name = "ssh"
+parser = "sshd"
+journald = { unit = "ssh.service" }    # sshd.service on some distributions
+```
+
+A reverse proxy's access log, Authelia, and other logs are in [Sources and parsers](/guides/sources/); every setting is in the [configuration reference](/reference/configuration/). Then:
+
+```bash
+sudo systemctl enable --now barbican
+journalctl -u barbican -f
+```
+
+On its first start the agent downloads DB-IP's free country and network databases (once a month after that) and creates its database with the [default rules](/guides/rules/#the-default-rules).
+
+## 3. Open the UI
+
+The UI listens on localhost and has no login. From your machine, through SSH:
+
+```bash
+ssh -L 7381:127.0.0.1:7381 server.example.com
+```
+
+and open [http://localhost:7381/](http://localhost:7381/). To reach it without a tunnel, put it behind a reverse proxy with authentication: [Behind a reverse proxy](/guides/reverse-proxy/).
+
+<Screenshot name="overview" alt="The overview: counters of bans, events, addresses and trusted addresses, bars of the last 30 days, recent bans, a live feed of events, and panels for the firewall, geolocation, feeds, sources and edges." />
+
+The overview's **Firewall** panel says **dry run**. Everything else works as it will later: **Bans** lists what would be blocked, and each address's page shows what it did and which rule matched. Give it a day and look at what it banned: if a rule catches your own clients, change it on **Rules** or put their addresses on the allow list (**Settings → Allow and deny**). Addresses you or your users log in from (a successful SSH or Authelia login) are trusted and never banned.
+
+To see what the default rules make of logs you already have, without running anything, use `barbican replay`; to start with their history in the database, `barbican import`. See [Importing old logs](/guides/import/).
+
+## 4. Enforce
+
+Set `enabled = true` under `[firewall]` (or remove the line) and restart:
+
+```bash
+sudo systemctl restart barbican
+sudo nft list table inet barbican | head -40
+```
+
+The bans recorded in dry run are now in the firewall. From here:
+
+- block countries or continents, and add blocklists: [Countries, blocklists and allow lists](/guides/feeds/);
+- tune ban lengths and repeat offenders: [Rules and policy](/guides/rules/#the-policy);
+- extend the blocks to a router: [Edge agents](/edge/overview/).

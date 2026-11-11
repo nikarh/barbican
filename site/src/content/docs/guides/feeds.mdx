@@ -1,0 +1,83 @@
+---
+title: Countries, blocklists and allow lists
+description: Blocking countries and continents, public blocklists as blocks, allow lists or data for rules, Cloudflare's ranges, shared addresses, and the allow and deny lists.
+sidebar:
+  order: 3
+---
+
+import Screenshot from '../../../components/Screenshot.astro';
+
+Besides what rules ban one address at a time, barbican blocks and allows whole ranges: countries and continents, lists fetched from the internet (feeds), and the allow and deny lists you keep by hand. All of them are edited in the UI (**Settings**) and apply here and on every [edge](/edge/overview/).
+
+## Countries and continents
+
+**Settings → Lengths and countries → Countries blocked as a whole** blocks every address the country database places in a country or a continent (`AF`, `AN`, `AS`, `EU`, `NA`, `OC`, `SA`). As you add them, the UI shows how much that takes: how many prefixes and addresses, IPv4 and IPv6, and which share of the address space they are.
+
+Blocking a country drops what its addresses send to the host, its containers and, on an edge, the network behind the router. Replies to connections the host (or a client behind the router) opened are never dropped: blocking a country doesn't stop the host downloading from it.
+
+Countries come from the geolocation database: DB-IP's free *IP to Country Lite* by default, downloaded and refreshed monthly, or MaxMind's GeoLite2 Country (`geoip.country`; see [Configuration](/reference/configuration/#geoip)). Without a country database countries are unknown, and none can be blocked. A country's prefixes take kernel memory: see [Resource use](/reference/resources/).
+
+## Feeds
+
+A feed is a list of addresses fetched from a URL and refreshed on a schedule (**Settings → Feeds**). Each feed does one of three things:
+
+| As | Effect |
+| --- | --- |
+| **Blocks** | every address it lists is dropped, as a whole, like a blocked country |
+| **Allows** | every address it lists is never banned and is let through before any drop rule, here and on the edges, like the allow list |
+| **Data** | nothing by itself: rules can ask whether an address is **listed in** it, address pages show it, and the policy can give its addresses [a ban length of their own](/guides/rules/#the-policy) |
+
+<Screenshot name="settings-feeds" alt="Settings, Feeds: the lists added, each marked as blocking, allowing or data, with its URL, how many prefixes it has, when it was fetched and its next refresh, and buttons to add well-known lists." />
+
+Well-known lists can be added with one click:
+
+| Preset | URL | As | Refreshed |
+| --- | --- | --- | --- |
+| Spamhaus DROP, and its IPv6 list | `https://www.spamhaus.org/drop/drop_v4.json`, `drop_v6.json` | blocks | every 12 hours |
+| FireHOL level 1 | `https://iplists.firehol.org/files/firehol_level1.netset` | blocks | every 6 hours |
+| blocklist.de | `https://lists.blocklist.de/lists/all.txt` | data | every 6 hours |
+| Tor exit nodes | `https://check.torproject.org/torbulkexitlist` | data | every 6 hours |
+| Allow Cloudflare, and its IPv6 list | `https://www.cloudflare.com/ips-v4`, `ips-v6` | allows | daily |
+
+**Add a list** takes any other URL, with HTTP basic authentication if it needs it. A list is understood when its lines are addresses or prefixes, with comments after `#` or `;`, CSV or whitespace-separated columns (the first address in the line counts), or JSON objects with a `cidr` or `ip` field. Private, loopback and other addresses that are never blocked are left out. The prefixes are merged before they are used.
+
+**CrowdSec**'s blocklists are added through a "blocklist integration" of a CrowdSec console account: its URL, user and password.
+
+A feed is fetched again when its refresh is due (conditionally, so an unchanged list costs one small request), and with **Fetch now**. When a fetch fails, the feed keeps the list it had, and its error is shown.
+
+## Behind Cloudflare's proxy
+
+A site behind Cloudflare's proxy is reached from Cloudflare's addresses, not its visitors'. Geolocation databases place some of Cloudflare's addresses in Asia, Africa or South America, whichever data centre uses them: blocking those continents would then drop your own visitors now and then. Add the **Allow Cloudflare** feeds: Cloudflare's ranges are then always let through, before the country blocks.
+
+## Shared addresses
+
+VPN and relay services (Cloudflare WARP, iCloud Private Relay, Tor) hand the same addresses to many people, scanners among them. Allowing them would let anyone through; banning them for a year shuts out everyone else using them. Give them short bans instead:
+
+- a length for their network, such as AS13335 (Cloudflare, WARP's egress) under **By network**;
+- a length for a feed that lists them, under **By blocklist**: for example a data feed of Apple's published iCloud Private Relay egress ranges (a CSV, which feeds understand), or the Tor exit list.
+
+The shortest of the lengths for the address's country, network and lists counts, and repeat offenders still get longer bans.
+
+## Allow and deny lists
+
+**Settings → Allow and deny** holds addresses and prefixes you allow or deny by hand, each with a note and, optionally, an end:
+
+- an **allowed** address is never acted on by any rule, and is let through even when banned or in a blocked country or list;
+- a **denied** one is blocked whatever the rules say.
+
+**Allow** on an address's page adds it to the allow list.
+
+<Screenshot name="settings-lists" alt="Settings, Allow and deny: addresses and prefixes allowed or denied by hand, each with a note and when it ends, and a form to add one." />
+
+The **exempt networks** of the configuration (`exempt.nets`, by default `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10` and `fc00::/7`) are allowed too, always: your LAN, Docker's networks and carrier-grade NAT are never acted on. Loopback, link-local and multicast addresses can never be blocked.
+
+## The order of decisions
+
+In the firewall, for a packet arriving:
+
+1. packets of connections the host (or a client behind the router) opened are accepted;
+2. the allow list, allowing feeds and exempt networks accept;
+3. bans and the deny list drop;
+4. blocked countries and blocking feeds drop.
+
+See [The firewall](/internals/firewall/).
