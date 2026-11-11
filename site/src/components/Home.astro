@@ -2,7 +2,6 @@
 // The front page: what barbican does, next to its UI, why use it, its parts, how they fit, how to install it, what
 // changed recently, and where to read on.
 import { Code, Tabs, TabItem } from '@astrojs/starlight/components';
-import Changelog from './Changelog.astro';
 import Screenshot from './Screenshot.astro';
 import { releases } from '../changelog';
 
@@ -197,7 +196,16 @@ apk add --allow-untrusted ./barbican-edge-armv7.apk ./luci-app-barbican.apk`}
 					<h2>Recent releases</h2>
 					<a href={link('/reference/changelog/')}>All releases</a>
 				</div>
-				<Changelog limit={3} level={3} skip={['Documentation']} />
+				{/* Versions only: a release's full list of changes belongs on the changelog page, not on the front page. */}
+				<ul class="release-list">
+					{releases.slice(0, 3).map((r) => (
+						<li>
+							<a href={r.url}><code>v{r.version}</code></a>
+							{r.date && <span class="release-date">{r.date}</span>}
+							<a class="release-count" href={link('/reference/changelog/')}>what changed</a>
+						</li>
+					))}
+				</ul>
 			</section>
 		)
 	}
@@ -217,6 +225,24 @@ apk add --allow-untrusted ./barbican-edge-armv7.apk ./luci-app-barbican.apk`}
 </div>
 
 <style>
+	.release-list {
+		list-style: none;
+		padding: 0;
+		margin: 0;
+		display: grid;
+		gap: 0.4rem;
+	}
+	.release-list li {
+		display: flex;
+		gap: 0.75rem;
+		align-items: baseline;
+		flex-wrap: wrap;
+	}
+	.release-date,
+	.release-count {
+		color: var(--sl-color-gray-3);
+		font-size: var(--sl-text-sm);
+	}
 	.home {
 		--gap: clamp(1.5rem, 4vw, 3rem);
 		display: grid;
