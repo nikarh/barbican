@@ -8,7 +8,7 @@ import { rpc } from '../api/rpc'
 import { InfiniteGrid } from '../components/Grid'
 import { BanDialog, Country } from '../components/ui'
 import { ago, dateTime, remaining, WIDEST } from '../lib/format'
-import { columnsFor, fit, useTier, type Column } from '../lib/columns'
+import { columnsFor, useTier, type Column } from '../lib/columns'
 import { navigate } from '../lib/router'
 
 export function BansScreen() {
@@ -25,17 +25,15 @@ export function BansScreen() {
       {
         headerName: 'Blocked',
         field: 'net',
-        width: 190,
+        fits: WIDEST.address,
         cellClass: 'mono',
         pin: true,
-        phone: { width: 150 },
       },
       {
         headerName: 'Country',
         field: 'country',
-        width: 100,
+        fits: WIDEST.country,
         cellRenderer: (p: { value: string | null }) => <Country code={p.value} />,
-        phone: { width: 80 },
       },
       {
         headerName: 'Reason',
@@ -43,18 +41,18 @@ export function BansScreen() {
         flex: 1.4,
         minWidth: 140,
         tooltip: (p) => p.data?.reason,
-        phone: { minWidth: 160 },
+        phone: { minWidth: 140 },
       },
       {
         headerName: 'Since',
         field: 'created',
-        width: fit('Since', WIDEST.ago),
+        fits: WIDEST.ago,
         valueFormatter: (p) => ago(Number(p.value ?? 0)),
         tooltip: (p) => (p.data === undefined ? undefined : dateTime(p.data.created)),
       },
       {
         headerName: 'Ends',
-        width: fit('Ends', [...WIDEST.remaining, ...WIDEST.lifted]),
+        fits: [...WIDEST.remaining, ...WIDEST.lifted],
         valueGetter: (p) =>
           p.data === undefined
             ? ''

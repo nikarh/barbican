@@ -18,6 +18,7 @@ import { AgGridReact } from 'ag-grid-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
 import { useShown } from '../lib/shown'
+import { gridSpacing, useTier } from '../lib/columns'
 import classes from './Grid.module.css'
 
 ModuleRegistry.registerModules([
@@ -46,8 +47,10 @@ const gridTheme = themeQuartz.withParams({
   headerHeight: 38,
   wrapperBorderRadius: 'var(--mantine-radius-md)',
   oddRowBackgroundColor: 'var(--surface)',
-  spacing: 7,
+  spacing: gridSpacing('desktop'),
 })
+/** On a phone, cells are padded less: the columns' widths (`columnsFor`) count on it. */
+const phoneGridTheme = gridTheme.withParams({ spacing: gridSpacing('phone') })
 
 export interface PageResult<T> {
   rows: T[]
@@ -194,11 +197,12 @@ export function InfiniteGrid<T>({
     [columns],
   )
 
+  const tier = useTier()
   const state = first?.query === query ? first : null
   return (
     <div className={classes.grid}>
       <AgGridReact<T>
-        theme={gridTheme}
+        theme={tier === 'phone' ? phoneGridTheme : gridTheme}
         columnDefs={columnDefs}
         defaultColDef={defaultColDef}
         rowModelType="infinite"

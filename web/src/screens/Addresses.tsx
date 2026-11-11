@@ -39,14 +39,13 @@ function List() {
         minWidth: 140,
         cellClass: 'mono',
         pin: true,
-        phone: { flex: null, width: 150 },
+        phone: { flex: null, width: fit('Address', WIDEST.address, { mono: true, tier: 'phone' }) },
       },
       {
         headerName: 'Country',
         field: 'country',
-        width: 100,
+        fits: WIDEST.country,
         cellRenderer: (p: { value: string | null }) => <Country code={p.value} />,
-        phone: { width: 80 },
       },
       {
         headerName: 'Network',
@@ -54,32 +53,31 @@ function List() {
         flex: 1.4,
         minWidth: 140,
         tooltip: (p) => p.data?.asName ?? undefined,
-        phone: { minWidth: 170 },
+        phone: { minWidth: 150 },
       },
       {
         headerName: 'Hits',
         field: 'hits',
-        width: 90,
+        fits: WIDEST.count,
         type: 'rightAligned',
         valueFormatter: (p) => count(Number(p.value ?? 0)),
-        phone: { width: 72 },
       },
       {
         headerName: 'Last seen',
         field: 'lastSeen',
-        width: fit('Last seen', WIDEST.ago),
+        fits: WIDEST.ago,
         valueFormatter: (p) => ago(Number(p.value ?? 0)),
       },
       {
         headerName: 'First seen',
         field: 'firstSeen',
-        width: fit('First seen', WIDEST.ago),
+        fits: WIDEST.ago,
         valueFormatter: (p) => ago(Number(p.value ?? 0)),
       },
       {
         headerName: 'State',
         width: 200,
-        phone: { width: 170 },
+        phone: { width: 150 },
         cellRenderer: (p: { data?: IpRow }) =>
           p.data ? (
             <Group gap={6} wrap="nowrap" h="100%">
@@ -121,9 +119,11 @@ function List() {
           }}
           style={{ flex: phone ? '1 1 100%' : '1 1 260px' }}
         />
+        {/* On a phone the choices keep their full labels (narrower padding), and the sort takes what is left. */}
         <SegmentedControl
-          fullWidth={phone}
-          style={phone ? { flex: '1 1 0' } : undefined}
+          {...(phone
+            ? { style: { flex: '0 0 auto' }, styles: { label: { paddingInline: 9 } } }
+            : {})}
           value={filter}
           onChange={(v) => {
             setFilter(v)
@@ -141,7 +141,7 @@ function List() {
             if (v !== null) setSort(v)
           }}
           allowDeselect={false}
-          w={phone ? 128 : 150}
+          {...(phone ? { style: { flex: '1 1 0', minWidth: 0 } } : { w: 150 })}
           aria-label="Sort"
         />
       </Group>

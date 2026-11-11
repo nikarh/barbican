@@ -232,4 +232,9 @@ export const WIDEST = {
   ago: ['just now', '59min ago', '23h ago', '11mo ago', '10y ago'],
   remaining: ['until lifted', '59min left', '23h left', '11mo left', '10y left'],
   lifted: ['lifted 59min ago', 'lifted 11mo ago'],
+  /** An IPv4 address (IPv6 ones are cut, with the whole in a tooltip). */
+  address: ['255.255.255.255'],
+  country: ['🇺🇸 WW'],
+  count: ['999,999'],
+  kind: (): string[] => Object.values(KIND_LABELS),
 }
