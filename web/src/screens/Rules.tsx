@@ -23,6 +23,7 @@ import { useState } from 'react'
 import { useAction, useFeeds, useMeta, useRules } from '../api/hooks'
 import type { BanLength, Kind, Rule } from '../api/generated/model'
 import { rpc } from '../api/rpc'
+import { ActionCard } from '../components/ActionCard'
 import { LengthInput } from '../components/ui'
 import { formatLength, KIND_LABELS } from '../lib/format'
 import { useQuery } from '@tanstack/react-query'
@@ -400,40 +401,11 @@ export function RulesScreen() {
         </Group>
       </Group>
       {list.map((r, i) => (
-        <div key={r.id} className="panel" style={{ padding: '10px 12px' }}>
-          <Group justify="space-between" wrap="nowrap" align="flex-start">
-            <Group gap="sm" wrap="nowrap" align="flex-start" style={{ minWidth: 0 }}>
-              <Switch
-                checked={r.enabled}
-                onChange={(e) => {
-                  save.mutate({ ...r, enabled: e.currentTarget.checked })
-                }}
-                aria-label={r.enabled ? `Turn ${r.name} off` : `Turn ${r.name} on`}
-                mt={3}
-              />
-              <div style={{ minWidth: 0 }}>
-                <Group gap={8}>
-                  <Text fw={620} fz={14} c={r.enabled ? 'var(--ink)' : 'var(--ink-faint)'}>
-                    {r.name}
-                  </Text>
-                  <Badge color="gray">{KIND_LABELS[r.kind]}</Badge>
-                  {r.sources.map((s) => (
-                    <Badge key={s} color="gray" variant="outline">
-                      {s}
-                    </Badge>
-                  ))}
-                </Group>
-                <Text fz={13} c="var(--ink-dim)">
-                  {summary(r)}
-                </Text>
-                {r.description !== '' && (
-                  <Text fz={12} c="var(--ink-faint)" lineClamp={2}>
-                    {r.description}
-                  </Text>
-                )}
-              </div>
-            </Group>
-            <Group gap={2} wrap="nowrap">
+        <ActionCard
+          key={r.id}
+          count={4}
+          actions={
+            <>
               <ActionIcon
                 disabled={i === 0}
                 onClick={() => {
@@ -469,9 +441,38 @@ export function RulesScreen() {
               >
                 <IconTrash size={16} />
               </ActionIcon>
+            </>
+          }
+        >
+          <Group gap="sm" wrap="nowrap" align="flex-start" mih={28} pt={4}>
+            <Switch
+              checked={r.enabled}
+              onChange={(e) => {
+                save.mutate({ ...r, enabled: e.currentTarget.checked })
+              }}
+              aria-label={r.enabled ? `Turn ${r.name} off` : `Turn ${r.name} on`}
+            />
+            <Group gap={8} style={{ rowGap: 4 }}>
+              <Text fw={620} fz={14} c={r.enabled ? 'var(--ink)' : 'var(--ink-faint)'}>
+                {r.name}
+              </Text>
+              <Badge color="gray">{KIND_LABELS[r.kind]}</Badge>
+              {r.sources.map((s) => (
+                <Badge key={s} color="gray" variant="outline">
+                  {s}
+                </Badge>
+              ))}
             </Group>
           </Group>
-        </div>
+          <Text fz={13} c="var(--ink-dim)" mt={4}>
+            {summary(r)}
+          </Text>
+          {r.description !== '' && (
+            <Text fz={12} c="var(--ink-faint)" lineClamp={2}>
+              {r.description}
+            </Text>
+          )}
+        </ActionCard>
       ))}
       <Modal
         opened={editing !== null}

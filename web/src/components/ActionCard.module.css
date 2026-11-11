@@ -1,0 +1,30 @@
+/*
+ * A card with its buttons in its top-right corner. Its content flows around them: a float of their size
+ * (`--actions` of them) keeps its first line clear of them, and whatever comes below gets the full width.
+ */
+.card {
+  position: relative;
+  padding: 10px 12px;
+}
+
+.body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Flex boxes (the first line) are narrowed beside the float, not drawn under it. */
+.space {
+  float: right;
+  /* The buttons (28px, 2px apart) end 6px further right than the content does; 8px between them and the text. */
+  width: calc(var(--actions) * 30px + 2px);
+  height: 28px;
+}
+
+.actions {
+  position: absolute;
+  top: 8px;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}

@@ -28,6 +28,7 @@ import {
   usePolicy,
 } from '../api/hooks'
 import type { BlockCoverage, Extent, Feed, FeedDef, Policy } from '../api/generated/model'
+import { ActionCard } from '../components/ActionCard'
 import { AddPicker, EditableList } from '../components/EditableList'
 import { COUNTRY_SELECT } from '../components/countrySelect'
 import { GeoDatabases } from '../components/Geo'
@@ -877,34 +878,11 @@ function FeedsTab() {
         ))}
       </Group>
       {list.map((f) => (
-        <div key={f.def.id} className="panel" style={{ padding: '10px 12px' }}>
-          <Group justify="space-between" wrap="nowrap" align="flex-start">
-            <div style={{ minWidth: 0 }}>
-              <Group gap={8}>
-                <Anchor
-                  component="button"
-                  fw={620}
-                  fz={14}
-                  c="inherit"
-                  onClick={() => {
-                    setEditing(f.def)
-                  }}
-                >
-                  {f.def.name}
-                </Anchor>
-                {f.def.block ? (
-                  <Badge color="brass">Blocks</Badge>
-                ) : (
-                  <Badge color="gray">Data</Badge>
-                )}
-                {!f.def.enabled && <Badge color="gray">Off</Badge>}
-              </Group>
-              <Text fz={12} c="var(--ink-faint)" className="mono" truncate>
-                {f.def.url}
-              </Text>
-              <FeedState feed={f} now={now} />
-            </div>
-            <Group gap={2} wrap="nowrap">
+        <ActionCard
+          key={f.def.id}
+          count={2}
+          actions={
+            <>
               <Tooltip label="Fetch now" openDelay={300}>
                 <ActionIcon
                   loading={refresh.isPending && refresh.variables.id === f.def.id}
@@ -926,9 +904,29 @@ function FeedsTab() {
               >
                 <IconTrash size={16} />
               </ActionIcon>
-            </Group>
+            </>
+          }
+        >
+          <Group gap={8} mih={28} align="center">
+            <Anchor
+              component="button"
+              fw={620}
+              fz={14}
+              c="inherit"
+              onClick={() => {
+                setEditing(f.def)
+              }}
+            >
+              {f.def.name}
+            </Anchor>
+            {f.def.block ? <Badge color="brass">Blocks</Badge> : <Badge color="gray">Data</Badge>}
+            {!f.def.enabled && <Badge color="gray">Off</Badge>}
           </Group>
-        </div>
+          <Text fz={12} c="var(--ink-faint)" className="mono" truncate>
+            {f.def.url}
+          </Text>
+          <FeedState feed={f} now={now} />
+        </ActionCard>
       ))}
       <Modal
         opened={editing !== null}
