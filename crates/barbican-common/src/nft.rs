@@ -299,6 +299,10 @@ fn saddr(family: Family) -> &'static str {
     }
 }
 
+/// What tells a rule of the chain apart when read back: what it matches (`@set`, or `reply`), its verdict and its
+/// comment.
+type RuleShape = (String, &'static str, Option<&'static str>);
+
 /// What identifies an element of a set.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum Key {
@@ -524,9 +528,10 @@ impl<R: Runner> Firewall<R> {
         }
     }
 
-    fn definition(&self) -> String {
-        let t = &self.table;
-        let mut s = format!("table inet {t} {{\n  comment \"{LAYOUT}\"\n");
+    /// The table, its sets and its chain, without the chain's rules: adds what is missing, changes nothing that is
+    /// there (a chain of another priority is refused, and the table replaced, see [`Self::setup`]).
+    fn declaration(&self) -> String {
+        let mut s = format!("table inet {} {{\n  comment \"{LAYOUT}\"\n", self.table);
         for set in Set::ALL {
             for family in FAMILIES {
                 let _ = writeln!(
@@ -544,53 +549,116 @@ impl<R: Runner> Firewall<R> {
             "  chain prerouting {{ type filter hook prerouting priority {}; policy accept; }}\n}}",
             self.priority
         );
-        let _ = writeln!(s, "flush chain inet {t} prerouting");
-        let mut rule = |r: &str| {
-            let _ = writeln!(s, "add rule inet {t} prerouting {r}");
-        };
-        rule("ct direction reply accept");
+        s
+    }
+
+    /// The chain's rules, in order: each as `nft` writes it, and what tells it apart when read back (what it matches,
+    /// its verdict, its comment).
+    fn rules() -> Vec<(String, RuleShape)> {
+        let mut rules = vec![(
+            "ct direction reply accept".to_owned(),
+            ("reply".to_owned(), "accept", None),
+        )];
         for family in FAMILIES {
-            rule(&format!(
-                "{} @{} accept",
-                saddr(family),
-                Set::Allow.name(family)
+            let set = Set::Allow.name(family);
+            rules.push((
+                format!("{} @{set} accept", saddr(family)),
+                (format!("@{set}"), "accept", None),
             ));
         }
         for family in FAMILIES {
             for set in [Set::Host, Set::Net] {
-                rule(&format!(
-                    "{} @{} counter drop comment \"blocked\"",
-                    saddr(family),
-                    set.name(family)
+                let set = set.name(family);
+                rules.push((
+                    format!("{} @{set} counter drop comment \"blocked\"", saddr(family)),
+                    (format!("@{set}"), "drop", Some("blocked")),
                 ));
             }
         }
         for family in FAMILIES {
-            rule(&format!(
-                "{} @{} counter drop comment \"listed\"",
-                saddr(family),
-                Set::List.name(family)
+            let set = Set::List.name(family);
+            rules.push((
+                format!("{} @{set} counter drop comment \"listed\"", saddr(family)),
+                (format!("@{set}"), "drop", Some("listed")),
             ));
+        }
+        rules
+    }
+
+    /// The chain's rules written anew (which zeroes their counters).
+    fn rule_script(&self) -> String {
+        let t = &self.table;
+        let mut s = format!("flush chain inet {t} prerouting\n");
+        for (rule, _) in Self::rules() {
+            let _ = writeln!(s, "add rule inet {t} prerouting {rule}");
         }
         s
     }
 
+    fn definition(&self) -> String {
+        format!("{}{}", self.declaration(), self.rule_script())
+    }
+
+    /// Whether the chain (`nft -j list chain`) holds exactly the rules it should, in order.
+    fn rules_in_place(json: &str) -> bool {
+        let Ok(items) = nft_items(json) else {
+            return false;
+        };
+        let found: Vec<RuleShape> = items
+            .iter()
+            .filter_map(|item| item.get("rule"))
+            .map(|rule| {
+                let exprs = rule.get("expr").and_then(Value::as_array);
+                let matched = exprs
+                    .into_iter()
+                    .flatten()
+                    .find_map(|e| e.get("match")?.get("right")?.as_str())
+                    .unwrap_or("")
+                    .to_owned();
+                let verdict = exprs
+                    .into_iter()
+                    .flatten()
+                    .find_map(|e| ["accept", "drop"].into_iter().find(|v| e.get(*v).is_some()))
+                    .unwrap_or("");
+                let comment = match rule.get("comment").and_then(Value::as_str) {
+                    Some("blocked") => Some("blocked"),
+                    Some("listed") => Some("listed"),
+                    Some(_) => Some("?"),
+                    None => None,
+                };
+                (matched, verdict, comment)
+            })
+            .collect();
+        let wanted: Vec<RuleShape> = Self::rules().into_iter().map(|(_, shape)| shape).collect();
+        found == wanted
+    }
+
     /// Creates the table, or brings its chain up to date and keeps its sets. A table of another layout (or another
     /// priority) is replaced, and the next [`Self::reconcile`] fills it again.
+    ///
+    /// A chain that holds its rules already is left as it is, so that their counters (what was dropped) go on
+    /// counting across restarts.
     pub fn setup(&mut self) -> Result<(), Error> {
         self.model = None;
-        let definition = self.definition();
-        match self.runner.run(&definition) {
-            Ok(()) => Ok(()),
+        match self.runner.run(&self.declaration()) {
+            Ok(()) => {}
             Err(Error::Nft(_)) => {
                 self.lists = None;
-                self.runner.run(&format!(
-                    "table inet {t}\ndelete table inet {t}\n{definition}",
+                return self.runner.run(&format!(
+                    "table inet {t}\ndelete table inet {t}\n{}",
+                    self.definition(),
                     t = self.table
-                ))
+                ));
             }
-            Err(e) => Err(e),
+            Err(e) => return Err(e),
         }
+        let chain = self
+            .runner
+            .list(&format!("chain inet {} prerouting", self.table));
+        if chain.is_ok_and(|json| Self::rules_in_place(&json)) {
+            return Ok(());
+        }
+        self.runner.run(&self.rule_script())
     }
 
     /// Whether the table may differ from what it should hold, so that [`Self::reconcile`] is due: something else
@@ -1349,7 +1417,7 @@ mod tests {
         let fake = Fake::default();
         let mut fw = Firewall::new(&fake, "barbican", -190);
         fw.setup().unwrap();
-        let script = fake.scripts.borrow()[0].clone();
+        let script = fake.scripts.borrow().join("");
         assert!(script.contains("set host4 { type ipv4_addr; flags timeout; }"));
         assert!(script.contains("set net6 { type ipv6_addr; flags interval, timeout; }"));
         assert!(script.contains("type filter hook prerouting priority -190; policy accept;"));
@@ -1372,6 +1440,42 @@ mod tests {
                 .unwrap()
                 .contains("ip6 saddr @list6 counter drop comment \"listed\"")
         );
+    }
+
+    #[test]
+    fn setup_keeps_a_chain_that_is_right_and_its_counters() {
+        let fake = Fake::default();
+        // The chain as `nft -j list chain` gives it, with the rules setup writes.
+        let rule = |right: &str, verdict: &str, comment: Option<&str>| {
+            let comment = comment.map_or(String::new(), |c| format!(r#", "comment": "{c}""#));
+            format!(
+                r#"{{"rule": {{"family": "inet", "table": "barbican", "chain": "prerouting", "handle": 1, "expr": [{{"match": {{"op": "==", "left": {{"payload": {{"protocol": "ip", "field": "saddr"}}}}, "right": "{right}"}}}}, {{"counter": {{"packets": 5, "bytes": 300}}}}, {{"{verdict}": null}}]{comment}}}}}"#
+            )
+        };
+        let rules: Vec<String> = Firewall::<&Fake>::rules()
+            .into_iter()
+            .map(|(_, (right, verdict, comment))| rule(&right, verdict, comment))
+            .collect();
+        let json = format!(
+            r#"{{"nftables": [{{"metainfo": {{}}}}, {}]}}"#,
+            rules.join(", ")
+        );
+        fake.sets
+            .borrow_mut()
+            .insert("chain inet barbican prerouting".to_owned(), json.clone());
+        let mut fw = Firewall::new(&fake, "barbican", -190);
+        fw.setup().unwrap();
+        assert_eq!(fake.scripts.borrow().len(), 1);
+        assert!(!fake.scripts.borrow()[0].contains("flush chain"));
+
+        // One rule missing (hand-edited): the rules are written anew.
+        let partial = json.replacen(&format!("{}, ", rules[3]), "", 1);
+        fake.sets
+            .borrow_mut()
+            .insert("chain inet barbican prerouting".to_owned(), partial);
+        fake.scripts.borrow_mut().clear();
+        fw.setup().unwrap();
+        assert!(fake.scripts.borrow()[1].starts_with("flush chain inet barbican prerouting"));
     }
 
     #[test]
