@@ -8,6 +8,8 @@
 #   e2e/vm.sh <server|router> up        boot the VM on a fresh disk, wait until it is ready
 #   e2e/vm.sh <server|router> ssh ...   run a command in the VM, or open a shell
 #   e2e/vm.sh <server|router> put <local> <remote>   copy a file into the VM
+#   e2e/vm.sh <server|router> forward <port> <vm port>   forward 127.0.0.1:<port> here to 127.0.0.1:<vm port> in the
+#                                       VM, until stopped
 #   e2e/vm.sh <server|router> down      stop the VM (its disk is thrown away)
 #   e2e/vm.sh <server|router> destroy   stop the VM and delete its images
 #
@@ -44,7 +46,7 @@ case "${vm}" in
     CPUS=1
     ;;
   *)
-    sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
     exit 1
     ;;
 esac
@@ -295,6 +297,12 @@ put() {
   vm_ssh "cat > '$2'" <"$1"
 }
 
+# An SSH connection of its own, not the shared one: it runs until it is stopped.
+forward() { # <port> <vm port>
+  exec ssh -o ControlMaster=no -o ControlPath=none -o ExitOnForwardFailure=yes "${ssh_opts[@]}" \
+    -N -L "127.0.0.1:$1:127.0.0.1:$2" "${SSH_USER}@127.0.0.1"
+}
+
 down() {
   if is_running; then
     ssh "${ssh_opts[@]}" -O exit "${SSH_USER}@127.0.0.1" 2>/dev/null || true
@@ -322,10 +330,11 @@ case "${cmd}" in
   # The remote command's status is the result, not a failure of this script.
   ssh) shift 2; trap - EXIT; vm_ssh "$@" ;;
   put) put "$3" "$4" ;;
+  forward) trap - EXIT; forward "$3" "$4" ;;
   down) down ;;
   destroy) destroy ;;
   *)
-    sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
     exit 1
     ;;
 esac

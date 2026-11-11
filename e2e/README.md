@@ -16,7 +16,7 @@ image there (cloud-init installs the packages and Docker, a minute or two): `ser
 provisioning in `vm.sh` changes. Each run boots both VMs from their images on throwaway disks, while the binaries
 build. CI runs the same on a GitHub runner with KVM, with the images cached.
 
-`e2e/vm.sh <server|router> <up|ssh|put|down|destroy>` manages one VM. The two are joined by a UDP tunnel between their
+`e2e/vm.sh <server|router> <up|ssh|put|forward|down|destroy>` manages one VM. The two are joined by a UDP tunnel between their
 QEMUs: the server is 10.99.0.1, the router's WAN 10.99.0.2. Each is reached over SSH through user-mode networking.
 
 The suites wait for what they check, not for a fixed time: a dropped connection is one that isn't answered within
