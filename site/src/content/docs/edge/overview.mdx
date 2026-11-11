@@ -1,0 +1,69 @@
+---
+title: Edge agents
+description: What edge agents do on a router, the nftables and ipset variants, and connecting an edge to an agent.
+sidebar:
+  order: 1
+---
+
+import Screenshot from '../../../components/Screenshot.astro';
+
+An edge agent runs on a router and keeps its firewall equal to the union of what the agents it follows block, with their allow lists: bans, the deny list, and, unless turned off, blocked countries and blocking feeds. What one server's agent bans is then blocked for the whole network behind the router, for everything it forwards and for the router itself.
+
+| Agent | Firewall | For |
+| --- | --- | --- |
+| `barbican-edge` | an nftables table of its own (`inet barbican`), as on the server | OpenWrt: [installing](/install/openwrt/) |
+| `barbican-edge-ipset` | an iptables chain in the mangle table, first in PREROUTING, and ipsets | firmware without nftables, such as Asuswrt-Merlin: [installing](/install/iptables/) |
+
+Both are small static binaries (about a megabyte) with plain threads and blocking I/O, configured from a [UCI file](/edge/configuration/).
+
+An edge stays connected to each agent it follows, over TLS, and the agent pushes every ban and lift as it happens: they reach the router within a fraction of a second. The edge reports back what it applied and what its firewall dropped, which the agent's UI shows. See [the edge protocol](/edge/protocol/).
+
+- Edges connect out; nothing connects to them.
+- An edge follows any number of agents; what they block adds up, and what they allow is let through.
+- When no agent is reachable, the edge keeps what it has: its blocks hold, and the kernel still lifts bans on time.
+- At boot, the edge puts back its [saved state](/edge/configuration/#saved-state) before the network comes up.
+- An edge can run [dry](/edge/configuration/#dry-run): it follows and reports what it would block, and changes nothing.
+
+## Connecting an edge to an agent
+
+1. On the agent, turn the edge API on and give the edge a client of its own, with a token of at least 16 characters, in `/etc/barbican/config.toml`:
+
+   ```toml
+   [edge]
+   listen = "0.0.0.0:7380"
+   [[edge.client]]
+   name = "router"
+   token_file = "/etc/barbican/edge-router.token"
+   ```
+
+   ```bash
+   head -c 24 /dev/urandom | base64 | sudo tee /etc/barbican/edge-router.token >/dev/null
+   sudo systemctl restart barbican
+   ```
+
+   The unit runs the agent as a user of its own, so the token file must be readable by it: a file only root may read won't do. Each edge gets a client of its own; the name is what the UI calls it.
+
+2. The edge API is TLS only. Without `edge.cert` and `edge.key`, the agent made a self-signed certificate on that start, next to its database. Edges accept exactly that certificate, by its fingerprint:
+
+   ```bash
+   sudo barbican edge-fingerprint
+   ```
+
+   The UI's **Settings → About** and **Settings → Edges** show it too.
+
+3. On the router, add the agent as an upstream: its URL, that fingerprint and the token.
+
+   ```text title="/etc/config/barbican"
+   config upstream 'server'
+   	option url 'https://192.0.2.10:7380'
+   	option fingerprint '3F:A1:...'
+   	option token_file '/etc/barbican/server.token'
+   ```
+
+   then `/etc/init.d/barbican-edge restart` (on OpenWrt; in LuCI, **Services → Barbican → Settings**), or `/jffs/barbican/barbican.sh restart` on Asuswrt-Merlin.
+
+Once it connects, the agent's **Settings → Edges** shows it: connected or not, enforcing or in dry run, its firewall and version, what it holds, what its firewall dropped, how long it has been running, when it last reported, and the agents it follows. The overview counts each edge's drops apart from the host's own.
+
+<Screenshot name="settings-edges" alt="Settings, Edges: a card for each edge client, connected or not, with its mode, firewall, version, what it holds, what it dropped, its uptime, when it last reported and the agents it follows, and the agent's certificate fingerprint." />
+
+Allow the edge API's port from the router in the server's own firewall if it has one. Agents and edges of one release speak the same protocol: update them together; an agent refuses an edge that speaks another version and tells it which one it speaks.

@@ -1,0 +1,102 @@
+---
+title: Rules and policy
+description: How rules match events and ban, the default rules, trusted addresses, and the policy that sets ban lengths.
+sidebar:
+  order: 2
+---
+
+import Screenshot from '../../../components/Screenshot.astro';
+
+Rules decide what counts as abuse; the policy decides for how long. Both are edited in the UI (**Rules**, and **Settings → Lengths and countries**) and kept in the database, not in the configuration file: a change applies at once, without a restart.
+
+<Screenshot name="rules" alt="The Rules screen: the rules in the order they are tried, each with a switch, its name, what it looks at, its threshold and ban length, and buttons to move, edit or delete it." />
+
+## How rules are applied
+
+Every event of every source is matched against the rules, in their order on the **Rules** screen:
+
+- An event is **recorded** under the first rule it matches: counted per address, rule, source and hour, and shown on the address's page and in **Events**. Lines that match no rule are not recorded (logins are, for trust).
+- Every **banning** rule it matches **counts** it. A rule bans once it counted `threshold` events of one address within its window (a threshold of 1 bans on the first).
+- A rule that **records** only never bans: it makes events visible, for example requests you want to watch before deciding.
+
+Some addresses are never banned:
+
+- addresses on the **allow list**, in an allowing feed, or in the exempt networks of the configuration (`exempt.nets`, private ranges by default) are ignored altogether: see [Countries, blocklists and allow lists](/guides/feeds/#allow-and-deny-lists);
+- **trusted** addresses (below) are recorded, but no rule bans them;
+- an address that is banned already is recorded, and its ban isn't renewed or lengthened by new events.
+
+## Conditions
+
+A rule looks at one kind of event (HTTP requests, failed logins, successful logins, unknown users, or protocol probes), from all sources or only some. Within that, unset conditions match anything:
+
+| Condition | Events | Matches |
+| --- | --- | --- |
+| Path | HTTP | the path, with the query |
+| Method | HTTP | the method |
+| Status | HTTP | one of these statuses |
+| Known host | HTTP | whether the proxy had a route for the request (with Traefik: a router) |
+| User agent | HTTP | the user agent (Traefik's JSON log, or a regex source with `agent`) |
+| User | logins | the user name |
+| What happened | any | the event as the UI shows it: `GET example.com/x → 404`, a user name, a probe's description |
+| Listed in | any | the address is in one of these [feeds](/guides/feeds/#feeds) |
+
+Patterns are regular expressions that match anywhere in the text unless anchored (`^...$`). One that starts with `!` matches what the rest doesn't: `!^(GET|POST)$` matches every other method.
+
+<Screenshot name="rule" alt="Editing a rule: its name, the kind of event and sources it looks at, conditions on path, method, status, known host and user agent, the threshold and window, and the ban's length and prefix lengths." />
+
+A rule that bans has a length: the policy's default, a length of its own, or until lifted by hand. It can ban a prefix instead of the address: an IPv4 prefix length (32: the address only) and an IPv6 one (64 by default, the usual size of one customer's network).
+
+## The default rules
+
+A new database starts with these rules. All of them can be changed, turned off or deleted; **Add a default** on the Rules screen brings back one that was deleted.
+
+| Rule | Looks at | Bans |
+| --- | --- | --- |
+| Exploit probes | HTTP | at once, for a year: paths only vulnerability scanners ask for: `.env`, `.git` and similar files, PHP, ASP, JSP and CGI scripts, backups, admin panels of software that isn't there (WordPress, phpMyAdmin, ...), path traversal, injection |
+| No known host | HTTP | at once, for a year: requests the proxy had no route for (the server's bare address, or hosts it doesn't serve) |
+| Unusual methods | HTTP | at once, for the default length: HTTP methods no browser or app sends (anything but `GET`, `HEAD`, `POST`, `PUT`, `DELETE`, `OPTIONS`, `PATCH` and WebDAV's) |
+| Many errors | HTTP | 40 responses 401, 403 or 404 within 10 minutes, for the default length |
+| Failed logins | failed logins | 5 within 10 minutes, for the default length |
+| Root logins | failed logins | at once, for a year: logins as `root`, `admin`, `administrator` |
+| Unknown users | unknown users | 2 within an hour, for a year |
+| Protocol probes | probes | at once, for a year: garbage instead of SSH, ancient algorithms only scanners offer |
+
+To see what they would make of logs you have, before anything is banned, run [`barbican replay`](/guides/import/#trying-the-rules-on-old-logs).
+
+## Trust
+
+An address someone logged in from is **trusted** for a while (30 days by default, **Trust after a login** in the policy): no rule bans it. A successful SSH or Authelia login trusts the address, and so does every request of a signed-in Authelia user (with Authelia logging at the `debug` level), which keeps the address trusted while it is used. So people who mistype a password a few times, or share an address with someone who does, aren't locked out of their own services.
+
+The Addresses screen lists trusted addresses (**Trusted**), with the user who logged in; **Stop trusting** on an address's page ends it.
+
+## The policy
+
+**Settings → Lengths and countries** holds the policy:
+
+| Setting | Default | |
+| --- | --- | --- |
+| Default ban length | 90 days | For rules without a length of their own |
+| Repeat offenders | ×2 | Each earlier ban of the address multiplies the length by this (1: no escalation) |
+| At most | 365 days | Escalation stops here (a rule's own longer length is kept) |
+| By country | | Lengths for addresses of these countries instead of the rule's or the default |
+| By network | | Lengths for addresses of these networks (ASNs) |
+| By blocklist | | Lengths for addresses these feeds list |
+| Countries blocked as a whole | | Countries and continents: see [Countries](/guides/feeds/#countries-and-continents) |
+| Trust after a login | 30 days | How long a login keeps an address trusted |
+| Keep events | 365 days | Older events are deleted; bans and their addresses stay |
+
+<Screenshot name="settings-policy" alt="Settings, Lengths and countries: the default ban length, the repeat multiplier and maximum, ban lengths by country, network and blocklist, countries and continents blocked as a whole, how long a login keeps an address trusted and how long events are kept." />
+
+A ban's length is worked out when it starts:
+
+1. the rule's length (or the default; a rule that bans until lifted is left as it is);
+2. replaced by the shortest of the lengths for the address's country, network and the feeds that list it, if any applies;
+3. multiplied by the repeat multiplier once for each earlier ban of the address, up to the maximum.
+
+Lengths by country are for addresses people you know share: shorter for your own country, where a ban hits a neighbour's mobile network as well as the scanner on it. Lengths by network and blocklist are for [shared addresses](/guides/feeds/#shared-addresses).
+
+## Bans by hand
+
+**Ban** on the Bans screen or on an address's page bans an address or a prefix for a length you choose (or until lifted), with a reason. **Lift the ban** ends any ban: the kernel's element goes at once, here and on the edges. A lifted ban stays in the history, and counts as an earlier ban when the address comes back.
+
+Nothing is ever banned that can't be lifted in the UI, and no rule ever bans an allowed address.

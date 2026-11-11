@@ -1,0 +1,12 @@
+---
+// The barbican mark, the UI's own: a gatehouse between two towers. Drawn in currentColor.
+interface Props {
+	size?: number;
+	class?: string;
+}
+const { size = 24, class: className } = Astro.props;
+---
+
+<svg class={className} width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
+	<path d="M7 26V11l3-2v3h3V8l3-2 3 2v4h3V9l3 2v15h-6v-6a3 3 0 0 0-6 0v6z" fill="currentColor" />
+</svg>
