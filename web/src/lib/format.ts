@@ -222,3 +222,14 @@ export const KIND_LABELS = {
   invalid_user: 'Unknown user',
   probe: 'Probe',
 } as const
+
+/** The widest texts of `dateTime`, `ago` and `remaining`, for sizing the columns that show them. */
+export const WIDEST = {
+  dateTime: (): string[] =>
+    Array.from({ length: 12 }, (_, month) =>
+      dateTime(new Date(2026, month, 28, 23, 58).getTime() / 1000),
+    ),
+  ago: ['just now', '59min ago', '23h ago', '11mo ago', '10y ago'],
+  remaining: ['until lifted', '59min left', '23h left', '11mo left', '10y left'],
+  lifted: ['lifted 59min ago', 'lifted 11mo ago'],
+}

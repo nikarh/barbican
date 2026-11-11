@@ -9,8 +9,8 @@ import { rpc } from '../api/rpc'
 import { InfiniteGrid } from '../components/Grid'
 import { Kept } from '../components/Kept'
 import { Country, StatusBadge } from '../components/ui'
-import { ago, count, remaining } from '../lib/format'
-import { columnsFor, useTier, type Column } from '../lib/columns'
+import { ago, count, remaining, WIDEST } from '../lib/format'
+import { columnsFor, fit, useTier, type Column } from '../lib/columns'
 import { navigate } from '../lib/router'
 import { IpScreen } from './Ip'
 
@@ -67,16 +67,14 @@ function List() {
       {
         headerName: 'Last seen',
         field: 'lastSeen',
-        width: 110,
+        width: fit('Last seen', WIDEST.ago),
         valueFormatter: (p) => ago(Number(p.value ?? 0)),
-        phone: { width: 100 },
       },
       {
         headerName: 'First seen',
         field: 'firstSeen',
-        width: 110,
+        width: fit('First seen', WIDEST.ago),
         valueFormatter: (p) => ago(Number(p.value ?? 0)),
-        phone: { width: 100 },
       },
       {
         headerName: 'State',
