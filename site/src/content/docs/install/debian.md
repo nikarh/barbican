@@ -7,6 +7,20 @@ sidebar:
 
 The agent's package is a static binary with its systemd unit; it depends on nothing but `nftables`.
 
+From the signed apt repository, set up once: apt then installs and upgrades barbican with the rest of the system.
+
+```bash
+sudo install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://raw.githubusercontent.com/nikarh/barbican/main/docs/signing-key.asc \
+  | sudo tee /etc/apt/keyrings/barbican.asc >/dev/null
+# Releases (apt-latest instead follows the builds of main).
+echo "deb [signed-by=/etc/apt/keyrings/barbican.asc] https://github.com/nikarh/barbican/releases/download/apt/ ./" \
+  | sudo tee /etc/apt/sources.list.d/barbican.list
+sudo apt update && sudo apt install barbican
+```
+
+Or a single package, without the repository:
+
 ```bash
 arch=$(dpkg --print-architecture)    # amd64 or arm64
 curl -fLO "https://github.com/nikarh/barbican/releases/latest/download/barbican_${arch}.deb"

@@ -4,7 +4,9 @@ name: Publish
 # Latest workflow calls it: static (musl) agents with .deb and Arch Linux packages for x86_64 and aarch64; the edge
 # agent for OpenWrt (x86_64, aarch64, armv7) as archives and .apk/.ipk packages with luci-app-barbican; the ipset
 # edge agent for Asuswrt-Merlin (armv7); and the UI's container image (ghcr.io/nikarh/barbican, amd64 and arm64:
-# `X.Y.Z`, `X.Y` and `latest` for releases, `main` and `sha-<commit>` for the `latest` pre-release).
+# `X.Y.Z`, `X.Y` and `latest` for releases, `main` and `sha-<commit>` for the `latest` pre-release). Then adds the
+# packages to the apt and pacman repositories, each a release of its own: apt and pacman-<arch> have the releases,
+# apt-latest and pacman-latest-<arch> the builds of main.
 on:
   release:
     types: [published]
@@ -224,3 +226,115 @@ jobs:
           gh release view "$TAG" --json assets --jq '.assets[].name' | while IFS= read -r name; do
             [[ -e release/$name ]] || gh release delete-asset "$TAG" "$name" --yes
           done
+
+  pacman:
+    name: pacman repository (${{ matrix.arch }})
+    needs: [upload]
+    strategy:
+      matrix:
+        arch: [x86_64, aarch64]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # repo-add only reads the packages, so the x86_64 image does both architectures.
+    container: archlinux:base
+    environment: release
+    defaults:
+      run:
+        shell: bash
+    # The database is downloaded, changed and uploaded again.
+    concurrency:
+      group: pacman-${{ (inputs.tag || github.event.release.tag_name) == 'latest' && 'latest-' || '' }}${{ matrix.arch }}
+      cancel-in-progress: false
+    steps:
+      - run: pacman -Syu --noconfirm --needed git github-cli
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: scripts
+      # The files of the release, so the repositories have exactly those.
+      - name: Download the package from the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --dir release --pattern SHA256SUMS --pattern 'barbican-${{ matrix.arch }}.pkg.tar.zst'
+          cd release && sha256sum --ignore-missing --strict -c SHA256SUMS
+      - name: Import the signing key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: gpg --batch --import <<<"$GPG_PRIVATE_KEY"
+      - name: Generate GitHub token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        id: generate-token
+        with:
+          client-id: ${{ secrets.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+      # Releases are kept for good; of the builds of main, the newest 100.
+      - name: Add the package to the repository
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          if [[ "$TAG" == latest ]]; then
+            scripts/pacman-repo.sh pacman-latest-${{ matrix.arch }} 100 release/barbican-${{ matrix.arch }}.pkg.tar.zst
+          else
+            scripts/pacman-repo.sh pacman-${{ matrix.arch }} 0 release/barbican-${{ matrix.arch }}.pkg.tar.zst
+          fi
+
+  apt:
+    name: apt repository
+    needs: [upload]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release
+    # The index is downloaded, changed and uploaded again.
+    concurrency:
+      group: apt${{ (inputs.tag || github.event.release.tag_name) == 'latest' && '-latest' || '' }}
+      cancel-in-progress: false
+    env:
+      REPO: ${{ (inputs.tag || github.event.release.tag_name) == 'latest' && 'apt-latest' || 'apt' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            scripts
+            docs
+      # The files of the release, so the repositories have exactly those.
+      - name: Download the packages from the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --dir release --pattern SHA256SUMS --pattern 'barbican_*.deb'
+          cd release && sha256sum --ignore-missing --strict -c SHA256SUMS
+      - name: Import the signing key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: gpg --batch --import <<<"$GPG_PRIVATE_KEY"
+      - name: Generate GitHub token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        id: generate-token
+        with:
+          client-id: ${{ secrets.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+      # Releases are kept for good; of the builds of main, the newest 100.
+      - name: Add the packages to the repository
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: scripts/apt-repo.sh "$REPO" ${{ env.TAG == 'latest' && 100 || 0 }} release/barbican_amd64.deb release/barbican_arm64.deb
+      # Added as a user would (see Install in the docs).
+      - name: Check apt sees the new version
+        run: |
+          set -euo pipefail
+          sudo install -m 0644 docs/signing-key.asc /etc/apt/keyrings/barbican.asc
+          echo "deb [signed-by=/etc/apt/keyrings/barbican.asc] $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$REPO/ ./" \
+            | sudo tee /etc/apt/sources.list.d/barbican.list
+          sudo apt-get update
+          version=$(dpkg-deb -f release/barbican_amd64.deb Version)
+          apt-cache madison barbican
+          # The columns are padded: "barbican |    0.1.0-1 | <url> ./ Packages".
+          apt-cache madison barbican | awk -F' *[|] *' '{ print $2 }' | grep -qxF "${version}"
