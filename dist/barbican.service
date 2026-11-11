@@ -1,6 +1,6 @@
 [Unit]
 Description=barbican: bans addresses that abuse services, from their logs
-Documentation=https://github.com/nikarh/barbican
+Documentation=https://barbican.arhipov.net/
 # The blocks are put back in place, and barbican reports itself ready, before the network is configured
 # (network-pre.target) and before Docker starts: nothing reaches a service unfiltered at boot.
 DefaultDependencies=no
@@ -34,7 +34,8 @@ CapabilityBoundingSet=CAP_NET_ADMIN
 # use the UI.
 SupplementaryGroups=systemd-journal barbican-ui
 # Docker sources read the Docker API's socket. Membership of the docker group gives root on the host, so prefer
-# a read-only socket proxy that only allows container inspection and logs (see the README), and point
+# a read-only socket proxy that only allows container inspection and logs (see
+# https://barbican.arhipov.net/guides/sources/#permissions), and point
 # docker.socket in the configuration at it; it then needs read access to that socket only.
 # SupplementaryGroups=systemd-journal barbican-ui docker
 

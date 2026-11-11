@@ -29,12 +29,34 @@ development machine. `mise run e2e` boots throwaway VMs and runs everything ther
 - `crates/barbican/migrations/` - SQLite migrations. After changing a migration or a `query!`, run
   `mise run db:prepare` and commit `.sqlx/`.
 - `dist/` - the systemd unit, example configuration, the OpenWrt init script and UCI config.
+- `site/` - the documentation site (Astro Starlight), published to https://barbican.arhipov.net/.
 
 ## Rules
 
 - A change to the protocol changes `api.rs`, then the bindings, then the frontend, in the same commit.
 - A change to the edge protocol keeps older edge agents working, or bumps `edge::PROTOCOL_VERSION`.
-- A change to the configuration updates `README.md` and `dist/` in the same commit.
+- A change to the configuration updates `site/src/content/docs/reference/configuration.md` and `dist/config.toml` in
+  the same commit.
 - Never ban what can't be unbanned from the UI, and never let a rule ban an allow-listed address.
 - `web/package.json` `overrides` force fixed versions of vulnerable transitive dev dependencies whose dependents
   haven't caught up yet. Drop an override once the dependent requires a fixed version itself.
+
+## Documentation
+
+The documentation is the Starlight site in `site/` (pages in `site/src/content/docs/`), published to GitHub Pages
+with a version per release and one for `main`. The README is only an overview that links to it.
+
+- Every change to behaviour updates the docs in the same commit: settings in `reference/configuration.md` (and
+  `dist/config.toml`), sources and parsers in `guides/sources.md`, rules and the policy in `guides/rules.mdx`, feeds
+  in `guides/feeds.mdx`, edge options in `edge/configuration.md` (and `dist/openwrt/barbican.config`,
+  `dist/merlin/barbican.conf`), the edge protocol in `edge/protocol.md`, commands in `reference/cli.md`, the UI in
+  `guides/ui.mdx`. `project/docs.md` lists what goes where.
+- Internal links are site-absolute without the version, with a trailing slash: `[sources](/guides/sources/)`.
+- Write like the existing pages: plain, precise, engineer to engineer; no marketing. Don't document behaviour the code
+  doesn't have.
+- Before committing docs changes run `mise run docs:build`: it fails on broken links and anchors.
+- `mise run docs` serves the site locally with live reload.
+- Screenshots of the UI are generated, never taken by hand: `mise run docs:screenshots` makes them in a VM from
+  synthetic data (`scripts/screenshots.sh`). Run it after a visible change to the UI and commit the result.
+- Released docs are frozen when a release is published (`.github/workflows/docs.yml`, `scripts/docs-publish.sh`);
+  don't edit the `gh-pages` branch by hand.

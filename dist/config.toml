@@ -1,5 +1,6 @@
 # barbican's configuration. Rules, ban durations, country blocks, blocklists and the allow and deny lists are
 # edited in the UI and kept in the database; this file only says where logs come from and where things listen.
+# Every setting: https://barbican.arhipov.net/reference/configuration/
 
 [database]
 path = "/var/lib/barbican/barbican.db"

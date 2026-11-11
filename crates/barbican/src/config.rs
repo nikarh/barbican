@@ -189,7 +189,8 @@ pub struct Source {
     /// Shown in the UI and used by rules to limit themselves to some sources.
     pub name: String,
     pub parser: ParserKind,
-    /// For `parser = "regex"`: the pattern, with named groups (see the README).
+    /// For `parser = "regex"`: the pattern, with named groups (see
+    /// <https://barbican.arhipov.net/guides/sources/#a-log-without-a-parser>).
     pub pattern: Option<String>,
     /// For `parser = "regex"`: what a matching line is.
     pub kind: Option<RegexKind>,
