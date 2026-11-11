@@ -14,6 +14,7 @@ mod firewall;
 mod geo;
 mod import;
 mod parse;
+mod peer;
 mod proxy;
 mod replay;
 mod rpc;
@@ -34,9 +35,13 @@ barbican: bans addresses that abuse services, from their logs
 Usage:
   barbican [--config <path>] [--dry-run]     run the agent
   barbican parse <parser> [<file>]           print what a parser makes of each line (of stdin without a file)
-  barbican ui-proxy [--socket <path>] [--listen <address>]
+  barbican ui-proxy [--socket <path>] [--listen <address>] [--trusted-proxy <cidr>...] [--user-header <name>]
                                              serve the UI (in a container) for an agent whose UI is on a unix
-                                             socket [default: /run/barbican-ui/ui.sock, 0.0.0.0:8080]
+                                             socket [default: /run/barbican-ui/ui.sock, 0.0.0.0:8080]. Only
+                                             requests from the authenticating reverse proxy's addresses
+                                             (--trusted-proxy, repeatable, required) and with --user-header
+                                             (e.g. Remote-User) only those naming a user
+                                             ($BARBICAN_TRUSTED_PROXIES, comma-separated, $BARBICAN_USER_HEADER)
   barbican healthcheck [--address <address>]  exit 0 when the UI (or the proxy) answers [default: 127.0.0.1:8080]
   barbican edge-fingerprint [--config <path>]
                                              print the edge API certificate's fingerprint, for edges' configuration
@@ -268,6 +273,49 @@ fn proxy_command(mut args: pico_args::Arguments) -> ExitCode {
         .ok()
         .flatten()
         .unwrap_or_else(|| std::net::SocketAddr::from(([0, 0, 0, 0], 8080)));
+    let mut trusted: Vec<String> = args.values_from_str("--trusted-proxy").unwrap_or_default();
+    if trusted.is_empty()
+        && let Ok(env) = std::env::var("BARBICAN_TRUSTED_PROXIES")
+    {
+        trusted = env
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect();
+    }
+    let header: Option<String> = args
+        .opt_value_from_str("--user-header")
+        .ok()
+        .flatten()
+        .or_else(|| {
+            std::env::var("BARBICAN_USER_HEADER")
+                .ok()
+                .filter(|h| !h.trim().is_empty())
+        });
+    let parsed = || {
+        trusted
+            .iter()
+            .map(|t| t.parse().map_err(|e| format!("--trusted-proxy {t:?}: {e}")))
+            .collect::<Result<Vec<_>, String>>()
+            .and_then(|nets| proxy::Gate::new(nets, header.as_deref()))
+    };
+    // Development builds alone can do without a trusted proxy: release builds don't have this path at all.
+    #[cfg(debug_assertions)]
+    let gate = if args.contains("--insecure-no-trusted-proxy") {
+        Ok(proxy::Gate::insecure_for_development())
+    } else {
+        parsed()
+    };
+    #[cfg(not(debug_assertions))]
+    let gate = parsed();
+    let gate = match gate {
+        Ok(gate) => gate,
+        Err(e) => {
+            let _ = writeln!(std::io::stderr(), "{e}");
+            return ExitCode::FAILURE;
+        }
+    };
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     tracing_subscriber::fmt()
@@ -285,7 +333,7 @@ fn proxy_command(mut args: pico_args::Arguments) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match runtime.block_on(proxy::run(socket, listen)) {
+    match runtime.block_on(proxy::run(socket, listen, gate)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             tracing::error!("{e}");

@@ -64,11 +64,15 @@ impl Default for Database {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Ui {
-    /// A TCP address to serve the UI on.
-    pub listen: Option<SocketAddr>,
-    /// A unix socket to serve the UI's API on instead, for `barbican ui-proxy` in a container (or any proxy).
+    /// Gone: the UI was once served on a TCP address too, which any program on the host could use. Only kept to
+    /// say so when a configuration still has it.
+    #[serde(default)]
+    listen: Option<toml::Value>,
+    /// The unix socket the UI and its API are served on, for `barbican ui-proxy` in a container (or another proxy
+    /// that authenticates its users). The only way to control the agent.
     pub socket: Option<PathBuf>,
-    /// The group the socket belongs to (mode 0660): who may use the UI. By default the agent's own.
+    /// The group the socket belongs to (mode 0660): who may use the UI, besides root and the agent's own user. Every
+    /// connection is checked against the peer's credentials too. By default the agent's own group.
     pub socket_group: Option<String>,
 }
 
@@ -270,12 +274,21 @@ impl Config {
                 )));
             }
         }
-        if let Some(ui) = &self.ui
-            && ui.listen.is_some() == ui.socket.is_some()
-        {
-            return Err(Error::Invalid(
-                "ui: set either `listen` or `socket`".to_owned(),
-            ));
+        if let Some(ui) = &self.ui {
+            if ui.listen.is_some() {
+                return Err(Error::Invalid(
+                    "ui.listen is no longer supported: on a TCP address any program on the host could control the \
+                     agent. Serve the UI on a unix socket (ui.socket, with ui.socket_group) and run `barbican \
+                     ui-proxy` in front of it, behind an authenticating proxy: \
+                     https://barbican.arhipov.net/guides/ui/"
+                        .to_owned(),
+                ));
+            }
+            if ui.socket.is_none() {
+                return Err(Error::Invalid(
+                    "ui: `socket` is required (the unix socket the UI is served on)".to_owned(),
+                ));
+            }
         }
         if let Some(edge) = &self.edge {
             if edge.cert.is_some() != edge.key.is_some() {
@@ -412,6 +425,18 @@ mod tests {
         assert_eq!(ui.socket_group.as_deref(), Some("barbican-ui"));
         assert!(parse("[ui]\n").is_err());
         assert!(parse("[ui]\nlisten = \"127.0.0.1:1\"\nsocket = \"/x\"\n").is_err());
+    }
+
+    #[test]
+    fn the_ui_on_a_tcp_address_is_refused_with_where_to_go() {
+        let Err(Error::Invalid(message)) = parse("[ui]\nlisten = \"127.0.0.1:7381\"\n") else {
+            panic!("ui.listen must be refused");
+        };
+        assert!(
+            message.contains("ui.socket") && message.contains("ui-proxy"),
+            "{message}"
+        );
+        assert!(parse("[ui]\nsocket_group = \"barbican-ui\"\n").is_err());
     }
 
     #[test]

@@ -433,22 +433,16 @@ pub async fn run(config: Config, dry_run: bool) -> Result<(), String> {
                 .route("/healthz", get(|| async { "ok" }))
                 .fallback(crate::web::serve)
                 .with_state(app);
-            match (ui.listen, &ui.socket) {
-                (Some(address), _) => {
-                    let listener = bind(address, "UI").await;
-                    axum::serve(listener, router)
-                        .await
-                        .map_err(|e| e.to_string())
-                }
-                (None, Some(path)) => {
-                    let listener = bind_socket(path, ui.socket_group.as_deref())?;
-                    tracing::info!(socket = %path.display(), "UI listening");
-                    axum::serve(listener, router)
-                        .await
-                        .map_err(|e| e.to_string())
-                }
-                (None, None) => Ok(()),
-            }
+            let Some(path) = &ui.socket else {
+                return Ok(());
+            };
+            let listener = bind_socket(path, ui.socket_group.as_deref())?;
+            // Only root, the agent's user and the socket's group: checked on every connection (see `peer`).
+            let allowed = crate::peer::Allowed::of(path).map_err(|e| format!("{}: {e}", path.display()))?;
+            tracing::info!(socket = %path.display(), uid = allowed.uid, gid = allowed.gid, "UI listening");
+            axum::serve(crate::peer::CheckedListener::new(listener, allowed), router)
+                .await
+                .map_err(|e| e.to_string())
         });
     }
 

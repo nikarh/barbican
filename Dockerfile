@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # The UI in a container: `barbican ui-proxy` serves it and passes its API to an agent on the host, through the unix
-# socket the agent's `ui.socket` makes (see https://barbican.arhipov.net/guides/reverse-proxy/#the-ui-in-a-container).
+# socket the agent's `ui.socket` makes (see https://barbican.arhipov.net/guides/reverse-proxy/#the-ui-container).
 # The agent itself runs on the host, not in here.
 
 # The frontend is the same for every architecture: build it once, natively.

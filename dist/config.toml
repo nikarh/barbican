@@ -7,11 +7,13 @@ path = "/var/lib/barbican/barbican.db"
 
 # The web UI. It has no login of its own: listen on localhost (or a Docker bridge address) and put it behind
 # a reverse proxy with authentication.
+# The UI and its API: full control over the agent, so only on a unix socket. Every connection is checked against the
+# peer's credentials: root, the agent's own user, and members of socket_group (as primary or supplementary group).
+# `barbican ui-proxy` (the ghcr.io/nikarh/barbican image) serves it to browsers, behind an authenticating proxy:
+# https://barbican.arhipov.net/guides/ui/
 [ui]
-listen = "127.0.0.1:7381"
-# Or, for the UI in a container (the ghcr.io/nikarh/barbican image), a unix socket only members of a group may use:
-# socket = "/run/barbican-ui/ui.sock"
-# socket_group = "barbican-ui"
+socket = "/run/barbican-ui/ui.sock"
+socket_group = "barbican-ui"
 
 # The API edge agents (barbican-edge, on a router) follow, over TLS only. Each edge agent has its own token, and
 # pins this agent's certificate by its fingerprint (barbican edge-fingerprint prints it). Without cert and key, a
