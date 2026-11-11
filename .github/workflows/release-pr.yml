@@ -17,6 +17,8 @@ on:
           - patch
           - minor
           - major
+          # The version Cargo.toml has, as it is: for the first release.
+          - current
 
 jobs:
   release-pr:
