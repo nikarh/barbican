@@ -227,7 +227,39 @@ export class RpcClient {
     if (this.connection.state !== 'closed') return
     if (this.retryTimer !== null) window.clearTimeout(this.retryTimer)
     this.retryTimer = null
-    this.connect()
+    void this.reconnect()
+  }
+
+  /** Opens a new WebSocket once plain HTTP shows the agent answers; until then asks again, backing off.
+   *
+   * A WebSocket that fails makes Firefox hold back the next ones to the same address, longer after each failure (up
+   * to a minute) and in every tab: a page left open while the session expired would otherwise retry into 401s, and
+   * the page opened after signing in again would wait seconds for its socket. Plain requests don't count. */
+  private async reconnect(): Promise<void> {
+    this.diagnosis += 1
+    const diagnosis = this.diagnosis
+    const problem = await this.diagnose()
+    if (diagnosis !== this.diagnosis || this.leaving || this.connection.state !== 'closed') return
+    if (problem.kind === 'answers') {
+      this.connect()
+      return
+    }
+    const delay = this.backoff()
+    this.update({
+      failures: this.connection.failures + 1,
+      retryAt: Date.now() + delay,
+      problem,
+    })
+    this.retryTimer = window.setTimeout(() => {
+      this.retryTimer = null
+      void this.reconnect()
+    }, delay)
+  }
+
+  private backoff(): number {
+    const delay = Math.min(MAX_BACKOFF_MS, 500 * 2 ** this.attempt)
+    this.attempt += 1
+    return delay
   }
 
   private connect(early: WebSocket | null = null): void {
@@ -277,8 +309,7 @@ export class RpcClient {
       if (this.socket !== socket) return
       this.socket = null
       if (this.leaving) return
-      const delay = Math.min(MAX_BACKOFF_MS, 500 * 2 ** this.attempt)
-      this.attempt += 1
+      const delay = this.backoff()
       const { state, failures, lostAt } = this.connection
       this.update({
         state: 'closed',
@@ -305,7 +336,7 @@ export class RpcClient {
       }
       this.retryTimer = window.setTimeout(() => {
         this.retryTimer = null
-        this.connect()
+        void this.reconnect()
       }, delay)
     })
   }

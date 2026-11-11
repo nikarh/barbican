@@ -11,7 +11,9 @@ export type Problem =
   | { kind: 'answers' }
   /** Something in front of Barbican answered with an error status. */
   | { kind: 'gateway'; status: number }
-  /** Something answered that isn't Barbican: a sign-in page, say. */
+  /** The authenticating proxy in front wants a sign-in: it redirected, or answered 401. */
+  | { kind: 'signin' }
+  /** Something answered that isn't Barbican. */
   | { kind: 'foreign' }
   /** Nothing answers at all. */
   | { kind: 'server' }
@@ -27,10 +29,15 @@ export async function diagnose(base: string): Promise<Problem> {
   try {
     response = await fetch(`${base}api/proxy`, {
       cache: 'no-store',
+      // A redirect is a sign-in page elsewhere: followed, it would fail as a cross-origin request.
+      redirect: 'manual',
       signal: AbortSignal.timeout(TIMEOUT_MS),
     })
   } catch {
     return { kind: 'server' }
+  }
+  if (response.type === 'opaqueredirect' || response.status === 401) {
+    return { kind: 'signin' }
   }
   // The agent's own 404: there is no proxy, and the agent answers.
   if (response.status === 404) return { kind: 'answers' }
