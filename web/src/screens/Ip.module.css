@@ -1,3 +1,15 @@
+/* An address of any length wraps where it has to (a long IPv6 one on a phone). */
+.address {
+  overflow-wrap: anywhere;
+}
+
+/* The phone's header: tight lines. */
+.head {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
 /* The open tab's grid takes what the page leaves below the tabs. */
 .panels {
   flex: 1 0 auto;

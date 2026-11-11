@@ -1,4 +1,15 @@
-import { Alert, Anchor, Badge, Button, Group, Stack, Tabs, Text, Title } from '@mantine/core'
+import {
+  ActionIcon,
+  Alert,
+  Anchor,
+  Badge,
+  Button,
+  Group,
+  Stack,
+  Tabs,
+  Text,
+  Title,
+} from '@mantine/core'
 import { IconArrowLeft } from '@tabler/icons-react'
 import { useCallback, useMemo, useState } from 'react'
 
@@ -181,6 +192,7 @@ export function IpScreen({ ip, tab }: { ip: string; tab: string | null }) {
   const lift = useAction('ban.lift', 'Ban lifted')
   const allow = useAction('entry.save', 'Saved')
   const untrust = useAction('trust.remove', 'No longer trusted')
+  const phone = useTier() === 'phone'
   const back = (
     <Anchor href={href('addresses')} fz={13}>
       <Group gap={4}>
@@ -198,88 +210,161 @@ export function IpScreen({ ip, tab }: { ip: string; tab: string | null }) {
   const d = detail.data
   if (!d) return back
   const current = tab === 'bans' ? 'bans' : 'activity'
+  const where = (
+    <>
+      <Country code={d.country} name />
+      {d.asn !== null && (
+        <>
+          {' · '}AS{d.asn} {d.asName}
+        </>
+      )}
+    </>
+  )
+  const seen =
+    d.firstSeen === null
+      ? 'Never seen doing anything a rule matched'
+      : `${count(d.hits)} hits · first seen ${dateTime(d.firstSeen)} · last ${ago(d.lastSeen, now)}`
+  const badgeSize = phone ? 'sm' : 'md'
+  const badges = (
+    <>
+      {d.activeBan && (
+        <Badge color="brass" variant="filled" size={badgeSize}>
+          Banned, {remaining(d.activeBan.until, now)}
+        </Badge>
+      )}
+      {d.trusted && (
+        <Badge color="green" size={badgeSize}>
+          Trusted: {d.trusted.user}
+        </Badge>
+      )}
+      {d.allowed && (
+        <Badge color="blue" size={badgeSize}>
+          Allowed
+        </Badge>
+      )}
+      {d.denied && (
+        <Badge color="red" size={badgeSize}>
+          On the deny list
+        </Badge>
+      )}
+      {d.countryBlocked && (
+        <Badge color="orange" size={badgeSize}>
+          Country blocked
+        </Badge>
+      )}
+      {d.listed.map((l) => (
+        <Badge key={l} color="gray" size={badgeSize}>
+          Listed: {l}
+        </Badge>
+      ))}
+    </>
+  )
+  const buttonSize = phone ? 'compact-sm' : 'sm'
+  const actions = (
+    <>
+      {d.activeBan ? (
+        <Button
+          variant="default"
+          size={buttonSize}
+          loading={lift.isPending}
+          onClick={() => {
+            if (d.activeBan) lift.mutate({ id: d.activeBan.id })
+          }}
+        >
+          Lift the ban
+        </Button>
+      ) : (
+        <Button
+          size={buttonSize}
+          onClick={() => {
+            setBanning(true)
+          }}
+        >
+          Ban
+        </Button>
+      )}
+      {!d.allowed && (
+        <Button
+          variant="default"
+          size={buttonSize}
+          loading={allow.isPending}
+          onClick={() => {
+            allow.mutate({ net: d.ip, allow: true, note: '', secs: null })
+          }}
+        >
+          Allow
+        </Button>
+      )}
+      {d.trusted && (
+        <Button
+          variant="subtle"
+          color="gray"
+          size={buttonSize}
+          onClick={() => {
+            untrust.mutate({ ip: d.ip })
+          }}
+        >
+          Stop trusting
+        </Button>
+      )}
+    </>
+  )
   return (
-    <Stack gap="md" className="fill">
-      {back}
-      <Group justify="space-between" align="flex-start">
-        <div>
-          <Title order={2} className="mono" fz={26}>
-            {d.ip}
-          </Title>
-          <Text c="var(--ink-dim)" fz={14}>
-            <Country code={d.country} name />
-            {d.asn !== null && (
-              <>
-                {' · '}AS{d.asn} {d.asName}
-              </>
-            )}
-          </Text>
-          <Text c="var(--ink-faint)" fz={12.5} mt={2}>
-            {d.firstSeen === null
-              ? 'Never seen doing anything a rule matched'
-              : `${count(d.hits)} hits · first seen ${dateTime(d.firstSeen)} · last ${ago(d.lastSeen, now)}`}
-          </Text>
-          <Group gap={6} mt={8}>
-            {d.activeBan && (
-              <Badge color="brass" variant="filled">
-                Banned, {remaining(d.activeBan.until, now)}
-              </Badge>
-            )}
-            {d.trusted && <Badge color="green">Trusted: {d.trusted.user}</Badge>}
-            {d.allowed && <Badge color="blue">Allowed</Badge>}
-            {d.denied && <Badge color="red">On the deny list</Badge>}
-            {d.countryBlocked && <Badge color="orange">Country blocked</Badge>}
-            {d.listed.map((l) => (
-              <Badge key={l} color="gray">
-                Listed: {l}
-              </Badge>
-            ))}
-          </Group>
-        </div>
-        <Group gap="xs">
-          {d.activeBan ? (
-            <Button
-              variant="default"
-              loading={lift.isPending}
-              onClick={() => {
-                if (d.activeBan) lift.mutate({ id: d.activeBan.id })
-              }}
-            >
-              Lift the ban
-            </Button>
-          ) : (
-            <Button
-              onClick={() => {
-                setBanning(true)
-              }}
-            >
-              Ban
-            </Button>
-          )}
-          {!d.allowed && (
-            <Button
-              variant="default"
-              loading={allow.isPending}
-              onClick={() => {
-                allow.mutate({ net: d.ip, allow: true, note: '', secs: null })
-              }}
-            >
-              Allow
-            </Button>
-          )}
-          {d.trusted && (
-            <Button
+    <Stack gap={phone ? 8 : 'md'} className="fill">
+      {phone ? (
+        // On a phone, the grid gets the height: the address in a line with the way back, the facts in small
+        // lines, and the states and actions in one that wraps.
+        <div className={classes.head}>
+          <Group gap={4} wrap="nowrap" align="center">
+            <ActionIcon
+              component="a"
+              href={href('addresses')}
+              aria-label="Addresses"
               variant="subtle"
               color="gray"
-              onClick={() => {
-                untrust.mutate({ ip: d.ip })
-              }}
+              ml={-6}
             >
-              Stop trusting
-            </Button>
-          )}
-        </Group>
-      </Group>
+              <IconArrowLeft size={18} />
+            </ActionIcon>
+            <Title order={2} className={['mono', classes.address].join(' ')} fz={18}>
+              {d.ip}
+            </Title>
+          </Group>
+          <Text c="var(--ink-dim)" fz={13} truncate>
+            {where}
+          </Text>
+          <Text c="var(--ink-faint)" fz={12}>
+            {seen}
+          </Text>
+          <Group gap={6} mt={4} align="center">
+            {badges}
+            <Group gap={6} ml="auto">
+              {actions}
+            </Group>
+          </Group>
+        </div>
+      ) : (
+        <>
+          {back}
+          <Group justify="space-between" align="flex-start">
+            <div>
+              <Title order={2} className={['mono', classes.address].join(' ')} fz={26}>
+                {d.ip}
+              </Title>
+              <Text c="var(--ink-dim)" fz={14}>
+                {where}
+              </Text>
+              <Text c="var(--ink-faint)" fz={12.5} mt={2}>
+                {seen}
+              </Text>
+              <Group gap={6} mt={8}>
+                {badges}
+              </Group>
+            </div>
+            <Group gap="xs">{actions}</Group>
+          </Group>
+        </>
+      )}
 
       <Tabs
         id="address"
