@@ -2,7 +2,7 @@
 	"luci-app-barbican": {
 		"description": "Grant access to barbican-edge",
 		"read": {
-			"file": { "/var/run/barbican-edge.json": [ "read" ] },
+			"file": { "/var/run/barbican-edge.json": [ "read" ], "/tmp/run/barbican-edge.json": [ "read" ] },
 			"uci": [ "barbican" ]
 		},
 		"write": {
