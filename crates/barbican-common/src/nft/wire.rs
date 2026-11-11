@@ -8,7 +8,7 @@
 
 use std::net::IpAddr;
 
-use crate::net::Net;
+use crate::net::{Family, Net, Range};
 
 pub const NFNL_SUBSYS_NFTABLES: u16 = 10;
 const NFNL_MSG_BATCH_BEGIN: u16 = 16;
@@ -176,67 +176,52 @@ impl Elem {
     }
 }
 
-/// The elements of `net` in an interval set, as nft makes them: the first address (with the timeout), and the
-/// one after the last flagged as the end, unless the prefix reaches the top of the address space.
+/// The elements of `net` in an interval set, as nft makes them: see [`range`].
 #[must_use]
 pub fn interval(net: &Net, timeout_ms: Option<u64>) -> (Elem, Option<Elem>) {
-    let first = Key::of(net.addr());
-    let bits = u32::from(first.len) * 8;
-    let host_bits = bits - u32::from(net.prefix_len());
-    let mask = if host_bits >= 128 {
-        u128::MAX
-    } else {
-        (1u128 << host_bits) - 1
-    };
-    let last = first.to_u128() | mask;
-    let top = if bits >= 128 {
-        u128::MAX
-    } else {
-        (1u128 << bits) - 1
-    };
-    let mut start = Elem::key(first);
+    range(&Range::of(net), timeout_ms)
+}
+
+/// The elements of a range in an interval set, as nft makes them: the first address (with the timeout), and the
+/// one after the last flagged as the end; or, when the range reaches the top of the address space (which has no
+/// address after it), the first alone, flagged open.
+#[must_use]
+pub fn range(range: &Range, timeout_ms: Option<u64>) -> (Elem, Option<Elem>) {
+    let family = range.family();
+    let len = key_len(family);
+    let (first, last) = range.bounds();
+    let mut start = Elem::key(Key::from_u128(len, first));
     start.timeout_ms = timeout_ms;
-    if last == top {
+    if last == family.top() {
         start.open = true;
         return (start, None);
     }
-    let mut end = Elem::key(Key::from_u128(first.len, last + 1));
+    let mut end = Elem::key(Key::from_u128(len, last + 1));
     end.end = true;
     (start, Some(end))
 }
 
-/// The prefix (or else the range, first and last address) that the interval `[first, end)` is, `end` being
-/// `None` for the top of the address space.
-pub fn interval_net(first: Key, end: Option<Key>) -> Result<Net, (IpAddr, IpAddr)> {
-    let bits = u32::from(first.len) * 8;
-    let top = if bits >= 128 {
-        u128::MAX
-    } else {
-        (1u128 << bits) - 1
+fn key_len(family: Family) -> u8 {
+    match family {
+        Family::V4 => 4,
+        Family::V6 => 16,
+    }
+}
+
+/// The range that the interval `[first, end)` is, `end` being `None` for the top of the address space. `None` for
+/// an end that isn't after the first, or of another size.
+#[must_use]
+pub fn interval_range(first: Key, end: Option<Key>) -> Option<Range> {
+    let family = match first.len {
+        4 => Family::V4,
+        _ => Family::V6,
     };
-    let start = first.to_u128();
-    let last = end.map_or(top, |e| e.to_u128().wrapping_sub(1));
-    let range = || (first.ip(), Key::from_u128(first.len, last).ip());
-    if last < start {
-        return Err(range());
-    }
-    let size = last - start;
-    // A prefix: the size is 2^k - 1 and the start is aligned to it.
-    if size.checked_add(1).is_some_and(|s| !s.is_power_of_two()) || start & size != 0 {
-        return Err(range());
-    }
-    let host_bits = if size == u128::MAX {
-        128
-    } else {
-        (size + 1).trailing_zeros()
+    let last = match end {
+        None => family.top(),
+        Some(e) if e.len == first.len => e.to_u128().checked_sub(1)?,
+        Some(_) => return None,
     };
-    let len = u8::try_from(bits - host_bits).map_err(|_| range())?;
-    let net = Net::prefix(first.ip(), len);
-    if len > 0 && Key::of(net.addr()) == first {
-        Ok(net)
-    } else {
-        Err(range())
-    }
+    Range::from_bounds(family, first.to_u128(), last)
 }
 
 /// Netlink messages being written into one buffer.
@@ -884,20 +869,78 @@ pub mod tests {
         let (start, end) = interval(&net("ffff:ffff::/32"), None);
         assert!(start.open && end.is_none());
 
+        // The last address before the top ends at the top.
+        let (_, end) = interval(&net("255.255.255.254"), None);
+        assert_eq!(end.unwrap().key, addr("255.255.255.255"));
+
+        let range = |s: &str| s.parse::<Range>().unwrap();
         assert_eq!(
-            interval_net(addr("198.51.100.0"), Some(addr("198.51.100.128"))),
-            Ok(net("198.51.100.0/25"))
+            interval_range(addr("198.51.100.0"), Some(addr("198.51.100.128"))),
+            Some(range("198.51.100.0/25"))
         );
         assert_eq!(
-            interval_net(addr("240.0.0.0"), None),
-            Ok(net("240.0.0.0/4"))
+            interval_range(addr("240.0.0.0"), None),
+            Some(range("240.0.0.0/4"))
         );
         assert_eq!(
-            interval_net(addr("192.0.2.5"), Some(addr("192.0.2.6"))),
-            Ok(net("192.0.2.5"))
+            interval_range(addr("ff00::"), None),
+            Some(range("ff00::/8"))
         );
-        assert!(interval_net(addr("192.0.2.10"), Some(addr("192.0.2.21"))).is_err());
-        assert!(interval_net(addr("192.0.2.1"), Some(addr("192.0.2.3"))).is_err());
+        assert_eq!(
+            interval_range(addr("192.0.2.5"), Some(addr("192.0.2.6"))),
+            Some(range("192.0.2.5"))
+        );
+        assert_eq!(
+            interval_range(addr("192.0.2.10"), Some(addr("192.0.2.21"))),
+            Some(range("192.0.2.10-192.0.2.20"))
+        );
+        assert_eq!(
+            interval_range(addr("192.0.2.1"), Some(addr("192.0.2.1"))),
+            None
+        );
+        assert_eq!(
+            interval_range(addr("192.0.2.1"), Some(addr("0.0.0.0"))),
+            None
+        );
+        assert_eq!(
+            interval_range(addr("192.0.2.1"), Some(addr("2001:db8::"))),
+            None
+        );
+    }
+
+    #[test]
+    fn ranges_as_nft_sends_them() {
+        let range = |s: &str| s.parse::<Range>().unwrap();
+        // `nft add element inet T list4 { 192.0.2.10-192.0.2.20 }`: the set not empty, a start and an end.
+        let (start, end) = super::range(&range("192.0.2.10-192.0.2.20"), None);
+        assert_eq!(
+            (start.key, start.end, start.open),
+            (addr("192.0.2.10"), false, false)
+        );
+        let end = end.unwrap();
+        assert_eq!((end.key, end.end), (addr("192.0.2.21"), true));
+        // Up to the top: no end, open, as for a prefix up to the top.
+        let (start, end) = super::range(&range("250.0.0.0-255.255.255.255"), None);
+        assert!(start.open && end.is_none());
+        let (start, end) = super::range(
+            &range("ffff::1-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"),
+            Some(5),
+        );
+        assert!(start.open && end.is_none() && start.timeout_ms == Some(5));
+        // A prefix as a range is the prefix.
+        assert_eq!(
+            super::range(&range("198.51.100.0-198.51.100.127"), Some(600_000)),
+            interval(&net("198.51.100.0/25"), Some(600_000))
+        );
+        let ours = batch(|w| {
+            w.elements(
+                true,
+                "T",
+                "list4",
+                &[super::range(&range("240.0.0.0-255.255.255.255"), None)],
+            );
+        });
+        assert_eq!(ours, as_barbican(&hex(TOP4)));
     }
 
     /// A dump of `net4` holding 198.51.100.0/25 (timeout 600 s, 599.936 s left) and the end at 0.0.0.0 nft

@@ -11,6 +11,11 @@
 //!    whose elements carry their remaining time, so the kernel lifts a ban on time even when no agent runs;
 //! 4. sources in the list sets (countries, blocklists) are dropped.
 //!
+//! The list sets hold address ranges, not the prefixes the lists are made of: an interval set keeps any range as
+//! one element (two keys, its first address and the one after its last), as much kernel memory as one prefix, and a
+//! run of adjacent prefixes that is no prefix itself (`192.0.2.0/24` and `192.0.3.0/24` and `192.0.4.0/24`) is
+//! one range. Countries' prefixes merge into about half as many ranges. The same addresses are dropped either way.
+//!
 //! The table and its chain are made with the `nft` program. Elements are changed over netlink, straight in the
 //! kernel's `nf_tables`: `nft` reads every element of every set into its cache before it changes anything, which takes
 //! seconds once a list set holds hundreds of thousands of prefixes. Over netlink a change is one small
@@ -23,9 +28,10 @@
 //! the generation alone (one small request), so checking every minute costs next to nothing, and a restart, a
 //! flushed ruleset or a hand-edited set is corrected within that minute.
 //!
-//! The list sets are never read back as a rule: they change by the difference to what was written last, and a set
-//! of one element (`lists_version`, written in the same transaction) tells after a restart whether they hold the
-//! wanted version already.
+//! The list sets are never read back as a rule: they change by the difference (in ranges) to what was written
+//! last, and a set of one element (`lists_version`, written in the same transaction) tells after a restart whether
+//! they hold the wanted version already. When they hold something else (another version, or what a version that
+//! loaded prefixes wrote), they are read back once and changed by the difference to that.
 //!
 //! When netlink fails (an unexpected kernel), everything goes through `nft` as before: reads with `nft -j list set`
 //! on each reconcile, changes as an `nft -f` script.
@@ -44,7 +50,7 @@ use serde_json::Value;
 
 pub use kernel::Kernel;
 
-use crate::net::{Family, Net, collapse};
+use crate::net::{Family, Net, Range, collapse, ranges};
 
 /// The version of the table's layout, in its comment. A table with another layout is replaced.
 const LAYOUT: &str = "barbican layout 1";
@@ -205,7 +211,8 @@ pub struct Desired {
     pub allow: Vec<Net>,
     pub block: Vec<Block>,
     /// Countries and blocklists, all in one: replaced as a whole when `lists_version` changes. Shared, since it
-    /// can be large and changes rarely.
+    /// can be large and changes rarely. Sorted by address and without overlaps, as [`crate::net::aggregate`]
+    /// makes them, they turn into the list sets' ranges in one pass (they are sorted first otherwise).
     pub lists: Arc<Vec<Net>>,
     /// Identifies the content of `lists`, e.g. a hash of it.
     pub lists_version: String,
@@ -295,9 +302,12 @@ fn saddr(family: Family) -> &'static str {
 /// What identifies an element of a set.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum Key {
-    /// An address or a prefix: what barbican puts in.
+    /// An address or a prefix: what barbican puts in the ban and allow sets.
     Net(Net),
-    /// Anything else (a range someone else added), as `nft -j` writes it: removed by `nft`.
+    /// A range that is no prefix: what barbican puts in the list sets (along with ranges that are prefixes, which
+    /// are read back as [`Self::Net`]).
+    Range(Range),
+    /// Anything else, as `nft -j` writes it: removed by `nft`.
     Text(String),
     /// Anything else, as the kernel's elements (key, interval end): removed over netlink.
     Raw(Vec<(wire::Key, bool)>),
@@ -308,6 +318,7 @@ impl Key {
     fn text(&self) -> Option<String> {
         match self {
             Self::Net(net) => Some(net.to_string()),
+            Self::Range(range) => Some(range.to_string()),
             Self::Text(text) => Some(text.clone()),
             Self::Raw(_) => None,
         }
@@ -337,6 +348,8 @@ type Model = HashMap<(Set, Family), Have>;
 struct SetChanges {
     remove: Vec<Key>,
     add: Vec<(Net, Option<u64>)>,
+    /// Ranges to add (list sets), after `add`.
+    ranges: Vec<Range>,
     /// Emptied first (list sets).
     flush: bool,
 }
@@ -357,7 +370,8 @@ impl Plan {
 
 /// The set holding one element: a hash of the version of what the list sets hold, written in the same transaction
 /// as they are. Reading a large set back takes seconds; this tells whether it holds what it should already (after
-/// a restart), so that it isn't filled again.
+/// a restart), so that it isn't filled again. It tells how they were loaded too ([`loaded_mark`]): sets loaded
+/// otherwise (as prefixes, by an older version) don't hold the elements a difference would be taken from.
 const LISTS_MARK: &str = "lists_version";
 
 /// The version of lists read back: no real one.
@@ -370,13 +384,10 @@ fn lists_mark(version: &str) -> u32 {
     })
 }
 
-/// The mark of a version of the lists as loaded: without IPv6, the same lists load otherwise.
+/// The mark of a version of the lists as loaded: as ranges, and without IPv6 the same lists load otherwise.
 fn loaded_mark(version: &str, ipv6: bool) -> u32 {
-    if ipv6 {
-        lists_mark(version)
-    } else {
-        lists_mark(&format!("{version} without IPv6"))
-    }
+    let ipv6 = if ipv6 { "" } else { " without IPv6" };
+    lists_mark(&format!("{version} as ranges{ipv6}"))
 }
 
 /// The prefixes of a family that go into its list set: none of IPv6 when it is off.
@@ -388,39 +399,60 @@ fn listed(lists: &[Net], family: Family, ipv6: bool) -> impl Iterator<Item = Net
         .copied()
 }
 
-/// What is in `new` and not in `old`, and what is in `old` and not in `new`, both sorted.
-fn list_diff(old: &[Net], new: &[Net], family: Family, ipv6: bool) -> (Vec<Net>, Vec<Net>) {
-    let sorted = |l: &[Net]| {
-        let mut v: Vec<Net> = listed(l, family, ipv6).collect();
-        v.sort_unstable();
-        v.dedup();
-        v
-    };
-    let (old, new) = (sorted(old), sorted(new));
+/// The ranges of a family's list set: its prefixes in the lists, merged.
+fn list_ranges(lists: &[Net], family: Family, ipv6: bool) -> Vec<Range> {
+    ranges(listed(lists, family, ipv6))
+}
+
+/// What is in `new` and not in `old`, and what is in `old` and not in `new`: one pass over both, sorted.
+fn list_diff(old: &[Range], new: &[Range]) -> (Vec<Range>, Vec<Range>) {
     let (mut add, mut remove) = (Vec::new(), Vec::new());
-    let (mut i, mut j) = (0, 0);
+    let (mut old, mut new) = (old.iter().peekable(), new.iter().peekable());
     loop {
-        match (old.get(i), new.get(j)) {
+        match (old.peek(), new.peek()) {
             (Some(o), Some(n)) if o == n => {
-                i += 1;
-                j += 1;
+                old.next();
+                new.next();
             }
             (Some(o), Some(n)) if o < n => {
-                remove.push(*o);
-                i += 1;
+                remove.push(**o);
+                old.next();
             }
             (_, Some(n)) => {
-                add.push(*n);
-                j += 1;
+                add.push(**n);
+                new.next();
             }
             (Some(o), None) => {
-                remove.push(*o);
-                i += 1;
+                remove.push(**o);
+                old.next();
             }
             (None, None) => break,
         }
     }
     (add, remove)
+}
+
+/// What the list sets hold, as far as this process knows.
+#[derive(Debug, Clone)]
+enum Loaded {
+    /// The ranges of these lists, as written by this process.
+    Lists(Arc<Vec<Net>>),
+    /// The elements read back from the kernel, sorted: whatever wrote them.
+    Elements(Vec<Range>),
+}
+
+impl Loaded {
+    /// The elements of a family's set.
+    fn ranges(&self, family: Family, ipv6: bool) -> Cow<'_, [Range]> {
+        match self {
+            Self::Lists(lists) => Cow::Owned(list_ranges(lists, family, ipv6)),
+            Self::Elements(elements) => {
+                let from = elements.partition_point(|r| r.family() < family);
+                let to = elements.partition_point(|r| r.family() <= family);
+                Cow::Borrowed(elements.get(from..to).unwrap_or(&[]))
+            }
+        }
+    }
 }
 
 /// The table and the way to change it.
@@ -429,7 +461,7 @@ pub struct Firewall<R: Runner> {
     table: String,
     priority: i32,
     /// The version and content the list sets hold, when known.
-    lists: Option<(String, Arc<Vec<Net>>)>,
+    lists: Option<(String, Loaded)>,
     /// What the kernel holds, while it is known (changes go over netlink, and nothing else committed since).
     model: Option<Model>,
     /// The last netlink failure reported, and one not reported yet.
@@ -641,7 +673,7 @@ impl<R: Runner> Firewall<R> {
                         SetChanges {
                             remove,
                             add,
-                            flush: false,
+                            ..SetChanges::default()
                         },
                     ));
                 }
@@ -651,24 +683,23 @@ impl<R: Runner> Firewall<R> {
         if applied.map(|(version, _)| version) != Some(&desired.lists_version) {
             for family in FAMILIES {
                 // From what they hold, only the difference; or else filled anew.
+                let new = list_ranges(&desired.lists, family, self.ipv6);
                 let set = match applied {
                     Some((_, old)) => {
-                        let (add, remove) = list_diff(old, &desired.lists, family, self.ipv6);
+                        let (add, remove) = list_diff(&old.ranges(family, self.ipv6), &new);
                         SetChanges {
-                            remove: remove.into_iter().map(Key::Net).collect(),
-                            add: add.into_iter().map(|n| (n, None)).collect(),
-                            flush: false,
+                            remove: remove.into_iter().map(Key::Range).collect(),
+                            ranges: add,
+                            ..SetChanges::default()
                         }
                     }
                     None => SetChanges {
-                        remove: Vec::new(),
-                        add: listed(&desired.lists, family, self.ipv6)
-                            .map(|n| (n, None))
-                            .collect(),
+                        ranges: new,
                         flush: true,
+                        ..SetChanges::default()
                     },
                 };
-                if set.flush || !set.add.is_empty() || !set.remove.is_empty() {
+                if set.flush || !set.ranges.is_empty() || !set.remove.is_empty() {
                     plan.sets.push(((Set::List, family), set));
                 }
             }
@@ -711,6 +742,7 @@ impl<R: Runner> Firewall<R> {
                 .add
                 .iter()
                 .map(|(net, remaining)| element(net, *remaining))
+                .chain(c.ranges.iter().map(Range::to_string))
                 .collect();
             for chunk in add.chunks(CHUNK) {
                 let _ = writeln!(
@@ -730,7 +762,10 @@ impl<R: Runner> Firewall<R> {
             self.runner.run(&script)?;
         }
         if changes.lists {
-            self.lists = Some((desired.lists_version.clone(), Arc::clone(&desired.lists)));
+            self.lists = Some((
+                desired.lists_version.clone(),
+                Loaded::Lists(Arc::clone(&desired.lists)),
+            ));
         }
         Ok(changes)
     }
@@ -811,16 +846,20 @@ impl<R: Runner> Firewall<R> {
                     .all(|(family, has)| *has == listed(lists, *family, ipv6).next().is_some())
         };
         self.lists = match self.lists.take() {
-            Some((version, lists)) if holds(&version, &lists) => Some((version, lists)),
-            _ if holds(&desired.lists_version, &desired.lists) => {
-                Some((desired.lists_version.clone(), Arc::clone(&desired.lists)))
+            Some((version, Loaded::Lists(lists))) if holds(&version, &lists) => {
+                Some((version, Loaded::Lists(lists)))
             }
+            _ if holds(&desired.lists_version, &desired.lists) => Some((
+                desired.lists_version.clone(),
+                Loaded::Lists(Arc::clone(&desired.lists)),
+            )),
             _ => None,
         };
-        // Lists of unknown content (written by an older version, or changed while not running) are read back, so
-        // that only the difference is written: replacing them as a whole, the kernel holds the old and the new
-        // elements and a record of each change until the end of the transaction, more memory than a small router
-        // has for a few hundred thousand prefixes. Slow (seconds), but only then.
+        // Lists of unknown content (written by an older version, as prefixes, or changed while not running) are
+        // read back, so that only the difference is written: replacing them as a whole, the kernel holds the old
+        // and the new elements and a record of each change until the end of the transaction, more memory than a
+        // small router has for a few hundred thousand prefixes. Slow (seconds), but only then. Each element is
+        // kept as it is (prefixes that the lists now make one range of are removed, and the range added).
         if self.lists.is_none() && has.iter().any(|(_, has)| *has) {
             let mut held = Vec::new();
             for (family, has) in &has {
@@ -829,13 +868,15 @@ impl<R: Runner> Firewall<R> {
                         self.netlink_elements(Set::List, *family)?
                             .into_iter()
                             .filter_map(|e| match e.key {
-                                Key::Net(net) => Some(net),
+                                Key::Net(net) => Some(Range::of(&net)),
+                                Key::Range(range) => Some(range),
                                 _ => None,
                             }),
                     );
                 }
             }
-            self.lists = Some((UNKNOWN_LISTS.to_owned(), Arc::new(held)));
+            held.sort_unstable();
+            self.lists = Some((UNKNOWN_LISTS.to_owned(), Loaded::Elements(held)));
         }
         Ok(model)
     }
@@ -878,7 +919,10 @@ impl<R: Runner> Firewall<R> {
         }
         self.model = Some(model);
         if changes.lists {
-            self.lists = Some((desired.lists_version.clone(), Arc::clone(&desired.lists)));
+            self.lists = Some((
+                desired.lists_version.clone(),
+                Loaded::Lists(Arc::clone(&desired.lists)),
+            ));
         }
         Ok(changes)
     }
@@ -932,6 +976,7 @@ fn elems(
             e.timeout_ms = timeout_ms;
             Some((e, None))
         }
+        Key::Range(range) if interval => Some(wire::range(range, timeout_ms)),
         Key::Raw(raw) => {
             let mut it = raw.iter().map(|(key, end)| {
                 let mut e = wire::Elem::key(*key);
@@ -940,7 +985,7 @@ fn elems(
             });
             Some((it.next()?, it.next()))
         }
-        Key::Text(_) => None,
+        Key::Range(_) | Key::Text(_) => None,
     }
 }
 
@@ -971,10 +1016,15 @@ fn batch(table: &str, plan: &Plan, seq: u32) -> Vec<u8> {
         w.elements(false, table, name, &remove);
         let mut add: Vec<_> = Vec::with_capacity(c.add.len() + 1);
         // Like nft, an interval set filled from empty starts with the end of an interval below the first one.
+        let first = c
+            .add
+            .first()
+            .map(|(net, _)| Range::of(net))
+            .or_else(|| c.ranges.first().copied());
         if c.flush
             && interval
-            && let Some((first, _)) = c.add.first()
-            && !first.addr().is_unspecified()
+            && let Some(first) = first
+            && first.bounds().0 != 0
         {
             let zero = match family {
                 Family::V4 => std::net::IpAddr::from([0u8; 4]),
@@ -989,6 +1039,7 @@ fn batch(table: &str, plan: &Plan, seq: u32) -> Vec<u8> {
                 .iter()
                 .filter_map(|(net, remaining)| elems(&Key::Net(*net), interval, *remaining)),
         );
+        add.extend(c.ranges.iter().map(|range| wire::range(range, None)));
         w.elements(true, table, name, &add);
     }
     if let Some(mark) = plan.lists {
@@ -1000,7 +1051,8 @@ fn batch(table: &str, plan: &Plan, seq: u32) -> Vec<u8> {
     w.into_bytes()
 }
 
-/// Elements from the kernel's: in an interval set, each start with the end after it.
+/// Elements from the kernel's: in an interval set, each start with the end after it, a prefix when it is one and a
+/// range otherwise.
 fn assemble(mut elems: Vec<wire::Elem>, interval: bool) -> Vec<Element> {
     let expires = |e: &wire::Elem| e.expires_ms.map(|ms| ms / 1000);
     if !interval {
@@ -1015,9 +1067,9 @@ fn assemble(mut elems: Vec<wire::Elem>, interval: bool) -> Vec<Element> {
     // Ascending; of a start and an end at the same address (adjacent intervals) the end first.
     elems.sort_by_key(|e| (e.key, !e.end));
     let range = |start: &wire::Elem, end: Option<&wire::Elem>| Element {
-        key: match wire::interval_net(start.key, end.map(|e| e.key)) {
-            Ok(net) => Key::Net(net),
-            Err(_) => Key::Raw(
+        key: match wire::interval_range(start.key, end.map(|e| e.key)) {
+            Some(range) => range.to_net().map_or(Key::Range(range), Key::Net),
+            None => Key::Raw(
                 std::iter::once((start.key, false))
                     .chain(end.map(|e| (e.key, true)))
                     .collect(),
@@ -1218,7 +1270,10 @@ fn parse_elements(json: &str) -> Result<Vec<Element>, Error> {
             };
             match element_key(value) {
                 Some(key) => out.push(Element {
-                    key: key.parse().map_or(Key::Text(key), Key::Net),
+                    key: match key.parse::<Range>() {
+                        Ok(range) => range.to_net().map_or(Key::Range(range), Key::Net),
+                        Err(_) => Key::Text(key),
+                    },
                     expires,
                 }),
                 None => return Err(Error::Output(format!("unknown set element {elem}"))),
@@ -1701,7 +1756,7 @@ mod tests {
                 ch(
                     ADD,
                     "lists_version",
-                    &std::net::IpAddr::from(lists_mark("v1").to_ne_bytes()).to_string()
+                    &std::net::IpAddr::from(loaded_mark("v1", true).to_ne_bytes()).to_string()
                 ),
             ]
         );
@@ -1745,10 +1800,14 @@ mod tests {
         assert_eq!(fake.nl.dumped.borrow().len(), 9);
     }
 
-    /// A dump of the mark set holding the mark of `version`.
+    /// A dump of the mark set holding the mark of `version`, loaded with IPv6.
     fn mark_dump(version: &str) -> Vec<u8> {
+        raw_mark_dump(loaded_mark(version, true))
+    }
+
+    fn raw_mark_dump(mark: u32) -> Vec<u8> {
         let mut w = wire::Writer::new(0);
-        let elem = wire::Elem::key(wire::Key::of_u32(lists_mark(version)));
+        let elem = wire::Elem::key(wire::Key::of_u32(mark));
         w.elements(true, "barbican", LISTS_MARK, &[(elem, None)]);
         w.into_bytes()
     }
@@ -1783,7 +1842,7 @@ mod tests {
         assert!(written.contains(&ch(ADD, "host4", "198.51.100.7")));
         assert!(written.contains(&ch(ADD, "list4", "203.0.113.0")));
         // The same lists loaded with IPv6 have another mark: a restart with it on fills them again.
-        assert_ne!(fw.mark("v1"), lists_mark("v1"));
+        assert_ne!(fw.mark("v1"), loaded_mark("v1", true));
     }
 
     #[test]
@@ -1815,6 +1874,344 @@ mod tests {
                 ch(ADD, "list4", "192.0.3.0 end"),
             ]
         );
+    }
+
+    fn range(s: &str) -> Range {
+        s.parse().unwrap()
+    }
+
+    /// Adjacent prefixes that are no prefix together, one alone, a run up to the top of IPv4, and an IPv6 run.
+    fn runs() -> Vec<Net> {
+        crate::net::aggregate(&[
+            net("192.0.2.0/24"),
+            net("192.0.3.0/24"),
+            net("192.0.4.0/24"),
+            net("198.51.100.0/25"),
+            net("250.0.0.0/7"),
+            net("252.0.0.0/6"),
+            net("2001:db8::/32"),
+            net("2001:db9::/32"),
+            net("2001:dba::/32"),
+        ])
+    }
+
+    #[test]
+    fn lists_load_as_ranges() {
+        let fake = WithNetlink::default();
+        let mut fw = Firewall::new(&fake, "barbican", -190);
+        let mut desired = Desired {
+            lists: Arc::new(runs()),
+            lists_version: "v1".to_owned(),
+            ..Desired::default()
+        };
+        fw.reconcile(&desired, 1_000).unwrap();
+        let lists: Vec<_> = changes_of(&fake.nl.batches.borrow()[0])
+            .into_iter()
+            .filter(|c| c.1 == "list4" || c.1 == "list6")
+            .collect();
+        assert_eq!(
+            lists,
+            [
+                ch(FLUSH, "list4", "flush"),
+                ch(ADD, "list4", "0.0.0.0 end"),
+                ch(ADD, "list4", "192.0.2.0"),
+                ch(ADD, "list4", "192.0.5.0 end"),
+                ch(ADD, "list4", "198.51.100.0"),
+                ch(ADD, "list4", "198.51.100.128 end"),
+                ch(ADD, "list4", "250.0.0.0 open"),
+                ch(FLUSH, "list6", "flush"),
+                ch(ADD, "list6", ":: end"),
+                ch(ADD, "list6", "2001:db8::"),
+                ch(ADD, "list6", "2001:dbb:: end"),
+            ]
+        );
+
+        // A prefix that joins a range: the range is replaced, the rest stays.
+        fake.nl.unchanged.set(true);
+        let mut lists = runs();
+        lists.push(net("192.0.5.0/24"));
+        desired.lists = Arc::new(crate::net::aggregate(&lists));
+        desired.lists_version = "v2".to_owned();
+        fw.reconcile(&desired, 1_000).unwrap();
+        let lists: Vec<_> = changes_of(&fake.nl.batches.borrow()[1])
+            .into_iter()
+            .filter(|c| c.1 == "list4" || c.1 == "list6")
+            .collect();
+        assert_eq!(
+            lists,
+            [
+                ch(DESTROY, "list4", "192.0.2.0"),
+                ch(DESTROY, "list4", "192.0.5.0 end"),
+                ch(ADD, "list4", "192.0.2.0"),
+                ch(ADD, "list4", "192.0.6.0 end"),
+            ]
+        );
+    }
+
+    #[test]
+    fn lists_load_as_ranges_with_nft() {
+        let fake = Fake::default();
+        let mut fw = Firewall::new(&fake, "barbican", -190);
+        let mut desired = Desired {
+            lists: Arc::new(runs()),
+            lists_version: "v1".to_owned(),
+            ..Desired::default()
+        };
+        fw.reconcile(&desired, 1_000).unwrap();
+        let script = fake.scripts.borrow()[0].clone();
+        assert!(
+            script.contains(
+                "flush set inet barbican list4\nadd element inet barbican list4 { 192.0.2.0-192.0.4.255, \
+                 198.51.100.0/25, 250.0.0.0-255.255.255.255 }\n"
+            ),
+            "{script}"
+        );
+        assert!(
+            script.contains(
+                "add element inet barbican list6 { 2001:db8::-2001:dba:ffff:ffff:ffff:ffff:ffff:ffff }\n"
+            ),
+            "{script}"
+        );
+        let mut lists = runs();
+        lists.push(net("192.0.5.0/24"));
+        desired.lists = Arc::new(crate::net::aggregate(&lists));
+        desired.lists_version = "v2".to_owned();
+        fw.reconcile(&desired, 1_000).unwrap();
+        let script = fake.scripts.borrow()[1].clone();
+        assert!(
+            script.contains(
+                "destroy element inet barbican list4 { 192.0.2.0-192.0.4.255 }\n\
+                 add element inet barbican list4 { 192.0.2.0-192.0.5.255 }\n"
+            ),
+            "{script}"
+        );
+        assert!(!script.contains("list6"), "{script}");
+    }
+
+    /// A dump of a list set holding these elements as nft writes them into an empty set.
+    fn list_dump(set: &str, elements: &[(wire::Elem, Option<wire::Elem>)]) -> Vec<u8> {
+        let mut w = wire::Writer::new(0);
+        let mut zero = wire::Elem::key(wire::Key::of("0.0.0.0".parse().unwrap()));
+        zero.end = true;
+        let mut all = vec![(zero, None)];
+        all.extend_from_slice(elements);
+        w.elements(true, "barbican", set, &all);
+        w.into_bytes()
+    }
+
+    #[test]
+    fn prefixes_loaded_by_an_older_version_become_ranges() {
+        let fake = WithNetlink::default();
+        // The same version of the lists, loaded as prefixes (and marked so) by an older version.
+        let lists = vec![
+            net("192.0.2.0/24"),
+            net("192.0.3.0/24"),
+            net("198.51.100.0/25"),
+        ];
+        let old: Vec<_> = lists.iter().map(|n| wire::interval(n, None)).collect();
+        fake.nl
+            .dumps
+            .borrow_mut()
+            .insert("list4".to_owned(), list_dump("list4", &old));
+        fake.nl
+            .dumps
+            .borrow_mut()
+            .insert(LISTS_MARK.to_owned(), raw_mark_dump(lists_mark("v1")));
+        let desired = Desired {
+            lists: Arc::new(lists),
+            lists_version: "v1".to_owned(),
+            ..Desired::default()
+        };
+        let mut fw = Firewall::new(&fake, "barbican", -190);
+        assert!(fw.reconcile(&desired, 1_000).unwrap().lists);
+        // Read back, and the two adjacent prefixes replaced by their range in one transaction; the third is the
+        // same element as a range and stays.
+        assert_eq!(
+            fake.nl
+                .dumped
+                .borrow()
+                .iter()
+                .filter(|s| *s == "list4")
+                .count(),
+            2
+        );
+        let lists: Vec<_> = changes_of(&fake.nl.batches.borrow()[0])
+            .into_iter()
+            .filter(|c| c.1.starts_with("list"))
+            .collect();
+        assert_eq!(
+            lists,
+            [
+                ch(DESTROY, "list4", "192.0.2.0"),
+                ch(DESTROY, "list4", "192.0.3.0 end"),
+                ch(DESTROY, "list4", "192.0.3.0"),
+                ch(DESTROY, "list4", "192.0.4.0 end"),
+                ch(ADD, "list4", "192.0.2.0"),
+                ch(ADD, "list4", "192.0.4.0 end"),
+                ch(FLUSH, "lists_version", "flush"),
+                ch(
+                    ADD,
+                    "lists_version",
+                    &std::net::IpAddr::from(loaded_mark("v1", true).to_ne_bytes()).to_string()
+                ),
+            ]
+        );
+        // From then on the mark says they are loaded.
+        fake.nl.dumps.borrow_mut().insert(
+            "list4".to_owned(),
+            list_dump(
+                "list4",
+                &[
+                    wire::range(&range("192.0.2.0-192.0.3.255"), None),
+                    wire::interval(&net("198.51.100.0/25"), None),
+                ],
+            ),
+        );
+        fake.nl
+            .dumps
+            .borrow_mut()
+            .insert(LISTS_MARK.to_owned(), mark_dump("v1"));
+        let mut fw = Firewall::new(&fake, "barbican", -190);
+        assert!(!fw.reconcile(&desired, 1_000).unwrap().lists);
+        assert_eq!(fake.nl.batches.borrow().len(), 1);
+    }
+
+    #[test]
+    fn list_ranges_diff() {
+        let r = |l: &[&str]| l.iter().map(|s| range(s)).collect::<Vec<_>>();
+        let old = r(&[
+            "192.0.2.0/24",
+            "198.51.100.0-198.51.100.191",
+            "203.0.113.9",
+            "240.0.0.0/4",
+        ]);
+        let new = r(&[
+            "192.0.2.0/24",
+            "198.51.100.0/24",
+            "203.0.113.0/24",
+            "240.0.0.0/4",
+        ]);
+        let (add, remove) = list_diff(&old, &new);
+        assert_eq!(add, r(&["198.51.100.0/24", "203.0.113.0/24"]));
+        assert_eq!(remove, r(&["198.51.100.0-198.51.100.191", "203.0.113.9"]));
+        assert_eq!(list_diff(&old, &old), (vec![], vec![]));
+        assert_eq!(list_diff(&[], &new), (new.clone(), vec![]));
+        assert_eq!(list_diff(&new, &[]), (vec![], new.clone()));
+        // Lists without IPv6 when it is off; never blocked prefixes out before they are joined.
+        let lists = [
+            net("10.0.0.0/8"),
+            net("127.0.0.0/8"),
+            net("128.0.0.0/8"),
+            net("2001:db8::/32"),
+        ];
+        assert_eq!(
+            list_ranges(&lists, Family::V4, false),
+            r(&["10.0.0.0/8", "128.0.0.0/8"])
+        );
+        assert_eq!(list_ranges(&lists, Family::V6, false), []);
+        assert_eq!(list_ranges(&lists, Family::V6, true), r(&["2001:db8::/32"]));
+    }
+
+    /// Times making ranges of 300 000 prefixes, the difference of two versions, and the transaction loading them.
+    /// `cargo test --release -p barbican-common lists_at_scale -- --ignored --nocapture`; with
+    /// `BARBICAN_BENCH_PREFIXES=<file>`, of the prefixes in a file instead.
+    #[test]
+    #[ignore = "a benchmark: run in a release build"]
+    fn lists_at_scale() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        // Like a country list: prefixes of /20 to /24, often next to each other, and some IPv6 /56s.
+        let mut generate = |count: usize| {
+            let mut nets = Vec::with_capacity(count);
+            let mut at = 0x0100_0000u32;
+            while nets.len() < count {
+                let v = next();
+                let len = 20 + u8::try_from(v % 5).unwrap();
+                let size = 1u32 << (32 - u32::from(len));
+                at = at.next_multiple_of(size);
+                nets.push(Net::prefix(std::net::Ipv4Addr::from(at).into(), len));
+                at += size;
+                if v >> 8 & 1 == 0 {
+                    at += 256 * u32::try_from(v >> 16 & 63).unwrap();
+                }
+                if (v >> 24).trailing_zeros() >= 2 {
+                    let ip = std::net::Ipv6Addr::from(
+                        0x2001_0db8_u128 << 96 | u128::from(at >> 8) << 72,
+                    );
+                    nets.push(Net::prefix(ip.into(), 56));
+                }
+            }
+            nets
+        };
+        // Or the prefixes of a file, one per line.
+        let nets = match std::env::var("BARBICAN_BENCH_PREFIXES") {
+            Ok(path) => std::fs::read_to_string(path)
+                .unwrap()
+                .lines()
+                .filter_map(|l| l.parse().ok())
+                .collect(),
+            Err(_) => generate(320_000),
+        };
+        let nets = crate::net::aggregate(&nets);
+        let mut changed = nets.clone();
+        // A later version: every 100th prefix gone, another every 100th added.
+        let mut i = 0;
+        changed.retain(|_| {
+            i += 1;
+            i % 100 != 0
+        });
+        changed.extend(
+            nets.iter()
+                .step_by(100)
+                .map(|n| Net::prefix(n.addr(), n.prefix_len().saturating_sub(1))),
+        );
+        let changed = crate::net::aggregate(&changed);
+
+        let started = std::time::Instant::now();
+        let v4 = list_ranges(&nets, Family::V4, true);
+        let v6 = list_ranges(&nets, Family::V6, true);
+        let ranges_took = started.elapsed();
+        let started = std::time::Instant::now();
+        let new4 = list_ranges(&changed, Family::V4, true);
+        let (add, remove) = list_diff(&v4, &new4);
+        let diff_took = started.elapsed();
+        let plan = Plan {
+            sets: vec![(
+                (Set::List, Family::V4),
+                SetChanges {
+                    ranges: v4.clone(),
+                    flush: true,
+                    ..SetChanges::default()
+                },
+            )],
+            lists: Some(1),
+        };
+        let started = std::time::Instant::now();
+        let bytes = batch("barbican", &plan, 0);
+        let batch_took = started.elapsed();
+        let _ = std::io::Write::write_fmt(
+            &mut std::io::stderr(),
+            format_args!(
+                "{} prefixes ({} IPv4) -> {} IPv4 + {} IPv6 ranges in {ranges_took:?}; \
+             a version with {} prefixes: {} ranges, +{} -{} in {diff_took:?}; \
+             the transaction loading the IPv4 ranges: {} KiB in {batch_took:?}\n",
+                nets.len(),
+                nets.iter().filter(|n| n.family() == Family::V4).count(),
+                v4.len(),
+                v6.len(),
+                changed.len(),
+                new4.len(),
+                add.len(),
+                remove.len(),
+                bytes.len() / 1024,
+            ),
+        );
+        assert!(v4.len() < nets.len());
     }
 
     #[test]
@@ -1953,7 +2350,7 @@ mod tests {
         assert_eq!(
             keys,
             [
-                Key::Raw(vec![(key("192.0.2.10"), false), (key("192.0.2.21"), true)]),
+                Key::Range("192.0.2.10-192.0.2.20".parse().unwrap()),
                 Key::Net(net("198.51.99.0/24")),
                 Key::Net(net("198.51.100.0/24")),
                 Key::Net(net("240.0.0.0/4")),

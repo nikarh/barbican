@@ -225,7 +225,7 @@ pub struct NetSet {
     v6: Vec<(u128, u128)>,
 }
 
-fn ranges<T: Copy + Ord>(mut ranges: Vec<(T, T)>, next: impl Fn(T) -> Option<T>) -> Vec<(T, T)> {
+fn merged<T: Copy + Ord>(mut ranges: Vec<(T, T)>, next: impl Fn(T) -> Option<T>) -> Vec<(T, T)> {
     ranges.sort_unstable();
     let mut merged: Vec<(T, T)> = Vec::with_capacity(ranges.len());
     for (start, end) in ranges {
@@ -257,8 +257,8 @@ impl NetSet {
             }
         }
         Self {
-            v4: ranges(v4, |x: u32| x.checked_add(1)),
-            v6: ranges(v6, |x: u128| x.checked_add(1)),
+            v4: merged(v4, |x: u32| x.checked_add(1)),
+            v6: merged(v6, |x: u128| x.checked_add(1)),
         }
     }
 
@@ -281,6 +281,212 @@ impl NetSet {
 pub fn aggregate(nets: &[Net]) -> Vec<Net> {
     let inner: Vec<IpNet> = nets.iter().map(Net::inner).collect();
     IpNet::aggregate(&inner).into_iter().map(Net).collect()
+}
+
+/// Addresses of one family from the first to the last, both included: what an nftables interval set holds as one
+/// element, whether or not it is a prefix. Ordered by family, then first address.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Range {
+    family: Family,
+    first: u128,
+    last: u128,
+}
+
+impl Family {
+    /// The bits of an address.
+    #[must_use]
+    pub fn bits(self) -> u32 {
+        match self {
+            Self::V4 => 32,
+            Self::V6 => 128,
+        }
+    }
+
+    /// The highest address, as a number.
+    #[must_use]
+    pub fn top(self) -> u128 {
+        match self {
+            Self::V4 => u128::from(u32::MAX),
+            Self::V6 => u128::MAX,
+        }
+    }
+
+    fn ip(self, n: u128) -> IpAddr {
+        match self {
+            Self::V4 => IpAddr::V4(Ipv4Addr::from(u32::try_from(n).unwrap_or(u32::MAX))),
+            Self::V6 => IpAddr::V6(Ipv6Addr::from(n)),
+        }
+    }
+}
+
+fn bits_of(ip: IpAddr) -> (Family, u128) {
+    match ip {
+        IpAddr::V4(v4) => (Family::V4, u128::from(u32::from(v4))),
+        IpAddr::V6(v6) => (Family::V6, u128::from(v6)),
+    }
+}
+
+impl Range {
+    /// From the first to the last address (IPv4-mapped ones as IPv4), when both are of one family and in order.
+    #[must_use]
+    pub fn new(first: IpAddr, last: IpAddr) -> Option<Self> {
+        let (family, first) = bits_of(canonical(first));
+        let (other, last) = bits_of(canonical(last));
+        if family == other {
+            Self::from_bounds(family, first, last)
+        } else {
+            None
+        }
+    }
+
+    /// From the first to the last address as numbers, when they are in order and of the family's size.
+    #[must_use]
+    pub fn from_bounds(family: Family, first: u128, last: u128) -> Option<Self> {
+        (first <= last && last <= family.top()).then_some(Self {
+            family,
+            first,
+            last,
+        })
+    }
+
+    /// The addresses of a prefix.
+    #[must_use]
+    pub fn of(net: &Net) -> Self {
+        match net.0 {
+            IpNet::V4(n) => Self {
+                family: Family::V4,
+                first: u128::from(u32::from(n.network())),
+                last: u128::from(u32::from(n.broadcast())),
+            },
+            IpNet::V6(n) => Self {
+                family: Family::V6,
+                first: u128::from(n.network()),
+                last: u128::from(n.broadcast()),
+            },
+        }
+    }
+
+    #[must_use]
+    pub fn family(&self) -> Family {
+        self.family
+    }
+
+    /// The first and the last address as numbers.
+    #[must_use]
+    pub fn bounds(&self) -> (u128, u128) {
+        (self.first, self.last)
+    }
+
+    #[must_use]
+    pub fn first(&self) -> IpAddr {
+        self.family.ip(self.first)
+    }
+
+    #[must_use]
+    pub fn last(&self) -> IpAddr {
+        self.family.ip(self.last)
+    }
+
+    /// The prefix that covers exactly these addresses, when there is one.
+    #[must_use]
+    pub fn to_net(&self) -> Option<Net> {
+        let size = self.last - self.first;
+        // A prefix: the size is 2^k (k host bits) and the first address is aligned to it.
+        if self.first & size != 0 || size.checked_add(1).is_some_and(|s| !s.is_power_of_two()) {
+            return None;
+        }
+        let host_bits = if size == u128::MAX {
+            128
+        } else {
+            (size + 1).trailing_zeros()
+        };
+        let len = u8::try_from(self.family.bits() - host_bits).ok()?;
+        Some(Net::prefix(self.first(), len))
+    }
+}
+
+impl From<Net> for Range {
+    fn from(net: Net) -> Self {
+        Self::of(&net)
+    }
+}
+
+/// A prefix as a prefix (or an address), anything else as nft writes a range: `192.0.2.10-192.0.2.20`.
+impl fmt::Display for Range {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.to_net() {
+            Some(net) => write!(f, "{net}"),
+            None => write!(f, "{}-{}", self.first(), self.last()),
+        }
+    }
+}
+
+impl fmt::Debug for Range {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
+impl FromStr for Range {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        match s.split_once('-') {
+            Some((first, last)) => {
+                let ip = |a: &str| {
+                    a.trim()
+                        .parse::<IpAddr>()
+                        .map_err(|_| ParseError(s.to_owned()))
+                };
+                Self::new(ip(first)?, ip(last)?).ok_or_else(|| ParseError(s.to_owned()))
+            }
+            None => s.parse::<Net>().map(Self::from),
+        }
+    }
+}
+
+/// The fewest ranges that hold the addresses of `nets`: prefixes that touch or overlap are joined, so that a run
+/// of adjacent prefixes that is no prefix itself becomes one range. Sorted (by family, then address).
+///
+/// One pass when the prefixes come sorted by address (as [`aggregate`] gives them); they are sorted otherwise.
+pub fn ranges(nets: impl IntoIterator<Item = Net>) -> Vec<Range> {
+    let mut out = Vec::new();
+    let mut sorted = true;
+    for net in nets {
+        sorted &= join(&mut out, Range::of(&net));
+    }
+    if !sorted {
+        let mut all = std::mem::take(&mut out);
+        all.sort_unstable();
+        for range in all {
+            join(&mut out, range);
+        }
+    }
+    out
+}
+
+/// Joins `range` to the last of `out` when they touch or overlap, appends it otherwise. `false` when it comes
+/// before the last (the input isn't sorted).
+fn join(out: &mut Vec<Range>, range: Range) -> bool {
+    if let Some(last) = out.last_mut() {
+        if (range.family, range.first) < (last.family, last.first) {
+            out.push(range);
+            return false;
+        }
+        // `last.last + 1`; nothing comes after the top of the address space.
+        if range.family == last.family
+            && last
+                .last
+                .checked_add(1)
+                .is_none_or(|after| range.first <= after)
+        {
+            last.last = last.last.max(range.last);
+            return true;
+        }
+    }
+    out.push(range);
+    true
 }
 
 #[cfg(test)]
@@ -426,5 +632,138 @@ mod tests {
             net("203.0.113.0/24"),
         ]);
         assert_eq!(merged, vec![net("198.51.100.0/24"), net("203.0.113.0/24")]);
+    }
+
+    fn range(s: &str) -> Range {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn ranges_of_prefixes() {
+        // Adjacent prefixes that make no prefix together, a contained one, a gap, and the top of the space.
+        let r = ranges(aggregate(&[
+            net("192.0.2.0/24"),
+            net("192.0.3.0/24"),
+            net("192.0.4.0/24"),
+            net("192.0.3.7"),
+            net("198.51.100.0/25"),
+            net("198.51.100.128/26"),
+            net("203.0.113.9"),
+            net("240.0.0.0/4"),
+            net("2001:db8::/33"),
+            net("2001:db8:8000::/33"),
+            net("2001:db9::/32"),
+            net("ffff::/16"),
+        ]));
+        assert_eq!(
+            r,
+            [
+                range("192.0.2.0-192.0.4.255"),
+                range("198.51.100.0-198.51.100.191"),
+                range("203.0.113.9"),
+                range("240.0.0.0/4"),
+                range("2001:db8::-2001:db9:ffff:ffff:ffff:ffff:ffff:ffff"),
+                range("ffff::/16"),
+            ]
+        );
+        assert_eq!(r[0].to_string(), "192.0.2.0-192.0.4.255");
+        assert_eq!(r[1].to_string(), "198.51.100.0-198.51.100.191");
+        assert_eq!(r[2].to_string(), "203.0.113.9");
+        assert_eq!(r[3].to_string(), "240.0.0.0/4");
+        assert_eq!(r[3].last(), "255.255.255.255".parse::<IpAddr>().unwrap());
+        assert_eq!(r[5].bounds().1, u128::MAX);
+        // Prefixes that run up to the top and an IPv6 one after them aren't joined across families.
+        let r = ranges([net("255.255.255.0/24"), net("255.255.255.255"), net("::/1")]);
+        assert_eq!(r, [range("255.255.255.0/24"), range("::/1")]);
+        // Unsorted, overlapping: sorted first, same result.
+        let r = ranges([
+            net("2001:db8::/32"),
+            net("198.51.100.128/25"),
+            net("198.51.100.0/24"),
+            net("192.0.2.0/24"),
+            net("198.51.101.0/24"),
+        ]);
+        assert_eq!(
+            r,
+            [
+                range("192.0.2.0/24"),
+                range("198.51.100.0/23"),
+                range("2001:db8::/32")
+            ]
+        );
+        assert_eq!(ranges([]), []);
+    }
+
+    #[test]
+    fn range_conversions() {
+        assert_eq!(range("192.0.2.0/24").to_net(), Some(net("192.0.2.0/24")));
+        assert_eq!(
+            range("192.0.2.0-192.0.2.255").to_net(),
+            Some(net("192.0.2.0/24"))
+        );
+        assert_eq!(range("192.0.2.1-192.0.2.2").to_net(), None);
+        assert_eq!(range("192.0.2.2-192.0.2.5").to_net(), None);
+        assert_eq!(range("0.0.0.0/0").to_net(), Some(net("0.0.0.0/0")));
+        assert_eq!(range("::/0").to_net(), Some(net("::/0")));
+        assert_eq!(
+            range("::ffff:192.0.2.1-192.0.2.9").to_string(),
+            "192.0.2.1-192.0.2.9"
+        );
+        assert!("192.0.2.9-192.0.2.1".parse::<Range>().is_err());
+        assert!("192.0.2.1-2001:db8::1".parse::<Range>().is_err());
+        assert!(Range::from_bounds(Family::V4, 0, 1 << 32).is_none());
+    }
+
+    /// Ranges hold exactly the addresses of the prefixes, and are as few as can be: disjoint, not adjacent.
+    #[test]
+    fn ranges_hold_what_the_prefixes_hold() {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let mut nets = Vec::new();
+        for _ in 0..2_000 {
+            let v = next();
+            // Within 192.0.0.0/12 and 2001:db8::/112, so that they meet and overlap often.
+            let ip4 = Ipv4Addr::from(0xc000_0000 | (u32::try_from(v & 0xf_ffff).unwrap()));
+            nets.push(Net::prefix(
+                ip4.into(),
+                18 + u8::try_from(v >> 20 & 15).unwrap(),
+            ));
+            let ip6 = Ipv6Addr::from(0x2001_0db8_u128 << 96 | u128::from(v >> 32 & 0xffff));
+            nets.push(Net::prefix(
+                ip6.into(),
+                116 + u8::try_from(v >> 48 & 15).unwrap().min(12),
+            ));
+        }
+        let nets = aggregate(&nets);
+        let r = ranges(nets.iter().copied());
+        assert!(r.len() < nets.len());
+        for w in r.windows(2) {
+            let ((a, b), (c, _)) = (w[0].bounds(), w[1].bounds());
+            if w[0].family() == w[1].family() {
+                assert!(a <= b && b + 1 < c, "{:?} {:?}", w[0], w[1]);
+            }
+        }
+        let set = NetSet::new(&nets);
+        let held = |ip: IpAddr| {
+            let (family, n) = bits_of(ip);
+            r.iter()
+                .any(|r| r.family() == family && r.bounds().0 <= n && n <= r.bounds().1)
+        };
+        for _ in 0..20_000 {
+            let v = next();
+            let ip4 = IpAddr::V4(Ipv4Addr::from(
+                0xc000_0000 | u32::try_from(v & 0xf_ffff).unwrap(),
+            ));
+            let ip6 = IpAddr::V6(Ipv6Addr::from(
+                0x2001_0db8_u128 << 96 | u128::from(v >> 32 & 0xffff),
+            ));
+            assert_eq!(held(ip4), set.contains(ip4), "{ip4}");
+            assert_eq!(held(ip6), set.contains(ip6), "{ip6}");
+        }
     }
 }

@@ -67,7 +67,7 @@ database. A full example is [`dist/config.toml`](dist/config.toml).
 | `firewall.table` | `barbican` | The `inet` table barbican owns. |
 | `firewall.priority` | `-190` | Of its prerouting chain: after connection tracking (-200), before NAT (-100). |
 | `firewall.nft` | `nft` | |
-| `firewall.ipv6` | `true` | `false`: nothing of IPv6 goes into nftables. Its country and blocklist prefixes take about as much kernel memory as IPv4's (roughly 140 bytes each, ~12 MB for Africa, Asia and South America), for nothing on a host without IPv6. |
+| `firewall.ipv6` | `true` | `false`: nothing of IPv6 goes into nftables. Its country and blocklist ranges take about as much kernel memory as IPv4's (roughly 140 bytes each on x86-64, ~8 MB for Africa, Asia and South America), for nothing on a host without IPv6. |
 | `firewall.check_interval` | `60` | Seconds between checks whether another program changed nftables, and readings of the drop counters. |
 | `geoip.country`, `geoip.asn` | `/var/lib/barbican/dbip-*-lite.mmdb` | Databases in the MaxMind DB format (DB-IP Lite, or MaxMind's GeoLite2). |
 | `geoip.download` | `true` | Download DB-IP's free databases when missing, and again once a month. |
@@ -195,12 +195,14 @@ forwarded:
 2. the allow sets accept;
 3. bans drop: single addresses in hash sets, prefixes in interval sets, each element with its remaining time, so the
    kernel lifts bans on time even when barbican isn't running;
-4. country and blocklist prefixes drop.
+4. country and blocklist addresses drop. Their prefixes go into interval sets merged into ranges: the kernel keeps
+   any range as one element, as much memory as one prefix, and a country's adjacent prefixes make about half as
+   many ranges (101 761 IPv4 prefixes of Africa, Asia and South America are 55 339 ranges).
 
 The table and its chain are made with `nft`; elements are changed straight over netlink, each change one small
 transaction whatever the lists hold (`nft` itself reads every element of every set before it changes anything,
 seconds with a large blocklist loaded). Only what changed is written: a ban, a lift, an edit of the allow or deny
-list, new lists (only the prefixes that changed; a restart doesn't load unchanged lists again). The kernel times bans
+list, new lists (only the ranges that changed; a restart doesn't load unchanged lists again). The kernel times bans
 out by itself. What the kernel has is read back at the start and when another program changed nftables: the kernel
 counts every commit in the ruleset's generation (what `nft` checks its own cache with), and barbican asks for it once
 a minute, one small request. So a flushed ruleset or a hand-edited set is put right within a minute, and an idle

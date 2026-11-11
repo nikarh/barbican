@@ -35,7 +35,7 @@ container's log. It checks that:
   banned address still pass;
 - lifting works, and the allow list beats the rules;
 - thresholds count (one unknown user from the journal isn't enough, two are), and a container's log is read;
-- a blocked country is dropped (thousands of prefixes) and unblocking works;
+- a blocked country is dropped (thousands of prefixes, loaded merged into ranges) and unblocking works;
 - with a list of 300 000 prefixes loaded, a ban and a lift are in place within half a second, a ban removed by hand
   and a deleted table are put right on their own (the agent checks the ruleset's generation, every second here),
   and nothing falls back to the `nft` program;
