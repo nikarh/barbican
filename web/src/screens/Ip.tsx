@@ -20,8 +20,8 @@ import { rpc } from '../api/rpc'
 import { InfiniteGrid, type Sort } from '../components/Grid'
 import { Kept } from '../components/Kept'
 import { BanDialog, Country } from '../components/ui'
-import { columnsFor, useTier, type Column } from '../lib/columns'
-import { ago, count, dateTime, KIND_LABELS, remaining } from '../lib/format'
+import { columnsFor, fit, useTier, type Column } from '../lib/columns'
+import { ago, count, dateTime, KIND_LABELS, remaining, WIDEST } from '../lib/format'
 import { href, navigate } from '../lib/router'
 import { useNow } from '../lib/useNow'
 import classes from './Ip.module.css'
@@ -81,19 +81,17 @@ function ActivityGrid({ d }: { d: IpDetail }) {
       {
         headerName: 'First',
         field: 'first',
-        width: 150,
+        width: fit('First', WIDEST.dateTime(), { sortable: true }),
         valueFormatter: (p) => dateTime(Number(p.value ?? 0)),
         sortable: true,
-        phone: { width: 150 },
       },
       {
         headerName: 'Last',
         field: 'last',
-        width: 120,
+        width: fit('Last', WIDEST.ago, { sortable: true }),
         valueFormatter: (p) => ago(Number(p.value ?? 0)),
         sortable: true,
         initialSort: 'desc',
-        phone: { width: 96 },
       },
     ]
     return columnsFor(all, tier)
@@ -147,13 +145,12 @@ function BansGrid({ d }: { d: IpDetail }) {
       {
         headerName: 'Since',
         field: 'created',
-        width: 150,
+        width: fit('Since', WIDEST.dateTime()),
         valueFormatter: (p) => dateTime(Number(p.value ?? 0)),
-        phone: { width: 150 },
       },
       {
         headerName: 'Ends',
-        width: 150,
+        width: fit('Ends', [...WIDEST.remaining, ...WIDEST.lifted.map((l) => `${l} (ui)`)]),
         valueGetter: (p) =>
           p.data === undefined
             ? ''
@@ -161,7 +158,6 @@ function BansGrid({ d }: { d: IpDetail }) {
               ? `lifted ${ago(p.data.lifted)}${p.data.liftedBy === null ? '' : ` (${p.data.liftedBy})`}`
               : remaining(p.data.until),
         tooltip: (p) => (p.data?.until == null ? undefined : `until ${dateTime(p.data.until)}`),
-        phone: { width: 150 },
       },
     ]
     return columnsFor(all, tier)

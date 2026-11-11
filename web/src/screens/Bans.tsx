@@ -7,8 +7,8 @@ import type { Ban } from '../api/generated/model'
 import { rpc } from '../api/rpc'
 import { InfiniteGrid } from '../components/Grid'
 import { BanDialog, Country } from '../components/ui'
-import { ago, remaining } from '../lib/format'
-import { columnsFor, useTier, type Column } from '../lib/columns'
+import { ago, dateTime, remaining, WIDEST } from '../lib/format'
+import { columnsFor, fit, useTier, type Column } from '../lib/columns'
 import { navigate } from '../lib/router'
 
 export function BansScreen() {
@@ -48,20 +48,19 @@ export function BansScreen() {
       {
         headerName: 'Since',
         field: 'created',
-        width: 110,
+        width: fit('Since', WIDEST.ago),
         valueFormatter: (p) => ago(Number(p.value ?? 0)),
-        phone: { width: 96 },
+        tooltip: (p) => (p.data === undefined ? undefined : dateTime(p.data.created)),
       },
       {
         headerName: 'Ends',
-        width: 120,
+        width: fit('Ends', [...WIDEST.remaining, ...WIDEST.lifted]),
         valueGetter: (p) =>
           p.data === undefined
             ? ''
             : p.data.lifted !== null
               ? `lifted ${ago(p.data.lifted)}`
               : remaining(p.data.until),
-        phone: { width: 110 },
       },
     ]
     return columnsFor(all, tier)

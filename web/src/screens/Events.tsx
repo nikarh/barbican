@@ -8,8 +8,8 @@ import type { EventRow, Kind } from '../api/generated/model'
 import { rpc } from '../api/rpc'
 import { InfiniteGrid } from '../components/Grid'
 import { Country } from '../components/ui'
-import { count, dateTime, KIND_LABELS } from '../lib/format'
-import { columnsFor, useTier, type Column } from '../lib/columns'
+import { count, dateTime, KIND_LABELS, WIDEST } from '../lib/format'
+import { columnsFor, fit, useTier, type Column } from '../lib/columns'
 import { navigate } from '../lib/router'
 
 export function EventsScreen() {
@@ -36,9 +36,8 @@ export function EventsScreen() {
       {
         headerName: 'Hour',
         field: 'hour',
-        width: 150,
+        width: fit('Hour', WIDEST.dateTime()),
         valueFormatter: (p) => dateTime(Number(p.value ?? 0)),
-        phone: { width: 150 },
       },
       {
         headerName: 'Address',
