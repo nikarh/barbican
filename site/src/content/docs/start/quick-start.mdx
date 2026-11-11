@@ -27,7 +27,8 @@ Replace the example sources in `/etc/barbican/config.toml` with your own, and tu
 
 ```toml title="/etc/barbican/config.toml"
 [ui]
-listen = "127.0.0.1:7381"
+socket = "/run/barbican-ui/ui.sock"
+socket_group = "barbican-ui"
 
 [firewall]
 # Decide and record, but leave nftables alone.
@@ -50,13 +51,13 @@ On its first start the agent downloads DB-IP's free country and network database
 
 ## 3. Open the UI
 
-The UI listens on localhost and has no login. From your machine, through SSH:
+The UI is full control over the agent, so the agent serves it only on its unix socket, which only root and the group `barbican-ui` may use. Add yourself to the group on the server (`sudo usermod -aG barbican-ui $USER`, then log in again), and from your machine forward a local port to the socket through SSH:
 
 ```bash
-ssh -L 7381:127.0.0.1:7381 server.example.com
+ssh -L 7381:/run/barbican-ui/ui.sock server.example.com
 ```
 
-and open [http://localhost:7381/](http://localhost:7381/). To reach it without a tunnel, put it behind a reverse proxy with authentication: [Behind a reverse proxy](/guides/reverse-proxy/).
+and open [http://localhost:7381/](http://localhost:7381/). To reach it without a tunnel, run the UI container behind a reverse proxy with authentication: [Behind a reverse proxy](/guides/reverse-proxy/).
 
 <Screenshot name="overview" alt="The overview: counters of bans, events, addresses and trusted addresses, bars of the last 30 days, recent bans, a live feed of events, and panels for the firewall, geolocation, feeds, sources and edges." />
 

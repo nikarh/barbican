@@ -20,7 +20,7 @@ Once both run, [connect the edge to the agent](/edge/overview/#connecting-an-edg
 ## Requirements
 
 - The agent: Linux on x86_64 or aarch64 with nftables (the `nft` program), as root or with `CAP_NET_ADMIN`. The binaries are static (musl): no library has to be installed. The packages run it as a systemd service.
-- The UI: any current browser. It is served by the agent, or by a container (`ghcr.io/nikarh/barbican`, amd64 and arm64): [The UI in a container](/guides/reverse-proxy/#the-ui-in-a-container).
+- The UI: any current browser. The agent serves it on a unix socket only; browsers reach it through a container (`ghcr.io/nikarh/barbican`, amd64 and arm64) behind your reverse proxy: [The UI container](/guides/reverse-proxy/#the-ui-container).
 - An edge agent: OpenWrt with nftables (x86_64, aarch64, or 32-bit ARM with an FPU), or a router with iptables and ipset (32-bit ARM, x86_64).
 
 ## Release files
