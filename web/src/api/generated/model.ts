@@ -128,7 +128,8 @@ applied: number | null,
  */
 blocks: number, 
 /**
- * Country and blocklist prefixes it holds.
+ * Country and blocklist prefixes it loads (without IPv6, its prefixes don't). An nftables edge holds them
+ * merged into ranges, fewer elements.
  */
 listed: number, 
 /**
@@ -275,7 +276,8 @@ enabled: boolean, applied: number | null, error: string | null,
  */
 blocks: number, 
 /**
- * Prefixes in the list sets (countries and blocking feeds).
+ * Prefixes of countries and blocking feeds that go into the list sets (without IPv6, its prefixes don't).
+ * They are counted as the lists have them: the sets hold them merged into ranges, fewer elements.
  */
 listed: number, droppedBlocked: number, droppedListed: number, };
 
