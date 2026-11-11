@@ -57,6 +57,12 @@ function describe({ problem, failures, lostAt }: Connection): Description {
         title: `The server answered ${String(problem.status)}`,
         hint: "What's in front of Barbican (a reverse proxy) can't reach it. Is the UI's container, or the agent, running?",
       }
+    case 'signin':
+      return {
+        title: 'Sign in again',
+        hint: 'The session with the sign-in service in front of Barbican has expired. Reload the page to sign in.',
+        reload: true,
+      }
     case 'foreign':
       return {
         title: "The server answered with a page that isn't Barbican's",
