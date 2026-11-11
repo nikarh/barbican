@@ -9,9 +9,9 @@ export type Problem =
   | { kind: 'proxy'; socket: string; problem: ProxyProblem }
   /** Plain HTTP reaches the agent (through the proxy or not), yet the WebSocket fails. */
   | { kind: 'answers' }
-  /** Something in front of barbican answered with an error status. */
+  /** Something in front of Barbican answered with an error status. */
   | { kind: 'gateway'; status: number }
-  /** Something answered that isn't barbican: a sign-in page, say. */
+  /** Something answered that isn't Barbican: a sign-in page, say. */
   | { kind: 'foreign' }
   /** Nothing answers at all. */
   | { kind: 'server' }

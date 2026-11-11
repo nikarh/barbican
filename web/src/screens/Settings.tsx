@@ -1051,7 +1051,7 @@ export function SettingsScreen({ tab }: { tab: string | null }) {
       </Tabs.Panel>
       <Tabs.Panel value="about">
         <Stack gap={6} fz={14}>
-          <Text>barbican {meta.data?.version}</Text>
+          <Text>Barbican {meta.data?.version}</Text>
           <Text c="var(--ink-dim)" fz={13}>
             Sources: {meta.data?.sources.join(', ')}. Firewall:{' '}
             {meta.data?.dryRun === true ? 'dry run' : 'on'}. Edge API:{' '}

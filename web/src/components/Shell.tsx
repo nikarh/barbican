@@ -59,7 +59,7 @@ export function Shell({ screen, children }: { screen: Screen; children: ReactNod
             <span className={classes.brandMark}>
               <Logo />
             </span>
-            barbican
+            Barbican
           </a>
           <nav className={classes.nav} aria-label="Main">
             {TABS.map(({ screen: s, label, icon: Icon }) => (
