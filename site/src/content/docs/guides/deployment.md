@@ -5,7 +5,7 @@ sidebar:
   order: 0
 ---
 
-barbican can only drop a packet on a machine that receives it from the attacker's own address. Most setups that "don't block anything" break that rule somewhere: a proxy in front of the server, NAT on the router, a CDN. This page goes through where each part should run and the details that decide whether a ban actually stops anyone.
+Barbican can only drop a packet on a machine that receives it from the attacker's own address. Most setups that "don't block anything" break that rule somewhere: a proxy in front of the server, NAT on the router, a CDN. This page goes through where each part should run and the details that decide whether a ban actually stops anyone.
 
 ## Block where the connection arrives
 
@@ -20,7 +20,7 @@ Draw the path a connection from the internet takes to your service, and look at 
 
 In the third case the agent still learns the client's address, because the proxy passes it on (`X-Forwarded-For` or the PROXY protocol) and your reverse proxy logs it. The agent can ban it, but a ban in the server's own firewall does nothing, because no packet from that address ever reaches the server. Run an edge agent on the proxy box and the ban takes effect there.
 
-An edge agent on the router covers every port the router forwards, for every server behind it, which also catches services whose logs barbican doesn't read.
+An edge agent on the router covers every port the router forwards, for every server behind it, which also catches services whose logs Barbican doesn't read.
 
 ## One agent, many hosts
 
@@ -33,7 +33,7 @@ Several independent agents work, but each counts only what it sees. A scanner th
 With a CDN proxying your site, every request reaches you from the CDN's addresses. Banning those would block your own visitors, and geolocation databases place some of Cloudflare's addresses in whatever country, so blocking a continent can drop your visitors at random.
 
 - Add the **Allow Cloudflare** feeds (both of them, IPv4 and IPv6). Cloudflare's ranges are then never banned and always let through.
-- Configure your reverse proxy to log the visitor's address from the header the CDN sets, trusting that header only from the CDN's ranges. barbican then records and bans the visitor, which helps for anything that reaches you without the CDN, and keeps your data meaningful.
+- Configure your reverse proxy to log the visitor's address from the header the CDN sets, trusting that header only from the CDN's ranges. Barbican then records and bans the visitor, which helps for anything that reaches you without the CDN, and keeps your data meaningful.
 - Blocking visitors behind a CDN by address has to happen at the CDN itself (its firewall rules), not on your network.
 
 ## Addresses that are never banned
@@ -66,7 +66,7 @@ The edge writes to flash only when it stops cleanly (a reboot, an upgrade). Afte
 
 ## The kernel
 
-- barbican needs the nftables modules for sets and connection tracking (`nft_ct` among them). After a kernel upgrade without a reboot, the running kernel's modules may be gone from disk, and the agent fails to set up its table. Reboot into the new kernel.
+- Barbican needs the nftables modules for sets and connection tracking (`nft_ct` among them). After a kernel upgrade without a reboot, the running kernel's modules may be gone from disk, and the agent fails to set up its table. Reboot into the new kernel.
 - The chain hooks prerouting at priority -190: after connection tracking (-200) and before Docker's port forwarding (-100). Blocks apply to the host, to published container ports, and to everything a router forwards.
 - Replies to connections the host opened always pass. Blocking a country doesn't stop the host downloading updates from it.
 

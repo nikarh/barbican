@@ -74,7 +74,7 @@ Each `[[edge.client]]`:
 | Setting | Default | |
 | --- | --- | --- |
 | `enabled` | `true` | `false`: decide and record everything, change nothing (as `--dry-run`) |
-| `table` | `barbican` | The `inet` table barbican owns: letters, digits, `_` and `-` |
+| `table` | `barbican` | The `inet` table Barbican owns: letters, digits, `_` and `-` |
 | `priority` | `-190` | Of its prerouting chain: after connection tracking (-200), before NAT (-100) |
 | `nft` | `nft` | The nft program, for making the table (elements are changed over netlink) |
 | `ipv6` | `true` | `false`: nothing of IPv6 goes into nftables. Its country and blocklist ranges take about as much kernel memory as IPv4's (roughly 140 bytes each on x86-64, about 8 MB for Africa, Asia and South America), for nothing on a host without IPv6 |

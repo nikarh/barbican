@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-From the signed pacman repository, set up once: pacman then installs and upgrades barbican with the rest of the
+From the signed pacman repository, set up once: pacman then installs and upgrades Barbican with the rest of the
 system, checking its signature.
 
 ```bash

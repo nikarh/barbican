@@ -1,19 +1,19 @@
 ---
 title: Security
-description: What barbican trusts, how the agent's service is sandboxed, and how to report a vulnerability.
+description: What Barbican trusts, how the agent's service is sandboxed, and how to report a vulnerability.
 sidebar:
   order: 5
 ---
 
-barbican decides who may reach a server, so what matters is who can change its decisions: users of the UI, whoever writes the logs it reads, and the edge API.
+Barbican decides who may reach a server, so what matters is who can change its decisions: users of the UI, whoever writes the logs it reads, and the edge API.
 
 ## The UI
 
-The UI has no login of its own and full control over barbican, so it is reachable only through a unix socket guarded by the kernel's peer credentials, and from browsers only through a proxy in a container behind your authenticating reverse proxy. [How the UI is protected](/internals/control-surface/) explains each layer and what an attacker in each position can do.
+The UI has no login of its own and full control over Barbican, so it is reachable only through a unix socket guarded by the kernel's peer credentials, and from browsers only through a proxy in a container behind your authenticating reverse proxy. [How the UI is protected](/internals/control-surface/) explains each layer and what an attacker in each position can do.
 
 ## Logs
 
-barbican believes the logs it reads. Whoever can write lines into them can get addresses banned, and only addresses that aren't allowed: no rule bans an allowed or exempt address, and every ban can be lifted in the UI. Read logs that only the services write. A reverse proxy should log the address it received the connection from (or, behind a CDN, an address it trusts the CDN for), not one from a header any client can set.
+Barbican believes the logs it reads. Whoever can write lines into them can get addresses banned, and only addresses that aren't allowed: no rule bans an allowed or exempt address, and every ban can be lifted in the UI. Read logs that only the services write. A reverse proxy should log the address it received the connection from (or, behind a CDN, an address it trusts the CDN for), not one from a header any client can set.
 
 Trust works the other way: a successful login keeps an address from being banned for a while. Logins come from the services' own logs (sshd, Authelia).
 
@@ -25,7 +25,7 @@ The self-signed certificate and its key are made on the first start next to the 
 
 ## The service
 
-The systemd unit runs barbican with as little as it needs:
+The systemd unit runs Barbican with as little as it needs:
 
 - `DynamicUser=yes`: a user of its own, made up by systemd; its state (`/var/lib/barbican`) is private (mode 0700), files it makes are its own only (`UMask=0077`).
 - One capability, `CAP_NET_ADMIN`, for nftables (`AmbientCapabilities` and `CapabilityBoundingSet`), and `NoNewPrivileges`.
@@ -36,4 +36,4 @@ The edge agents run as root on their routers, as router services do.
 
 ## Reporting a vulnerability
 
-A way to get an address past barbican's bans, to get someone else's address banned, or to change its decisions without access to its UI or edge API is a security issue. Please report it privately, through [GitHub's vulnerability reporting](https://github.com/nikarh/barbican/security/advisories/new), not in a public issue, with the log lines or requests involved and how to reproduce it.
+A way to get an address past Barbican's bans, to get someone else's address banned, or to change its decisions without access to its UI or edge API is a security issue. Please report it privately, through [GitHub's vulnerability reporting](https://github.com/nikarh/barbican/security/advisories/new), not in a public issue, with the log lines or requests involved and how to reproduce it.

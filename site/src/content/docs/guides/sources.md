@@ -1,6 +1,6 @@
 ---
 title: Sources and parsers
-description: Where barbican reads logs from (Docker, files, the journal, VictoriaLogs), the parsers for Traefik, sshd and Authelia, and a regular expression for any other log.
+description: Where Barbican reads logs from (Docker, files, the journal, VictoriaLogs), the parsers for Traefik, sshd and Authelia, and a regular expression for any other log.
 sidebar:
   order: 1
 ---
@@ -71,7 +71,7 @@ OpenSSH's messages, as sshd (or `sshd-session`) logs them to the journal or a fi
 
 ### Authelia
 
-Authelia's log, as text (logfmt) or JSON: failed first and second factor logins, and successful ones. Failed and successful logins are logged at the `info` level. At the `debug` level Authelia also logs every request of a signed-in user (its authorization checks): barbican reads those as sessions, which keep the user's address trusted while they use your services.
+Authelia's log, as text (logfmt) or JSON: failed first and second factor logins, and successful ones. Failed and successful logins are logged at the `info` level. At the `debug` level Authelia also logs every request of a signed-in user (its authorization checks): Barbican reads those as sessions, which keep the user's address trusted while they use your services.
 
 ## A log without a parser
 
@@ -96,9 +96,9 @@ file = { path = "/var/log/app/app.log" }
 
 ## Permissions
 
-The unit runs barbican as its own user (`DynamicUser`) with `CAP_NET_ADMIN` only:
+The unit runs Barbican as its own user (`DynamicUser`) with `CAP_NET_ADMIN` only:
 
 - **journald** sources work as they are: the unit puts the agent in the `systemd-journal` group.
 - **file** sources need the file to be readable by others, or a group the agent is in (`SupplementaryGroups=` in a drop-in for the unit).
-- **docker** sources need the Docker API. Membership of the `docker` group is root on the host; rather give barbican a read-only socket proxy that allows container inspection and logs, and point `docker.socket` at it (a unix socket the agent may read).
+- **docker** sources need the Docker API. Membership of the `docker` group is root on the host; rather give Barbican a read-only socket proxy that allows container inspection and logs, and point `docker.socket` at it (a unix socket the agent may read).
 - **victorialogs** sources need the VictoriaLogs HTTP API to be reachable from the host.

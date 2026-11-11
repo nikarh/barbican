@@ -21,7 +21,7 @@ export default defineConfig({
 	markdown: { processor: satteri({ mdastPlugins: [baseLinks(base)] }) },
 	integrations: [
 		starlight({
-			title: 'barbican',
+			title: 'Barbican',
 			description:
 				'Bans addresses that abuse your services, from the logs of a reverse proxy, SSH and an authentication portal, with nftables on the server and on routers.',
 			favicon: '/favicon.svg',
