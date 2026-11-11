@@ -1,4 +1,4 @@
-import { Alert, Anchor, Group, SimpleGrid, Stack, Table, Text } from '@mantine/core'
+import { Alert, Group, SimpleGrid, Stack, Table, Text } from '@mantine/core'
 
 import { useFeeds, useGeoStatus, useLive, useOverview } from '../api/hooks'
 import type { Feed, Live } from '../api/generated/model'
@@ -128,9 +128,9 @@ export function OverviewScreen() {
           <Panel
             title="Recent bans"
             right={
-              <Anchor href={href('bans')} fz={13}>
+              <a className="panel-link" href={href('bans')}>
                 All bans
-              </Anchor>
+              </a>
             }
           >
             <Table.ScrollContainer minWidth={420}>
@@ -188,9 +188,9 @@ export function OverviewScreen() {
           <Panel
             title="Geolocation"
             right={
-              <Anchor href={href('settings', { tab: 'geoip' })} fz={13}>
+              <a className="panel-link" href={href('settings', { tab: 'geoip' })}>
                 Details
-              </Anchor>
+              </a>
             }
           >
             <Stack gap={6}>{geo.data && <GeoSummary geo={geo.data} now={now} />}</Stack>
@@ -199,9 +199,9 @@ export function OverviewScreen() {
           <Panel
             title="Blocklists"
             right={
-              <Anchor href={href('settings', { tab: 'feeds' })} fz={13}>
+              <a className="panel-link" href={href('settings', { tab: 'feeds' })}>
                 Details
-              </Anchor>
+              </a>
             }
           >
             <Stack gap={6}>
