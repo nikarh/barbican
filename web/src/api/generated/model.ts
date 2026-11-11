@@ -103,7 +103,101 @@ export type DayStat = {
  */
 day: number, events: number, bans: number, };
 
-export type EdgeStatus = { name: string, address: string, lastPoll: number, seq: number, agent: string | null, };
+/**
+ * What an edge reports about itself. Times are this agent's clock.
+ */
+export type EdgeReport = { 
+/**
+ * When it arrived.
+ */
+received: number, 
+/**
+ * Seconds since the edge agent started.
+ */
+uptime: number, 
+/**
+ * Its resident memory, in bytes.
+ */
+rss: number, 
+/**
+ * When it last brought its firewall up to date.
+ */
+applied: number | null, 
+/**
+ * Addresses and prefixes it blocks for bans and deny lists, of all the agents it follows.
+ */
+blocks: number, 
+/**
+ * Country and blocklist prefixes it holds.
+ */
+listed: number, 
+/**
+ * Packets and bytes its firewall dropped for a ban, since its rules were made.
+ */
+droppedBlocked: number, droppedBlockedBytes: number, 
+/**
+ * Packets and bytes its firewall dropped for a country or a blocklist.
+ */
+droppedListed: number, droppedListedBytes: number, 
+/**
+ * Why its firewall can't be updated, while it can't.
+ */
+error: string | null, 
+/**
+ * Every agent it follows, this one included.
+ */
+upstreams: Array<EdgeUpstream>, };
+
+/**
+ * An edge agent allowed to follow this agent (an `[[edge.client]]`), and what it last said about itself.
+ */
+export type EdgeStatus = { name: string, connected: boolean, 
+/**
+ * While connected: since when; otherwise since when it isn't. `null`: it hasn't connected since this agent
+ * started.
+ */
+since: number | null, 
+/**
+ * The address it connects from.
+ */
+address: string | null, 
+/**
+ * The last of this agent's changes it was sent.
+ */
+seq: number, 
+/**
+ * The edge agent's version, `barbican-edge` or `barbican-edge-ipset`'s.
+ */
+version: string | null, 
+/**
+ * The firewall it changes, e.g. `nftables table inet barbican`.
+ */
+backend: string | null, 
+/**
+ * It changes its firewall; `false`: a dry run. `null`: not known yet.
+ */
+enforcing: boolean | null, 
+/**
+ * Its last status report.
+ */
+report: EdgeReport | null, };
+
+/**
+ * An agent an edge follows, as the edge sees it.
+ */
+export type EdgeUpstream = { 
+/**
+ * The edge's name for it.
+ */
+name: string, 
+/**
+ * It is this agent.
+ */
+this: boolean, connected: boolean, 
+/**
+ * When the edge last heard from it.
+ */
+lastContact: number | null, error: string | null, };
 
 export type Entry = { id: number, net: string, allow: boolean, note: string, created: number, until: number | null, };
 
@@ -286,7 +380,7 @@ edgeApi: boolean,
  */
 edgeFingerprint: string | null, };
 
-export type Overview = { bansActive: number, bansToday: number, eventsToday: number, ips: number, trusted: number, firewall: FirewallStatus, sources: Array<SourceStatus>, edges: Array<EdgeStatus>, 
+export type Overview = { bansActive: number, bansToday: number, eventsToday: number, ips: number, trusted: number, firewall: FirewallStatus, sources: Array<SourceStatus>, 
 /**
  * The last 30 days, oldest first.
  */

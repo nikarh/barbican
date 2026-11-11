@@ -1,6 +1,6 @@
 import { Alert, Group, SimpleGrid, Stack, Table, Text } from '@mantine/core'
 
-import { useFeeds, useGeoStatus, useLive, useOverview } from '../api/hooks'
+import { useEdges, useFeeds, useGeoStatus, useLive, useMeta, useOverview } from '../api/hooks'
 import type { Feed, Live } from '../api/generated/model'
 import { Bars } from '../components/Bars'
 import { GeoSummary } from '../components/Geo'
@@ -79,6 +79,9 @@ export function OverviewScreen() {
   const overview = useOverview()
   const geo = useGeoStatus()
   const feeds = useFeeds()
+  const meta = useMeta()
+  const edgeApi = meta.data?.edgeApi === true
+  const edges = useEdges(edgeApi).data ?? []
   const now = useNow(30_000)
   if (overview.error) return <Alert color="red">{overview.error.message}</Alert>
   const o = overview.data
@@ -237,15 +240,17 @@ export function OverviewScreen() {
             </Stack>
           </Panel>
 
-          {o.edges.length > 0 && (
+          {edgeApi && edges.length > 0 && (
             <Panel title="Edges">
               <Stack gap={6} fz={13}>
-                {o.edges.map((e) => (
+                {edges.map((e) => (
                   <Group key={e.name} justify="space-between">
                     <span>
                       <strong>{e.name}</strong> <span className="mono">{e.address}</span>
                     </span>
-                    <span className={classes.parser}>polled {ago(e.lastPoll, now)}</span>
+                    <span className={classes.parser}>
+                      {e.connected ? 'connected' : `disconnected ${ago(e.since, now)}`}
+                    </span>
                   </Group>
                 ))}
               </Stack>

@@ -185,6 +185,7 @@ dependencies = [
  "barbican-common",
  "pico-args",
  "ring",
+ "rustix",
  "rustls",
  "serde",
  "serde_json",

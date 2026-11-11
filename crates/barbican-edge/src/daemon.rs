@@ -1,18 +1,23 @@
-//! The daemon both edge agents share: it follows one or more upstreams (agents' edge APIs), each in a thread of its
-//! own, merges what they block, and keeps the firewall (a [`Backend`]) equal to it. The last state is saved (rarely,
-//! to spare flash) and put back at boot, before the upstreams are reachable, so blocks hold across reboots and while
-//! agents are down.
+//! The daemon both edge agents share: it follows one or more upstreams (agents' edge APIs), each over a connection
+//! of its own in a thread of its own, merges what they block, and keeps the firewall (a [`Backend`]) equal to it.
+//! Agents push their changes as they happen; the daemon reports back to each what it applied and what its firewall
+//! dropped. The last state is saved (rarely, to spare flash) and put back at boot, before the upstreams are
+//! reachable, so blocks hold across reboots and while agents are down.
 
 use std::collections::BTreeMap;
-use std::io::Write;
+use std::io::{Read, Write};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
-use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError, TryRecvError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use barbican_common::edge::{CHANGES_PATH, Changes, LIST_PATH, Mirror, merge, parse_list};
+use barbican_common::edge::wire::{self, Frame, HEARTBEAT, SILENCE};
+use barbican_common::edge::{Mirror, merge};
 use barbican_common::net::{Net, aggregate};
+use barbican_common::nft::Counters;
 use barbican_common::nft::Desired;
 use serde::{Deserialize, Serialize};
 
@@ -20,8 +25,10 @@ use crate::backend::Backend;
 use crate::uci;
 
 pub const VERSION: &str = env!("BARBICAN_VERSION");
-/// How long an upstream holds a poll; the request times out a little later.
-const WAIT: u64 = 55;
+/// How often upstreams get a status report when nothing changed.
+const REPORT_EVERY: Duration = Duration::from_secs(60);
+/// The most a change or a list may take while its frames arrive.
+const MAX_PENDING: usize = 256 * 1024 * 1024;
 
 /// What tells the two edge agents apart, besides their backend.
 pub struct Defaults {
@@ -120,7 +127,7 @@ pub fn load_config(path: &Path, defaults: &Defaults) -> Result<Config, String> {
                 )
             })?
             .to_owned();
-        crate::http::parse_fingerprint(&fingerprint)
+        crate::link::parse_fingerprint(&fingerprint)
             .map_err(|e| format!("upstream {name}: {e}"))?;
         let token = match (s.option("token"), s.option("token_file")) {
             (Some(t), _) => t.to_owned(),
@@ -161,12 +168,14 @@ pub fn load_config(path: &Path, defaults: &Defaults) -> Result<Config, String> {
     })
 }
 
-/// What is saved to flash: each upstream's mirror and list, and when.
+/// What is saved to flash: each upstream's mirror and list (with its version), and when.
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Saved {
     saved_at: u64,
     mirrors: BTreeMap<String, Mirror>,
     lists: BTreeMap<String, Vec<Net>>,
+    #[serde(default)]
+    list_versions: BTreeMap<String, String>,
 }
 
 fn load_saved(path: &Path) -> Saved {
@@ -198,8 +207,11 @@ struct UpstreamStatus {
     name: String,
     url: String,
     connected: bool,
+    /// When the agent last sent anything (a ping, at least every 20 seconds while connected).
     last_ok: Option<u64>,
     error: Option<String>,
+    /// The agent's version, as it said when this edge connected.
+    agent: Option<String>,
     seq: u64,
     blocks: usize,
     allows: usize,
@@ -219,6 +231,8 @@ struct Status {
     listed: usize,
     dropped_blocked: u64,
     dropped_listed: u64,
+    dropped_blocked_bytes: u64,
+    dropped_listed_bytes: u64,
     upstreams: Vec<UpstreamStatus>,
     /// The first blocks, for the router's UI.
     recent: Vec<StatusBlock>,
@@ -234,76 +248,239 @@ struct StatusBlock {
 enum Message {
     /// SIGTERM or SIGINT: save the state, and stop.
     Stop,
-    Changes(usize, Changes),
-    List(usize, String, Vec<Net>),
+    /// The agent took this edge in; with its version.
+    Connected(usize, String),
+    /// The frames of one change, all of them.
+    Changes(usize, Vec<Vec<u8>>),
+    /// The frames of a list, all of them.
+    List(usize, Vec<Vec<u8>>),
     Failed(usize, String),
 }
 
-/// Follows one upstream: long polls for changes, and fetches its list when the list's version changes.
-fn follow(
-    program: &str,
+/// What the daemon asks of an upstream's thread.
+enum Outgoing {
+    /// Frames to send.
+    Frames(Vec<u8>),
+    /// Connect again (the copy of the agent's state was reset): the hello says where the copy is.
+    Restart,
+}
+
+/// Where the edge's copy of an agent's state is: what a hello says.
+#[derive(Debug, Clone, Default)]
+struct Position {
+    epoch: String,
+    seq: u64,
+    list_version: String,
+}
+
+/// What an upstream's thread and the main loop share.
+#[derive(Default)]
+struct Shared {
+    position: Mutex<Position>,
+    /// When the agent last sent anything (unix seconds; 0: never).
+    heard: AtomicU64,
+}
+
+/// The main loop's end of an upstream's thread.
+struct Line {
+    shared: Arc<Shared>,
+    outbox: mpsc::Sender<Outgoing>,
+    /// A byte written here wakes the thread up to look at `outbox`.
+    wake: UnixStream,
+}
+
+impl Line {
+    fn send(&self, outgoing: Outgoing) {
+        if self.outbox.send(outgoing).is_ok() {
+            // Non-blocking: when a byte is already waiting, the thread wakes anyway.
+            let _ = (&self.wake).write(&[1]);
+        }
+    }
+
+    fn set_position(&self, change: impl FnOnce(&mut Position)) {
+        if let Ok(mut p) = self.shared.position.lock() {
+            change(&mut p);
+        }
+    }
+}
+
+/// What an upstream's thread needs.
+struct Follow {
     index: usize,
-    upstream: &Upstream,
-    mut epoch: String,
-    mut seq: u64,
-    mut list_version: String,
-    tx: &mpsc::Sender<Message>,
-) {
-    let client = match crate::http::Client::new(
-        &upstream.url,
-        &upstream.fingerprint,
-        &upstream.token,
-        &format!("{program}/{VERSION}"),
-    ) {
+    upstream: Upstream,
+    /// For the hello.
+    enforcing: bool,
+    lists: bool,
+    backend: String,
+    shared: Arc<Shared>,
+    outbox: mpsc::Receiver<Outgoing>,
+    wake: UnixStream,
+    tx: mpsc::Sender<Message>,
+}
+
+/// Follows one upstream: stays connected, passes on what the agent pushes, and sends what the daemon has for it.
+/// Connects again when the connection fails, backing off while it keeps failing.
+fn follow(f: &Follow) {
+    let client = match crate::link::Client::new(&f.upstream.url, &f.upstream.fingerprint) {
         Ok(c) => c,
         Err(e) => {
-            let _ = tx.send(Message::Failed(index, e));
+            let _ = f.tx.send(Message::Failed(f.index, e));
             return;
         }
     };
     let mut backoff = Duration::from_secs(2);
     loop {
-        let path = format!("{CHANGES_PATH}?epoch={epoch}&since={seq}&wait={WAIT}");
-        let result = client
-            .get(&path, Duration::from_secs(WAIT + 15), 16 * 1024 * 1024)
-            .and_then(|body| serde_json::from_str::<Changes>(&body).map_err(|e| e.to_string()));
-        match result {
-            Ok(changes) => {
-                backoff = Duration::from_secs(2);
-                epoch.clone_from(&changes.epoch);
-                seq = changes.seq;
-                let wanted = changes.list.version.clone();
-                if tx.send(Message::Changes(index, changes)).is_err() {
-                    return;
-                }
-                if wanted != list_version {
-                    match fetch_list(&client) {
-                        Ok((version, nets)) => {
-                            list_version.clone_from(&version);
-                            if tx.send(Message::List(index, version, nets)).is_err() {
-                                return;
-                            }
-                        }
-                        Err(e) => {
-                            let _ = tx.send(Message::Failed(index, format!("list: {e}")));
-                        }
-                    }
-                }
-            }
+        let mut welcomed = false;
+        match session(f, &client, &mut welcomed) {
+            // The daemon is stopping.
+            Ok(()) => return,
             Err(e) => {
-                if tx.send(Message::Failed(index, e)).is_err() {
+                if f.tx.send(Message::Failed(f.index, e)).is_err() {
                     return;
                 }
-                std::thread::sleep(backoff);
-                backoff = (backoff * 2).min(Duration::from_secs(60));
             }
+        }
+        if welcomed {
+            backoff = Duration::from_secs(2);
+        }
+        std::thread::sleep(backoff);
+        // What the daemon sent meanwhile was for the connection that is gone: it reports again on the next one.
+        let mut sink = [0u8; 64];
+        while (&f.wake).read(&mut sink).is_ok_and(|n| n > 0) {}
+        loop {
+            match f.outbox.try_recv() {
+                Ok(_) => {}
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => return,
+            }
+        }
+        if !welcomed {
+            backoff = (backoff * 2).min(Duration::from_secs(60));
         }
     }
 }
 
-fn fetch_list(client: &crate::http::Client) -> Result<(String, Vec<Net>), String> {
-    let body = client.get(LIST_PATH, Duration::from_secs(120), 256 * 1024 * 1024)?;
-    parse_list(&body).map_err(|e| e.to_string())
+/// One connection, until it fails (an error) or the daemon stops (`Ok`).
+fn session(f: &Follow, client: &crate::link::Client, welcomed: &mut bool) -> Result<(), String> {
+    let mut link = client.connect()?;
+    let mut out = Vec::new();
+    let position = f
+        .shared
+        .position
+        .lock()
+        .map(|p| p.clone())
+        .unwrap_or_default();
+    wire::Hello {
+        enforcing: f.enforcing,
+        lists: f.lists,
+        epoch: &position.epoch,
+        seq: position.seq,
+        list_version: &position.list_version,
+        token: &f.upstream.token,
+        version: VERSION,
+        backend: &f.backend,
+    }
+    .encode(&mut out);
+    link.send(&out)?;
+    let mut last_sent = Instant::now();
+    let mut last_heard = Instant::now();
+    let mut changes: Vec<Vec<u8>> = Vec::new();
+    let mut list: Vec<Vec<u8>> = Vec::new();
+    loop {
+        while let Some(frame) = link.next_frame()? {
+            last_heard = Instant::now();
+            f.shared.heard.store(now(), Ordering::Relaxed);
+            let decoded = wire::decode(&frame).map_err(|e| format!("from the agent: {e}"))?;
+            let (complete, is_list) = match decoded {
+                Frame::Welcome(w) => {
+                    *welcomed = true;
+                    if f.tx
+                        .send(Message::Connected(f.index, w.version.to_owned()))
+                        .is_err()
+                    {
+                        return Ok(());
+                    }
+                    continue;
+                }
+                Frame::Refuse(reason) => {
+                    return Err(format!("the agent refused this edge: {reason}"));
+                }
+                Frame::Ping => continue,
+                Frame::Changes(c) => (!c.more, false),
+                Frame::List(l) => (l.last, true),
+                Frame::Hello(_) | Frame::Status(_) => {
+                    return Err("the agent sent what only edges send".to_owned());
+                }
+            };
+            let pending = if is_list { &mut list } else { &mut changes };
+            pending.push(frame);
+            if pending.iter().map(Vec::len).sum::<usize>() > MAX_PENDING {
+                return Err("a change or list too large to take in".to_owned());
+            }
+            if complete {
+                let frames = std::mem::take(pending);
+                let message = if is_list {
+                    Message::List(f.index, frames)
+                } else {
+                    Message::Changes(f.index, frames)
+                };
+                if f.tx.send(message).is_err() {
+                    return Ok(());
+                }
+            }
+        }
+        loop {
+            match f.outbox.try_recv() {
+                Ok(Outgoing::Frames(frames)) => {
+                    link.send(&frames)?;
+                    last_sent = Instant::now();
+                }
+                Ok(Outgoing::Restart) => return Err("starting over".to_owned()),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => return Ok(()),
+            }
+        }
+        if last_sent.elapsed() >= HEARTBEAT {
+            out.clear();
+            wire::encode_ping(&mut out);
+            link.send(&out)?;
+            last_sent = Instant::now();
+        }
+        if last_heard.elapsed() >= SILENCE {
+            return Err(format!(
+                "no word from the agent for {} s",
+                SILENCE.as_secs()
+            ));
+        }
+        let timeout = HEARTBEAT
+            .saturating_sub(last_sent.elapsed())
+            .min(SILENCE.saturating_sub(last_heard.elapsed()))
+            .max(Duration::from_millis(10));
+        link.wait(&f.wake, timeout)?;
+    }
+}
+
+/// The resident memory of this process, in bytes.
+fn rss() -> u64 {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find_map(|l| l.strip_prefix("VmRSS:"))
+                .and_then(|v| v.trim().trim_end_matches("kB").trim().parse::<u64>().ok())
+        })
+        .map_or(0, |kb| kb * 1024)
+}
+
+/// What a status report says, but its times: when it differs from the last one sent, it is sent now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReportKey {
+    applied: Option<u64>,
+    blocks: usize,
+    listed: usize,
+    dropped: Counters,
+    error: Option<String>,
+    upstreams: Vec<(bool, Option<String>)>,
 }
 
 struct Edge {
@@ -311,6 +488,12 @@ struct Edge {
     firewall: Option<Box<dyn Backend>>,
     mirrors: Vec<Mirror>,
     lists: Vec<Vec<Net>>,
+    list_versions: Vec<String>,
+    /// The upstreams' threads, once started.
+    lines: Vec<Line>,
+    started: Instant,
+    /// What the last report sent to every upstream said, and when it was sent.
+    last_report: Option<(ReportKey, Instant)>,
     /// The upstreams' lists merged, made again only when one of them changes.
     merged: Option<Arc<Vec<Net>>>,
     status: Status,
@@ -329,12 +512,7 @@ impl Edge {
                     Arc::new(aggregate(&all))
                 })
                 .clone();
-            let version: Vec<&str> = self
-                .mirrors
-                .iter()
-                .map(|m| m.list.version.as_str())
-                .collect();
-            (lists, version.join(","))
+            (lists, self.list_versions.join(","))
         } else {
             (Arc::default(), String::new())
         };
@@ -360,8 +538,7 @@ impl Edge {
                     self.status.applied = Some(now);
                     self.status.error = None;
                     if let Some(c) = fw.counters() {
-                        self.status.dropped_blocked = c.blocked.packets;
-                        self.status.dropped_listed = c.listed.packets;
+                        self.status.set_counters(c);
                     }
                 }
                 Err(e) => {
@@ -390,14 +567,19 @@ impl Edge {
             return;
         }
         if let Some(c) = fw.counters() {
-            self.status.dropped_blocked = c.blocked.packets;
-            self.status.dropped_listed = c.listed.packets;
+            self.status.set_counters(c);
         }
         self.write_status();
     }
 
     fn write_status(&mut self) {
         self.status.updated = now();
+        for (s, line) in self.status.upstreams.iter_mut().zip(&self.lines) {
+            let heard = line.shared.heard.load(Ordering::Relaxed);
+            if heard > 0 {
+                s.last_ok = Some(heard);
+            }
+        }
         for (s, m) in self.status.upstreams.iter_mut().zip(&self.mirrors) {
             s.seq = m.seq;
             s.blocks = m.blocks.len();
@@ -460,6 +642,13 @@ impl Edge {
                 .zip(&self.lists)
                 .map(|(u, l)| (u.name.clone(), l.clone()))
                 .collect(),
+            list_versions: self
+                .config
+                .upstreams
+                .iter()
+                .zip(&self.list_versions)
+                .map(|(u, v)| (u.name.clone(), v.clone()))
+                .collect(),
         };
         match save(&self.config.state, &saved) {
             Ok(()) => {
@@ -470,59 +659,92 @@ impl Edge {
         }
     }
 
+    fn upstream_name(&self, i: usize) -> &str {
+        self.config
+            .upstreams
+            .get(i)
+            .map_or("?", |u| u.name.as_str())
+    }
+
+    /// Forgets an upstream's state after it sent something that can't be applied, and has its thread connect again
+    /// (to get the whole state).
+    fn start_over(&mut self, i: usize, error: &str) {
+        log(
+            "warning",
+            &format!("upstream {}: {error}", self.upstream_name(i)),
+        );
+        if let Some(mirror) = self.mirrors.get_mut(i) {
+            *mirror = Mirror::default();
+        }
+        if let Some(line) = self.lines.get(i) {
+            line.set_position(|p| *p = Position::default());
+            line.send(Outgoing::Restart);
+        }
+    }
+
     /// Takes in what a thread said. Returns whether the firewall has to be reconciled.
     fn handle(&mut self, message: Message) -> bool {
         let now = now();
         match message {
             Message::Stop => false,
-            Message::Changes(i, changes) => {
+            Message::Connected(i, agent) => {
+                if let Some(s) = self.status.upstreams.get_mut(i) {
+                    if !s.connected {
+                        log(
+                            "info",
+                            &format!("upstream {}: connected (barbican {agent})", s.name),
+                        );
+                    }
+                    s.connected = true;
+                    s.last_ok = Some(now);
+                    s.error = None;
+                    s.agent = Some(agent);
+                }
+                self.send_reports(Some(i));
+                false
+            }
+            Message::Changes(i, raw) => {
+                let frames: Result<Vec<_>, String> = raw
+                    .iter()
+                    .map(|b| match wire::decode(b) {
+                        Ok(Frame::Changes(c)) => Ok(c),
+                        Ok(_) => Err("not changes".to_owned()),
+                        Err(e) => Err(e.to_string()),
+                    })
+                    .collect();
                 let Some(mirror) = self.mirrors.get_mut(i) else {
                     return false;
                 };
                 let first = mirror.epoch.is_empty();
-                let mut reset = false;
-                let changed = changes.full
-                    || !changes.block.is_empty()
-                    || !changes.unblock.is_empty()
-                    || !changes.allow.is_empty()
-                    || !changes.unallow.is_empty();
-                if let Err(e) = mirror.apply(&changes, now) {
-                    log(
-                        "warning",
-                        &format!(
-                            "upstream {}: {e}",
-                            self.config
-                                .upstreams
-                                .get(i)
-                                .map_or("?", |u| u.name.as_str())
-                        ),
-                    );
-                    *mirror = Mirror::default();
-                    reset = true;
+                let full = frames
+                    .as_ref()
+                    .is_ok_and(|f| f.first().is_some_and(|c| c.full));
+                match frames.and_then(|f| mirror.apply(&f, now).map_err(|e| e.to_string())) {
+                    Ok(changed) => {
+                        let (epoch, seq) = (mirror.epoch.clone(), mirror.seq);
+                        if let Some(line) = self.lines.get(i) {
+                            line.set_position(|p| {
+                                p.epoch = epoch;
+                                p.seq = seq;
+                            });
+                        }
+                        if changed {
+                            self.dirty = true;
+                        }
+                        // The first full state after a start is saved at once: a fresh install has something to
+                        // boot with.
+                        if first && full {
+                            self.persist(true);
+                        }
+                        changed || first
+                    }
+                    Err(e) => {
+                        self.start_over(i, &e);
+                        true
+                    }
                 }
-                if let Some(s) = self.status.upstreams.get_mut(i) {
-                    s.connected = true;
-                    s.last_ok = Some(now);
-                    s.error = None;
-                }
-                if changed {
-                    self.dirty = true;
-                }
-                // The first full state after a start is saved at once: a fresh install has something to boot with.
-                if first && changes.full {
-                    self.persist(true);
-                }
-                // A long poll that ran out with nothing new changes nothing.
-                changed || first || reset
             }
-            Message::List(i, _version, nets) => {
-                if let Some(list) = self.lists.get_mut(i) {
-                    *list = nets;
-                    self.dirty = true;
-                    self.merged = None;
-                }
-                true
-            }
+            Message::List(i, raw) => self.take_list(i, &raw),
             Message::Failed(i, error) => {
                 if let Some(s) = self.status.upstreams.get_mut(i) {
                     if s.error.as_deref() != Some(error.as_str()) {
@@ -534,6 +756,134 @@ impl Edge {
                 false
             }
         }
+    }
+
+    /// Takes in an upstream's new list. Returns whether the firewall has to be reconciled.
+    fn take_list(&mut self, i: usize, raw: &[Vec<u8>]) -> bool {
+        let frames: Result<Vec<_>, String> = raw
+            .iter()
+            .map(|b| match wire::decode(b) {
+                Ok(Frame::List(l)) => Ok(l),
+                Ok(_) => Err("not a list".to_owned()),
+                Err(e) => Err(e.to_string()),
+            })
+            .collect();
+        match frames.and_then(|f| wire::assemble_list(f).map_err(|e| e.to_string())) {
+            Ok((version, nets)) => {
+                if let (Some(list), Some(v)) =
+                    (self.lists.get_mut(i), self.list_versions.get_mut(i))
+                {
+                    *list = nets;
+                    v.clone_from(&version);
+                    self.dirty = true;
+                    self.merged = None;
+                }
+                if let Some(line) = self.lines.get(i) {
+                    line.set_position(|p| p.list_version = version);
+                }
+                true
+            }
+            Err(e) => {
+                let error = format!("list: {e}");
+                log(
+                    "warning",
+                    &format!("upstream {}: {error}", self.upstream_name(i)),
+                );
+                if let Some(line) = self.lines.get(i) {
+                    line.send(Outgoing::Restart);
+                }
+                false
+            }
+        }
+    }
+
+    fn report_key(&self) -> ReportKey {
+        let s = &self.status;
+        ReportKey {
+            applied: s.applied,
+            blocks: s.blocks,
+            listed: s.listed,
+            dropped: s.counters(),
+            error: s.error.clone(),
+            upstreams: s
+                .upstreams
+                .iter()
+                .map(|u| (u.connected, u.error.clone()))
+                .collect(),
+        }
+    }
+
+    /// Sends upstreams a status report: to `only` (just connected), or to all when it says something new, or the
+    /// last one is a minute old.
+    fn send_reports(&mut self, only: Option<usize>) {
+        let key = self.report_key();
+        if only.is_none()
+            && self
+                .last_report
+                .as_ref()
+                .is_some_and(|(k, at)| *k == key && at.elapsed() < REPORT_EVERY)
+        {
+            return;
+        }
+        let s = &self.status;
+        let report = wire::Report {
+            at: now(),
+            uptime: self.started.elapsed().as_secs(),
+            rss: rss(),
+            applied: s.applied,
+            blocks: s.blocks as u64,
+            listed: s.listed as u64,
+            dropped: key.dropped,
+            enforcing: self.config.enabled,
+        };
+        let heard: Vec<u64> = self
+            .lines
+            .iter()
+            .map(|l| l.shared.heard.load(Ordering::Relaxed))
+            .collect();
+        for (i, line) in self.lines.iter().enumerate() {
+            let connected = s.upstreams.get(i).is_some_and(|u| u.connected);
+            if !connected || only.is_some_and(|o| o != i) {
+                continue;
+            }
+            let mut out = Vec::new();
+            wire::encode_status(
+                &mut out,
+                &report,
+                VERSION,
+                &s.backend,
+                s.error.as_deref().unwrap_or_default(),
+                s.upstreams.iter().enumerate().map(|(j, u)| wire::Upstream {
+                    name: &u.name,
+                    connected: u.connected,
+                    this: j == i,
+                    last_contact: heard.get(j).copied().filter(|t| *t > 0),
+                    error: u.error.as_deref().unwrap_or_default(),
+                }),
+            );
+            line.send(Outgoing::Frames(out));
+        }
+        if only.is_none() {
+            self.last_report = Some((key, Instant::now()));
+        }
+    }
+}
+
+impl Status {
+    fn set_counters(&mut self, c: Counters) {
+        self.dropped_blocked = c.blocked.packets;
+        self.dropped_blocked_bytes = c.blocked.bytes;
+        self.dropped_listed = c.listed.packets;
+        self.dropped_listed_bytes = c.listed.bytes;
+    }
+
+    fn counters(&self) -> Counters {
+        let mut c = Counters::default();
+        c.blocked.packets = self.dropped_blocked;
+        c.blocked.bytes = self.dropped_blocked_bytes;
+        c.listed.packets = self.dropped_listed;
+        c.listed.bytes = self.dropped_listed_bytes;
+        c
     }
 }
 
@@ -557,6 +907,16 @@ impl Edge {
             .iter()
             .map(|u| saved.lists.remove(&u.name).unwrap_or_default())
             .collect();
+        // A list saved without its version (or none) is asked for again.
+        let list_versions: Vec<String> = config
+            .upstreams
+            .iter()
+            .zip(&lists)
+            .map(|(u, l)| {
+                let version = saved.list_versions.remove(&u.name).unwrap_or_default();
+                if l.is_empty() { String::new() } else { version }
+            })
+            .collect();
         let backend_name = backend.describe();
         let firewall = config.enabled.then_some(backend);
         Edge {
@@ -578,6 +938,10 @@ impl Edge {
             firewall,
             mirrors,
             lists,
+            list_versions,
+            lines: Vec::new(),
+            started: Instant::now(),
+            last_report: None,
             merged: None,
             dirty: false,
             last_saved: None,
@@ -587,31 +951,46 @@ impl Edge {
 }
 
 /// Starts a thread per upstream, each continuing where the saved state stopped.
-fn spawn_upstreams(edge: &Edge, tx: &mpsc::Sender<Message>) -> Result<(), String> {
+fn spawn_upstreams(edge: &mut Edge, tx: &mpsc::Sender<Message>) -> Result<(), String> {
     for (i, upstream) in edge.config.upstreams.iter().enumerate() {
-        let tx = tx.clone();
-        let upstream = upstream.clone();
-        let program = edge.config.program;
-        let (epoch, seq) = edge
-            .mirrors
-            .get(i)
-            .map(|m| (m.epoch.clone(), m.seq))
-            .unwrap_or_default();
-        let list_version = edge
-            .mirrors
-            .get(i)
-            .map(|m| m.list.version.clone())
-            .unwrap_or_default();
-        // A list saved without the mirror knowing its version is fetched again.
-        let list_version = if edge.lists.get(i).is_some_and(Vec::is_empty) {
-            String::new()
-        } else {
-            list_version
+        let position = Position {
+            epoch: edge
+                .mirrors
+                .get(i)
+                .map(|m| m.epoch.clone())
+                .unwrap_or_default(),
+            seq: edge.mirrors.get(i).map_or(0, |m| m.seq),
+            list_version: edge.list_versions.get(i).cloned().unwrap_or_default(),
+        };
+        let shared = Arc::new(Shared {
+            position: Mutex::new(position),
+            heard: AtomicU64::new(0),
+        });
+        let (wake, wake_thread) = UnixStream::pair().map_err(|e| e.to_string())?;
+        wake.set_nonblocking(true)
+            .and_then(|()| wake_thread.set_nonblocking(true))
+            .map_err(|e| e.to_string())?;
+        let (outbox, inbox) = mpsc::channel();
+        let task = Follow {
+            index: i,
+            upstream: upstream.clone(),
+            enforcing: edge.config.enabled,
+            lists: edge.config.lists,
+            backend: edge.status.backend.clone(),
+            shared: Arc::clone(&shared),
+            outbox: inbox,
+            wake: wake_thread,
+            tx: tx.clone(),
         };
         std::thread::Builder::new()
             .name(format!("upstream-{i}"))
-            .spawn(move || follow(program, i, &upstream, epoch, seq, list_version, &tx))
+            .spawn(move || follow(&task))
             .map_err(|e| e.to_string())?;
+        edge.lines.push(Line {
+            shared,
+            outbox,
+            wake,
+        });
     }
     Ok(())
 }
@@ -657,7 +1036,7 @@ fn run(config: Config, backend: Box<dyn Backend>) -> Result<(), String> {
     );
 
     let (tx, rx) = mpsc::channel();
-    spawn_upstreams(&edge, &tx)?;
+    spawn_upstreams(&mut edge, &tx)?;
 
     // A stop (procd's, at a reboot too) saves what changed since the last save.
     let stop = tx.clone();
@@ -711,6 +1090,7 @@ fn run(config: Config, backend: Box<dyn Backend>) -> Result<(), String> {
             last_tick = Instant::now();
         }
         edge.persist(false);
+        edge.send_reports(None);
     }
 }
 

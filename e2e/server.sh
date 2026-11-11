@@ -287,9 +287,7 @@ systemctl start barbican
 if att_blocked; then pass "blocks are back by the time the agent reports ready"; else fail "blocks came back late"; fi
 
 say "the edge API"
-curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:7380/api/edge/v1/changes | grep -q 401 &&
-  pass "refuses without a token" || fail "answers without a token"
-if ! curl -s -m 3 -o /dev/null -H 'Authorization: Bearer e2e-router-token-0123456789' http://127.0.0.1:7380/api/edge/v1/changes; then
+if ! curl -s -m 3 -o /dev/null http://127.0.0.1:7380/; then
   pass "plain HTTP is refused (TLS only)"
 else
   fail "answers plain HTTP"
@@ -298,12 +296,40 @@ command -v openssl >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install 
 FINGERPRINT=$(${DIR}/barbican edge-fingerprint --config /etc/barbican/config.toml)
 served=$(openssl s_client -connect 127.0.0.1:7380 </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256 | cut -d= -f2)
 if [[ ${served} == "${FINGERPRINT}" ]]; then pass "edge-fingerprint prints the served certificate's fingerprint"; else fail "fingerprint ${FINGERPRINT} != ${served}"; fi
-changes=$(curl -sk -H 'Authorization: Bearer e2e-router-token-0123456789' 'https://127.0.0.1:7380/api/edge/v1/changes?since=0')
-if python3 -c 'import json,sys; c=json.loads(sys.argv[1]); assert c["full"] and any(b["net"]=="203.0.113.10" for b in c["block"])' "${changes}"; then
-  pass "gives an edge the whole state"
-else
-  fail "the edge's state is wrong: ${changes}"
-fi
+# Edges that only follow (dry run): one with a token the agent doesn't know, one with the right one.
+edge_conf() { # <name> <token>
+  cat <<EOF2
+config barbican 'main'
+	option dry_run '1'
+	option state '/tmp/edge-$1-state.json'
+	option status '/tmp/edge-$1-status.json'
+
+config upstream 'server'
+	option url 'https://127.0.0.1:7380'
+	option fingerprint '${FINGERPRINT}'
+	option token '$2'
+EOF2
+}
+edge_conf stranger 'not-a-known-token-0123456789' >/tmp/edge-stranger.conf
+edge_conf follower 'e2e-router-token-0123456789' >/tmp/edge-follower.conf
+rm -f /tmp/edge-stranger-* /tmp/edge-follower-*
+for name in stranger follower; do
+  setsid -f sh -c "exec ${DIR}/barbican-edge-ipset --config /tmp/edge-${name}.conf >/tmp/edge-${name}.log 2>&1" </dev/null
+done
+refused() { grep -q "refused this edge: unknown token" /tmp/edge-stranger.log 2>/dev/null; }
+if wait_until 10 refused; then pass "refuses an edge without a known token"; else fail "the stranger: $(cat /tmp/edge-stranger.log)"; fi
+followed() { grep -q '"203.0.113.10"' /tmp/edge-follower-status.json 2>/dev/null; }
+if wait_until 10 followed; then pass "gives an edge the whole state"; else fail "the follower: $(cat /tmp/edge-follower.log)"; fi
+edge_seen() {
+  ${RPC} edges.list | python3 -c 'import json,sys
+e = {x["name"]: x for x in json.load(sys.stdin)}["router"]
+assert e["connected"] and e["enforcing"] is False and e["report"]["blocks"] >= 1, e'
+}
+if wait_until 10 edge_seen; then pass "the agent sees the edge connected, in dry run, with its blocks"; else fail "edges: $(${RPC} edges.list)"; fi
+pkill -f "edge-stranger.conf" || true
+pkill -f "edge-follower.conf" || true
+edge_gone() { ${RPC} edges.list | python3 -c 'import json,sys; sys.exit({x["name"]: x for x in json.load(sys.stdin)}["router"]["connected"])'; }
+if wait_until 10 edge_gone; then pass "and sees it go"; else fail "the edge still shows as connected"; fi
 lift 203.0.113.10
 
 say "downloads and blocklists (internet)"

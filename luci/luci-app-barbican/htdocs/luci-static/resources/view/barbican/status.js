@@ -61,7 +61,7 @@ function upstreams(s) {
 		E('th', { 'class': 'th' }, _('Blocks')),
 		E('th', { 'class': 'th' }, _('Allowed')),
 		E('th', { 'class': 'th' }, _('Listed')),
-		E('th', { 'class': 'th' }, _('Last answer'))
+		E('th', { 'class': 'th' }, _('Last heard from'))
 	]);
 	var rows = (s ? s.upstreams : []).map(function(u) {
 		return E('tr', { 'class': 'tr' }, [
