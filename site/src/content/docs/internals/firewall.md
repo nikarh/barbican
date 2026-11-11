@@ -38,7 +38,7 @@ What the kernel has is read back at the start, and again only when another progr
 
 It doesn't subscribe to nftables' notifications: while anyone listens, the kernel makes a notification of every element of every commit and holds them until the commit ends, gigabytes for another program's large set load.
 
-Should netlink fail (an unexpected kernel), everything goes through `nft` instead: changes as `nft -f` scripts, and the sets read back with `nft -j list set` every minute.
+If netlink fails (an unexpected kernel), everything goes through `nft` instead: changes as `nft -f` scripts, and the sets read back with `nft -j list set` every minute.
 
 ## Boot and stop
 
@@ -46,6 +46,6 @@ The unit runs before `network-pre.target` and Docker, and reports ready only onc
 
 A table with another layout (from another version) is replaced.
 
-## Edges
+## On routers
 
-[barbican-edge](/edge/overview/) keeps the same table on an OpenWrt router, from the union of what its agents send. `barbican-edge-ipset` does the same with an iptables chain in the mangle table, jumped to first in PREROUTING, and ipsets: hash sets for addresses and prefixes, with timeouts (at most 24.8 days, renewed while an agent runs).
+The [nftables edge agent](/edge/overview/) keeps the same table on an OpenWrt router, from the union of what its agents send. `barbican-edge-ipset` does the same with an iptables chain in the mangle table, jumped to first in PREROUTING, and ipsets: hash sets for addresses and prefixes, with timeouts (at most 24.8 days, renewed while an agent runs).

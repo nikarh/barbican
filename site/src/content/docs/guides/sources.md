@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-A source is one log: a name, a parser, and one input. Sources are the `[[source]]` tables of `/etc/barbican/config.toml`; each has a name, shown in the UI and used by rules that only look at some sources.
+A source is one log: a name, a parser, and one input. Inputs and parsers are independent of each other, so any parser works with any input, and new ones can be added without touching the rest. Sources are the `[[source]]` tables of `/etc/barbican/config.toml`; each has a name, shown in the UI and used by rules that only look at some sources.
 
 ```toml title="/etc/barbican/config.toml"
 [[source]]
@@ -92,7 +92,7 @@ pattern = 'Failed login for (?P<user>\S+) from (?P<ip>[0-9a-f.:]+)'
 file = { path = "/var/log/app/app.log" }
 ```
 
-`pattern` and `kind` go with `parser = "regex"`, and only with it. The syntax is that of Rust's [regex](https://docs.rs/regex/latest/regex/#syntax) crate.
+`pattern` and `kind` go with `parser = "regex"`, and only with it. The syntax is the common one without look-around or backreferences ([full reference](https://docs.rs/regex/latest/regex/#syntax)), and matching takes time proportional to the line's length whatever the pattern.
 
 ## Permissions
 

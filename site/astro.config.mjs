@@ -14,6 +14,8 @@ export default defineConfig({
 	site: 'https://barbican.arhipov.net',
 	base,
 	trailingSlash: 'always',
+	// Pages that moved; the destination is a URL, so it carries the base.
+	redirects: { '/edge/protocol/': `${base.replace(/\/$/, '')}/internals/edge-link/` },
 	image: { service: passthroughImageService() },
 	vite: { define: { 'import.meta.env.DOCS_VERSION': JSON.stringify(version) } },
 	markdown: { processor: satteri({ mdastPlugins: [baseLinks(base)] }) },
