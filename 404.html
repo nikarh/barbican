@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Not found · barbican</title>
+<script>
+  (function () {
+    var latest = "main";
+    var versions = ["main"];
+    var path = location.pathname.slice(1), first = path.split("/")[0];
+    if (path && versions.indexOf(first) < 0) location.replace("/" + latest + "/" + path + location.search + location.hash);
+  })();
+</script>
+<style>body{font:16px/1.6 system-ui,sans-serif;max-width:36rem;margin:15vh auto;padding:0 1rem;color:#1b1713}a{color:#9a6017}@media (prefers-color-scheme:dark){body{background:#121110;color:#ece9e4}a{color:#f0a640}}</style>
+<h1>Page not found</h1>
+<p>This page doesn't exist in this version of the barbican docs. It may have moved, or belong to another version.</p>
+<p><a href="/main/">Go to the documentation of main</a> or <a href="/main/">of main</a>.</p>
