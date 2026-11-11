@@ -6,4 +6,5 @@ pub mod backend;
 pub mod daemon;
 pub mod ipset;
 pub mod link;
+pub mod saved;
 pub mod uci;

@@ -15,6 +15,10 @@ pub trait Backend: Send {
     fn counters(&mut self) -> Option<Counters>;
     /// Removes its rules and sets.
     fn remove(&mut self) -> Result<(), String>;
+    /// Whether it loads IPv6 at all.
+    fn ipv6(&self) -> bool {
+        true
+    }
     /// Whether the firewall may need reconciling (another program changed it), as cheaply as that can be told:
     /// asked every minute. `now` is the current unix time.
     fn check(&mut self, _now: u64) -> bool {
@@ -67,6 +71,10 @@ impl<R: Runner + Send> Backend for Nft<R> {
 
     fn check(&mut self, _now: u64) -> bool {
         self.0.check()
+    }
+
+    fn ipv6(&self) -> bool {
+        self.0.ipv6()
     }
 }
 

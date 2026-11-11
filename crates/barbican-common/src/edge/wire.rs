@@ -9,7 +9,7 @@
 //!           (IPv4 in the first 4 bytes, the rest zero; host bits zero; no IPv4-mapped IPv6 addresses)
 //! block   = net, until: u64 (0: never)                                       26 bytes
 //!
-//! HELLO    0x01  edge → agent   protocol: u16, flags: u8 (1 enforcing, 2 wants lists), seq: u64, epoch: string,
+//! HELLO    0x01  edge → agent   protocol: u16, flags: u8 (1 enforcing, 2 wants lists, 4 wants IPv6), seq: u64, epoch: string,
 //!                               list version: string, token: string, edge version: string, backend: string
 //! WELCOME  0x02  agent → edge   protocol: u16, client name: string, agent version: string
 //! REFUSE   0x03  agent → edge   reason: string; the agent closes the connection after it
@@ -68,6 +68,7 @@ pub mod ext {
 
 const HELLO_ENFORCING: u8 = 1;
 const HELLO_LISTS: u8 = 2;
+const HELLO_IPV6: u8 = 4;
 const CHANGES_FULL: u8 = 1;
 const CHANGES_MORE: u8 = 2;
 const LIST_LAST: u8 = 1;
@@ -119,6 +120,8 @@ pub struct Hello<'a> {
     pub enforcing: bool,
     /// It wants the agent's list (countries and blocklists).
     pub lists: bool,
+    /// Its firewall loads IPv6: otherwise the agent sends no IPv6 at all (bans, allows, list).
+    pub ipv6: bool,
     /// Where its copy of the agent's state is: `epoch` and `seq` of the last changes it applied.
     pub epoch: &'a str,
     pub seq: u64,
@@ -550,11 +553,12 @@ pub fn decode(frame: &[u8]) -> Result<Frame<'_>, Error> {
             if u32::from(protocol) != PROTOCOL_VERSION {
                 return Err(Error::Protocol(protocol));
             }
-            let flags = r.flags(HELLO_ENFORCING | HELLO_LISTS)?;
+            let flags = r.flags(HELLO_ENFORCING | HELLO_LISTS | HELLO_IPV6)?;
             let seq = r.u64()?;
             Frame::Hello(Hello {
                 enforcing: flags & HELLO_ENFORCING != 0,
                 lists: flags & HELLO_LISTS != 0,
+                ipv6: flags & HELLO_IPV6 != 0,
                 seq,
                 epoch: r.str()?,
                 list_version: r.str()?,
@@ -647,6 +651,9 @@ impl Hello<'_> {
         }
         if self.lists {
             flags |= HELLO_LISTS;
+        }
+        if self.ipv6 {
+            flags |= HELLO_IPV6;
         }
         out.push(flags);
         out.extend_from_slice(&self.seq.to_le_bytes());
@@ -880,6 +887,7 @@ mod tests {
         let hello = Hello {
             enforcing: true,
             lists: false,
+            ipv6: true,
             epoch: "e1",
             seq: 42,
             list_version: "v",

@@ -36,7 +36,7 @@ config barbican 'main'
 	option enabled '1'
 	option dry_run '0'             # 1: follow and save, but change nothing in the firewall
 	option lists '1'               # also the agents' country blocks and blocking lists
-	option persist_interval '3600'
+	option persist_interval '0'    # also save every N seconds (0: only on a clean stop)
 
 config upstream 'server'
 	option url 'https://192.168.1.10:7380'
@@ -55,9 +55,11 @@ about as much memory as IPv4's (roughly 140 bytes each; ~12 MB for Africa, Asia 
 Every minute (`option check_interval`, in seconds) the edge asks nftables for the ruleset's generation, one small
 request: when another program changed the ruleset (a firewall restart flushes it), the table is put right.
 
-The state is saved to `/etc/barbican/state.json` when it changed, at most once an hour (flash wears), and on a clean
-stop; at boot it is put back before the firewall and the network start, so blocks hold across reboots and while the
-agents are unreachable.
+The state is saved to `/etc/barbican/state` (and the lists to `/etc/barbican/state.lists`, compact binary files)
+when the agent stops cleanly, as at a reboot or an upgrade, and not otherwise: flash wears, and once an agent is
+reachable it sends whatever changed. At boot the state is put back before the firewall and the network start, so
+blocks hold while the agents are still unreachable. After a power cut the router starts from the last clean stop;
+`option persist_interval` (seconds) also saves that often.
 
 ## By hand
 

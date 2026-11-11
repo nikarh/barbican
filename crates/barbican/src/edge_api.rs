@@ -10,8 +10,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use barbican_common::edge::PROTOCOL_VERSION;
 use barbican_common::edge::wire::{self, Frame, HEARTBEAT, SILENCE};
+use barbican_common::edge::{Changes, PROTOCOL_VERSION};
+use barbican_common::net::{Family, Net};
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -106,7 +107,8 @@ struct Edge {
     /// Each edge's newest connection.
     current: std::sync::Mutex<HashMap<String, u64>>,
     /// The list as last written, by version: written once for every edge that needs it.
-    list: std::sync::Mutex<Option<(String, Arc<Vec<u8>>)>>,
+    /// The current list's frames, by version (whole, and without IPv6).
+    list: std::sync::Mutex<Vec<(String, Arc<Vec<u8>>)>>,
 }
 
 /// Compares in constant time, so a token can't be guessed byte by byte from response times.
@@ -128,24 +130,67 @@ impl Edge {
         found
     }
 
-    /// The list's frames, written when its version is new.
-    fn list_frames(&self) -> (String, Arc<Vec<u8>>) {
+    /// The list's frames and their version, written when the list is new: whole, or without IPv6 for an edge that
+    /// doesn't load it (a version of its own, so that an edge switching IPv6 on gets the whole list).
+    fn list_frames(&self, ipv6: bool) -> (String, Arc<Vec<u8>>) {
         let lists = self.app.lists.read().map(|l| l.clone()).unwrap_or_default();
-        let Ok(mut cached) = self.list.lock() else {
+        let version = list_version(&lists.version, ipv6);
+        let encode = || {
             let mut out = Vec::new();
-            wire::encode_list(&mut out, &lists.version, &lists.nets);
-            return (lists.version, Arc::new(out));
+            if ipv6 {
+                wire::encode_list(&mut out, &version, &lists.nets);
+            } else {
+                let v4: Vec<Net> = lists
+                    .nets
+                    .iter()
+                    .filter(|n| n.family() == Family::V4)
+                    .copied()
+                    .collect();
+                wire::encode_list(&mut out, &version, &v4);
+            }
+            Arc::new(out)
         };
-        if let Some((version, frames)) = cached.as_ref()
-            && *version == lists.version
-        {
-            return (version.clone(), Arc::clone(frames));
+        let Ok(mut cached) = self.list.lock() else {
+            let frames = encode();
+            return (version, frames);
+        };
+        // Only frames of the current list are kept: one whole, one without IPv6.
+        cached.retain(|(v, _)| *v == lists.version || *v == list_version(&lists.version, false));
+        if let Some((_, frames)) = cached.iter().find(|(v, _)| *v == version) {
+            return (version, Arc::clone(frames));
         }
-        let mut out = Vec::new();
-        wire::encode_list(&mut out, &lists.version, &lists.nets);
-        let frames = Arc::new(out);
-        *cached = Some((lists.version.clone(), Arc::clone(&frames)));
-        (lists.version, frames)
+        let frames = encode();
+        cached.push((version.clone(), Arc::clone(&frames)));
+        (version, frames)
+    }
+}
+
+/// The version of the list an edge gets: without IPv6, another one.
+fn list_version(version: &str, ipv6: bool) -> String {
+    if ipv6 {
+        version.to_owned()
+    } else {
+        format!("{version}+v4")
+    }
+}
+
+/// What of a change an edge without IPv6 gets.
+fn without_ipv6(changes: &Changes) -> Changes {
+    let v4 = |n: &Net| n.family() == Family::V4;
+    Changes {
+        epoch: changes.epoch.clone(),
+        seq: changes.seq,
+        now: changes.now,
+        full: changes.full,
+        block: changes
+            .block
+            .iter()
+            .filter(|b| v4(&b.net))
+            .copied()
+            .collect(),
+        unblock: changes.unblock.iter().filter(|n| v4(n)).copied().collect(),
+        allow: changes.allow.iter().filter(|n| v4(n)).copied().collect(),
+        unallow: changes.unallow.iter().filter(|n| v4(n)).copied().collect(),
     }
 }
 
@@ -189,6 +234,8 @@ struct Start {
     seq: u64,
     list_version: String,
     lists: bool,
+    /// The edge loads IPv6: none is sent otherwise.
+    ipv6: bool,
 }
 
 /// Pushes what the edge needs: what it missed, then every change as it happens, and the list when it changed.
@@ -207,7 +254,8 @@ async fn push<W: AsyncWrite + Unpin>(
     .encode(&mut out);
     let mut news = app.journal_seq.subscribe();
     news.borrow_and_update();
-    let (mut epoch, mut seq, mut list_version) = (start.epoch, start.seq, start.list_version);
+    let (mut epoch, mut seq, mut list_version_held) =
+        (start.epoch.clone(), start.seq, start.list_version.clone());
     let mut first = true;
     loop {
         let unix = u64::try_from(now()).unwrap_or(0);
@@ -224,7 +272,11 @@ async fn push<W: AsyncWrite + Unpin>(
                 && changes.allow.is_empty()
                 && changes.unallow.is_empty());
         if news_for_it {
-            wire::encode_changes(&mut out, &changes);
+            if start.ipv6 {
+                wire::encode_changes(&mut out, &changes);
+            } else {
+                wire::encode_changes(&mut out, &without_ipv6(&changes));
+            }
             epoch.clone_from(&changes.epoch);
             seq = changes.seq;
         }
@@ -241,10 +293,10 @@ async fn push<W: AsyncWrite + Unpin>(
                 .map(|l| l.version.clone())
                 .unwrap_or_default();
             // An empty version: not computed yet since the agent started; the edge keeps what it has meanwhile.
-            if !version.is_empty() && version != list_version {
-                let (version, frames) = edge.list_frames();
+            if !version.is_empty() && list_version(&version, start.ipv6) != list_version_held {
+                let (version, frames) = edge.list_frames(start.ipv6);
                 write(w, &frames).await?;
-                list_version = version;
+                list_version_held = version;
             }
         }
         let mut quiet = Instant::now() + HEARTBEAT;
@@ -355,6 +407,7 @@ async fn connection<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         seq: hello.seq,
         list_version: hello.list_version.to_owned(),
         lists: hello.lists,
+        ipv6: hello.ipv6,
     };
     tracing::info!(edge = %client, address = %peer.ip(), version = hello.version, "Edge connected");
     edge.update(&client, connection, |e| {
@@ -452,7 +505,7 @@ pub async fn serve(app: Arc<App>, config: &crate::config::Edge) -> Result<(), St
         tokens,
         connections: AtomicU64::new(0),
         current: std::sync::Mutex::new(HashMap::new()),
-        list: std::sync::Mutex::new(None),
+        list: std::sync::Mutex::new(Vec::new()),
     });
     let listener = crate::run::bind(config.listen, "Edge API (TLS)").await;
     loop {
@@ -475,6 +528,35 @@ pub async fn serve(app: Arc<App>, config: &crate::config::Edge) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_edge_without_ipv6_gets_none() {
+        let net = |s: &str| -> Net { s.parse().unwrap() };
+        let changes = Changes {
+            epoch: "e".into(),
+            seq: 3,
+            now: 9,
+            full: true,
+            block: vec![
+                barbican_common::edge::EdgeBlock {
+                    net: net("198.51.100.7"),
+                    until: None,
+                },
+                barbican_common::edge::EdgeBlock {
+                    net: net("2001:db8::7"),
+                    until: Some(5),
+                },
+            ],
+            unblock: vec![net("2001:db8::8"), net("198.51.100.8")],
+            allow: vec![net("2001:db8::/32")],
+            unallow: vec![],
+        };
+        let v4 = without_ipv6(&changes);
+        assert_eq!(v4.block.len(), 1);
+        assert_eq!(v4.unblock, vec![net("198.51.100.8")]);
+        assert!(v4.allow.is_empty() && v4.seq == 3 && v4.full);
+        assert_ne!(list_version("abc", false), list_version("abc", true));
+    }
 
     #[test]
     fn token_comparison() {

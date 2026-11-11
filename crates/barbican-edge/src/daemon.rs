@@ -19,9 +19,10 @@ use barbican_common::edge::{Mirror, merge};
 use barbican_common::net::{Net, aggregate};
 use barbican_common::nft::Counters;
 use barbican_common::nft::Desired;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::backend::Backend;
+use crate::saved;
 use crate::uci;
 
 pub const VERSION: &str = env!("BARBICAN_VERSION");
@@ -82,7 +83,9 @@ pub struct Config {
     pub lists: bool,
     pub state: PathBuf,
     pub status: PathBuf,
-    pub persist_every: Duration,
+    /// How often the state is saved besides on a clean stop: `persist_interval` seconds, `None` (the default, 0) for
+    /// only then.
+    pub persist_every: Option<Duration>,
     /// How often the status (with the drop counters) is written, and the firewall checked for changes by other
     /// programs (a flushed ruleset, a restarted firewall): `check_interval`, in seconds.
     pub tick: Duration,
@@ -152,11 +155,14 @@ pub fn load_config(path: &Path, defaults: &Defaults) -> Result<Config, String> {
         lists: flag("lists", true),
         state: PathBuf::from(main.option("state").unwrap_or(defaults.state)),
         status: PathBuf::from(main.option("status").unwrap_or(defaults.status)),
-        persist_every: Duration::from_secs(
-            main.option("persist_interval")
-                .and_then(|p| p.parse().ok())
-                .unwrap_or(3_600),
-        ),
+        // Flash wears, and after a reboot the agents send everything again once they are reachable: by default the
+        // state is saved only when the edge stops cleanly (a reboot, an upgrade), so that the blocks are back at
+        // boot even if no agent is reachable yet. A number of seconds saves (what changed) that often too.
+        persist_every: main
+            .option("persist_interval")
+            .and_then(|p| p.parse().ok())
+            .filter(|&s: &u64| s > 0)
+            .map(Duration::from_secs),
         tick: Duration::from_secs(
             main.option("check_interval")
                 .and_then(|p| p.parse().ok())
@@ -166,40 +172,6 @@ pub fn load_config(path: &Path, defaults: &Defaults) -> Result<Config, String> {
         upstreams,
         main,
     })
-}
-
-/// What is saved to flash: each upstream's mirror and list (with its version), and when.
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct Saved {
-    saved_at: u64,
-    mirrors: BTreeMap<String, Mirror>,
-    lists: BTreeMap<String, Vec<Net>>,
-    #[serde(default)]
-    list_versions: BTreeMap<String, String>,
-}
-
-fn load_saved(path: &Path) -> Saved {
-    match std::fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
-            log(
-                "warning",
-                &format!("{}: {e}; starting empty", path.display()),
-            );
-            Saved::default()
-        }),
-        Err(_) => Saved::default(),
-    }
-}
-
-fn save(path: &Path, saved: &Saved) -> Result<(), String> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    let partial = path.with_extension("part");
-    let json = serde_json::to_vec(saved).map_err(|e| e.to_string())?;
-    std::fs::write(&partial, json)
-        .and_then(|()| std::fs::rename(&partial, path))
-        .map_err(|e| format!("{}: {e}", path.display()))
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -311,6 +283,8 @@ struct Follow {
     /// For the hello.
     enforcing: bool,
     lists: bool,
+    /// The firewall loads IPv6: the agent sends none otherwise.
+    ipv6: bool,
     backend: String,
     shared: Arc<Shared>,
     outbox: mpsc::Receiver<Outgoing>,
@@ -373,6 +347,7 @@ fn session(f: &Follow, client: &crate::link::Client, welcomed: &mut bool) -> Res
     wire::Hello {
         enforcing: f.enforcing,
         lists: f.lists,
+        ipv6: f.ipv6,
         epoch: &position.epoch,
         seq: position.seq,
         list_version: &position.list_version,
@@ -497,7 +472,13 @@ struct Edge {
     /// The upstreams' lists merged, made again only when one of them changes.
     merged: Option<Arc<Vec<Net>>>,
     status: Status,
+    /// The bans and allows changed since they were saved.
     dirty: bool,
+    /// A list changed since the lists were saved (a few times a day: saved apart from the bans, which change all
+    /// the time).
+    lists_dirty: bool,
+    /// Whether the firewall loads IPv6: the lists are saved without it otherwise.
+    ipv6: bool,
     last_saved: Option<Instant>,
 }
 
@@ -610,49 +591,48 @@ impl Edge {
 
     /// How long the main loop may sleep: until the next tick, or until a pending save is due.
     fn next_wake(&self) -> Duration {
-        if !self.dirty {
+        if !(self.dirty || self.lists_dirty) {
             return self.config.tick;
         }
-        let due = self.last_saved.map_or(Duration::ZERO, |t| {
-            self.config.persist_every.saturating_sub(t.elapsed())
-        });
+        let Some(every) = self.config.persist_every else {
+            return self.config.tick;
+        };
+        let due = self
+            .last_saved
+            .map_or(Duration::ZERO, |t| every.saturating_sub(t.elapsed()));
         due.clamp(Duration::from_millis(100), self.config.tick)
     }
 
     fn persist(&mut self, force: bool) {
         let due = self
-            .last_saved
-            .is_none_or(|t| t.elapsed() >= self.config.persist_every);
-        if !self.dirty || !(due || force) {
+            .config
+            .persist_every
+            .is_some_and(|every| self.last_saved.is_none_or(|t| t.elapsed() >= every));
+        if !(self.dirty || self.lists_dirty) || !(due || force) {
             return;
         }
-        let saved = Saved {
+        let names = || self.config.upstreams.iter().map(|u| u.name.clone());
+        let saved = saved::Saved {
             saved_at: now(),
-            mirrors: self
-                .config
-                .upstreams
-                .iter()
-                .zip(&self.mirrors)
-                .map(|(u, m)| (u.name.clone(), m.clone()))
-                .collect(),
-            lists: self
-                .config
-                .upstreams
-                .iter()
-                .zip(&self.lists)
-                .map(|(u, l)| (u.name.clone(), l.clone()))
-                .collect(),
-            list_versions: self
-                .config
-                .upstreams
-                .iter()
-                .zip(&self.list_versions)
-                .map(|(u, v)| (u.name.clone(), v.clone()))
-                .collect(),
+            mirrors: names().zip(self.mirrors.iter().cloned()).collect(),
+            lists: if self.lists_dirty {
+                names().zip(self.lists.iter().cloned()).collect()
+            } else {
+                BTreeMap::new()
+            },
+            list_versions: names().zip(self.list_versions.iter().cloned()).collect(),
         };
-        match save(&self.config.state, &saved) {
+        // The state holds the time of the save, which restoring counts from: written with the lists too.
+        let mut result =
+            saved::encode_state(&saved).and_then(|b| saved::write(&self.config.state, &b));
+        if result.is_ok() && self.lists_dirty {
+            result = saved::encode_lists(&saved, self.ipv6)
+                .and_then(|b| saved::write(&saved::lists_path(&self.config.state), &b));
+        }
+        match result {
             Ok(()) => {
                 self.dirty = false;
+                self.lists_dirty = false;
                 self.last_saved = Some(Instant::now());
             }
             Err(e) => log("warning", &format!("saving the state: {e}")),
@@ -775,7 +755,7 @@ impl Edge {
                 {
                     *list = nets;
                     v.clone_from(&version);
-                    self.dirty = true;
+                    self.lists_dirty = true;
                     self.merged = None;
                 }
                 if let Some(line) = self.lines.get(i) {
@@ -890,7 +870,8 @@ impl Status {
 impl Edge {
     /// The edge as it was saved, before any upstream answered.
     fn restore(config: Config, backend: Box<dyn Backend>) -> Self {
-        let mut saved = load_saved(&config.state);
+        let ipv6 = backend.ipv6();
+        let mut saved = saved::load(&config.state, ipv6, &|e| log("warning", &e));
         // A router without a clock that keeps time may boot in the past: count from when the state was saved.
         let now = now().max(saved.saved_at);
         let mirrors: Vec<Mirror> = config
@@ -944,6 +925,9 @@ impl Edge {
             last_report: None,
             merged: None,
             dirty: false,
+            // A state written by an older version (one JSON file) is written anew, lists and all.
+            lists_dirty: std::fs::read(&config.state).is_ok_and(|b| b.first() == Some(&b'{')),
+            ipv6,
             last_saved: None,
             config,
         }
@@ -976,6 +960,7 @@ fn spawn_upstreams(edge: &mut Edge, tx: &mpsc::Sender<Message>) -> Result<(), St
             upstream: upstream.clone(),
             enforcing: edge.config.enabled,
             lists: edge.config.lists,
+            ipv6: edge.ipv6,
             backend: edge.status.backend.clone(),
             shared: Arc::clone(&shared),
             outbox: inbox,
@@ -1198,29 +1183,5 @@ mod tests {
         .unwrap();
         assert!(load_config(&path, &DEFAULTS).is_err());
         std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn saved_state_round_trip() {
-        let path =
-            std::env::temp_dir().join(format!("barbican-edge-state-{}.json", std::process::id()));
-        let mut saved = Saved {
-            saved_at: 5,
-            ..Saved::default()
-        };
-        let mut m = Mirror::default();
-        m.blocks.insert("192.0.2.1".parse().unwrap(), Some(99));
-        saved.mirrors.insert("a".into(), m);
-        saved
-            .lists
-            .insert("a".into(), vec!["198.51.100.0/24".parse().unwrap()]);
-        save(&path, &saved).unwrap();
-        let back = load_saved(&path);
-        assert_eq!(back.saved_at, 5);
-        assert_eq!(back.mirrors["a"].blocks.len(), 1);
-        assert_eq!(back.lists["a"].len(), 1);
-        std::fs::write(&path, "garbage").unwrap();
-        assert!(load_saved(&path).mirrors.is_empty());
-        std::fs::remove_file(&path).unwrap();
     }
 }
