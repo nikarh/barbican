@@ -37,8 +37,8 @@ container's log. It checks that:
 - thresholds count (one unknown user from the journal isn't enough, two are), and a container's log is read;
 - a blocked country is dropped (thousands of prefixes) and unblocking works;
 - with a list of 300 000 prefixes loaded, a ban and a lift are in place within half a second, a ban removed by hand
-  and a deleted table are put right on their own (the agent follows nftables' notifications), and nothing falls
-  back to the `nft` program;
+  and a deleted table are put right on their own (the agent checks the ruleset's generation, every second here),
+  and nothing falls back to the `nft` program;
 - bans run out in the kernel with the agent stopped;
 - after a reboot (the table deleted), the blocks are back by the time the agent reports ready;
 - the edge API refuses requests without a token, and gives an edge the whole state;

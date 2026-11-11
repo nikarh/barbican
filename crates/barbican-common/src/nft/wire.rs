@@ -1,6 +1,6 @@
 //! `nf_tables` messages as the kernel takes and gives them over netlink (`NETLINK_NETFILTER`), the way nft
 //! (libnftnl) writes them: the element changes of a transaction, dumps of a set's elements and of a chain's rules,
-//! the ruleset's generation, and the notifications of the `NFNLGRP_NFTABLES` group.
+//! and the ruleset's generation.
 //!
 //! Every value is in the layout `<linux/netlink.h>`, `<linux/netfilter/nfnetlink.h>` and
 //! `<linux/netfilter/nf_tables.h>` define: a `nlmsghdr` (host byte order), a `nfgenmsg`, then attributes (`nlattr`,
@@ -451,7 +451,6 @@ pub struct Message<'a> {
     pub kind: u16,
     pub flags: u16,
     pub seq: u32,
-    pub pid: u32,
     /// After the `nlmsghdr`.
     pub payload: &'a [u8],
     /// The whole message.
@@ -464,11 +463,6 @@ impl<'a> Message<'a> {
     pub fn nft(&self) -> Option<u8> {
         (self.kind >> 8 == NFNL_SUBSYS_NFTABLES)
             .then(|| u8::try_from(self.kind & 0xff).unwrap_or(0))
-    }
-
-    #[must_use]
-    pub fn family(&self) -> Option<u8> {
-        self.payload.first().copied()
     }
 
     /// The attributes after the `nfgenmsg`.
@@ -510,7 +504,6 @@ impl<'a> Iterator for Messages<'a> {
             kind: u16::from_ne_bytes(header.get(4..6)?.try_into().ok()?),
             flags: u16::from_ne_bytes(header.get(6..8)?.try_into().ok()?),
             seq: u32::from_ne_bytes(header.get(8..12)?.try_into().ok()?),
-            pid: u32::from_ne_bytes(header.get(12..16)?.try_into().ok()?),
             payload: self.0.get(NLMSG_HDRLEN..len)?,
             raw: self.0.get(..len)?,
         };
@@ -621,15 +614,6 @@ pub fn parse_gen(message: &Message<'_>) -> Option<u32> {
     be32(find(message.attrs(), NFTA_GEN_ID)?)
 }
 
-/// The table an `nf_tables` notification is about: tables, chains, rules, sets, elements, objects and flowtables
-/// all name it in their attribute 1.
-#[must_use]
-pub fn event_table<'a>(message: &Message<'a>) -> Option<&'a [u8]> {
-    message.nft()?;
-    let attrs = Attrs(message.payload.get(NFGENMSG_LEN..)?);
-    find(attrs, 1).map(strz)
-}
-
 /// `(comment, packets, bytes)` of each rule with a counter in a `NFT_MSG_GETRULE` dump.
 #[must_use]
 pub fn parse_rule_counters(dump: &[u8]) -> Vec<(String, u64, u64)> {
@@ -716,7 +700,7 @@ pub mod tests {
             out.extend_from_slice(&m.kind.to_ne_bytes());
             out.extend_from_slice(&flags.to_ne_bytes());
             out.extend_from_slice(&m.seq.to_ne_bytes());
-            out.extend_from_slice(&m.pid.to_ne_bytes());
+            out.extend_from_slice(&0u32.to_ne_bytes());
             out.extend_from_slice(&body);
         }
         out
@@ -963,7 +947,7 @@ pub mod tests {
     }
 
     #[test]
-    fn notifications() {
+    fn generation() {
         // NFT_MSG_NEWGEN of generation 93, as the kernel sends it.
         let gen_msg = hex(
             "2c 00 00 00 0f 0a 00 00  00 00 00 00 c5 04 00 00  00 00 00 5d
@@ -971,10 +955,5 @@ pub mod tests {
         );
         let m = Messages(&gen_msg).next().unwrap();
         assert_eq!(parse_gen(&m), Some(93));
-        assert_eq!(m.pid, 0x4c5);
-        let dump = hex(NET4_DUMP);
-        let m = Messages(&dump).next().unwrap();
-        assert_eq!(event_table(&m), Some(&b"T"[..]));
-        assert_eq!(m.family(), Some(NFPROTO_INET));
     }
 }

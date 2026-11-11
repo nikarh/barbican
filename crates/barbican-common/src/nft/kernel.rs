@@ -1,7 +1,6 @@
-//! Talking to `nf_tables` over a netlink socket, and watching its notifications.
+//! Talking to `nf_tables` over a netlink socket, and telling whether anyone else changed the ruleset.
 
 use std::os::fd::OwnedFd;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -12,17 +11,11 @@ use rustix::net::{AddressFamily, RecvFlags, SendFlags, SocketFlags, SocketType, 
 use super::Error;
 use super::wire::{self, Messages, NLMSG_DONE, NLMSG_ERROR, NLMSG_OVERRUN, Writer};
 
-/// The `NFNLGRP_NFTABLES` multicast group, as a bit of `nl_groups`.
-const GROUP_NFTABLES: u32 = 1 << (7 - 1);
 /// Replies to requests, and dumps: the kernel fills messages of up to 32 KiB, errors echo up to 64 KiB.
 const RECV_BUFFER: usize = 128 * 1024;
 /// How long a reply may take. Transactions are applied while they are sent, so this only guards against a lost
 /// reply.
 const TIMEOUT: Duration = Duration::from_secs(10);
-/// A transaction larger than this is sent with the monitor unsubscribed (see [`Kernel::transact`]).
-const QUIET_ABOVE: usize = 64 * 1024;
-/// What the monitor's socket may hold before notifications are lost.
-const MONITOR_BUFFER: usize = 4 * 1024 * 1024;
 
 fn io_error(what: &str, e: Errno) -> Error {
     Error::Netlink(format!("{what}: {}", std::io::Error::from(e)))
@@ -39,7 +32,7 @@ fn kernel_error(code: i32) -> Error {
     }
 }
 
-fn open() -> Result<(OwnedFd, u32), Error> {
+fn open() -> Result<OwnedFd, Error> {
     let fd = rustix::net::socket_with(
         AddressFamily::NETLINK,
         SocketType::RAW,
@@ -48,13 +41,9 @@ fn open() -> Result<(OwnedFd, u32), Error> {
     )
     .map_err(|e| io_error("netlink socket", e))?;
     rustix::net::bind(&fd, &SocketAddrNetlink::new(0, 0)).map_err(|e| io_error("bind", e))?;
-    let port = rustix::net::getsockname(&fd)
-        .ok()
-        .and_then(|a| SocketAddrNetlink::try_from(a).ok())
-        .map_or(0, |a| a.pid());
     sockopt::set_socket_timeout(&fd, sockopt::Timeout::Recv, Some(TIMEOUT))
         .map_err(|e| io_error("SO_RCVTIMEO", e))?;
-    Ok((fd, port))
+    Ok(fd)
 }
 
 fn send(fd: &OwnedFd, data: &[u8]) -> Result<(), Error> {
@@ -95,29 +84,31 @@ fn acked(data: &[u8]) -> Vec<u32> {
         .collect()
 }
 
+/// The generation after one commit: the kernel counts every commit, skipping 0.
+fn next_generation(generation: u32) -> u32 {
+    match generation.wrapping_add(1) {
+        0 => 1,
+        g => g,
+    }
+}
+
 struct Socket {
     fd: OwnedFd,
     seq: u32,
     sndbuf: usize,
 }
 
-#[derive(Debug, Default)]
-struct Shared {
-    /// The netlink port of the socket transactions go through: notifications from it are ours.
-    port: AtomicU32,
-    /// Set when the table may have changed other than through us (or whether it did can't be known).
-    drift: AtomicBool,
-    /// Whether a [`Monitor`] watches the table.
-    watching: AtomicBool,
-    /// The monitor's socket and port, to unsubscribe during large transactions.
-    monitor: Mutex<Option<(Arc<OwnedFd>, u32)>>,
-}
-
 /// `nf_tables` over netlink. Clones share the socket.
+///
+/// It also tells whether anyone else changed the ruleset, the way `nft` keeps its own cache: the kernel counts
+/// every commit to `nf_tables` (of any table, by any program) in the ruleset's generation. The generation after
+/// this process' last commit, or after its last read of its table, is kept; while the kernel's is still that one,
+/// nothing changed. Asking costs one small request.
 #[derive(Clone, Default)]
 pub struct Kernel {
     socket: Arc<Mutex<Option<Socket>>>,
-    shared: Arc<Shared>,
+    /// The generation at which this process knew what its table holds.
+    known: Arc<Mutex<Option<u32>>>,
 }
 
 impl std::fmt::Debug for Kernel {
@@ -134,10 +125,8 @@ impl Kernel {
             .lock()
             .map_err(|_| Error::Netlink("lock poisoned".to_owned()))?;
         if guard.is_none() {
-            let (fd, port) = open()?;
-            self.shared.port.store(port, Ordering::SeqCst);
             *guard = Some(Socket {
-                fd,
+                fd: open()?,
                 seq: 1,
                 sndbuf: 0,
             });
@@ -150,6 +139,16 @@ impl Kernel {
             *guard = None;
         }
         result
+    }
+
+    fn set_known(&self, generation: Option<u32>) {
+        if let Ok(mut known) = self.known.lock() {
+            *known = generation;
+        }
+    }
+
+    fn known(&self) -> Option<u32> {
+        self.known.lock().ok().and_then(|k| *k)
     }
 
     /// Sends a request built by `build` (given the first sequence number to use) and collects the replies to it
@@ -230,36 +229,19 @@ impl Kernel {
 
     /// Applies a transaction (messages between a batch begin and end, each asking for an acknowledgement).
     ///
-    /// One that changes many elements (`bulk`: flushing a set counts, whatever its size) is sent with the monitor
-    /// unsubscribed. With a listener the kernel makes a notification of every element in the commit, holding them
-    /// all until it ends: for a large set more memory than a small machine has, and a flood for the monitor.
-    pub fn transact(&self, build: &dyn Fn(u32) -> Vec<u8>, bulk: bool) -> Result<(), Error> {
+    /// What this process knows of its table stays known when the generation moved by this commit alone; if
+    /// anything else committed before or meanwhile, the next [`Self::unchanged`] says so.
+    pub fn transact(&self, build: &dyn Fn(u32) -> Vec<u8>) -> Result<(), Error> {
         self.with(|socket| {
+            let before = Self::generation(socket)?;
             let data = build(socket.seq);
             socket.seq = next_seq(&data);
-            let quiet = bulk || data.len() > QUIET_ABOVE;
-            let monitor = if quiet {
-                self.shared.monitor.lock().ok().and_then(|m| m.clone())
-            } else {
-                None
-            };
-            let Some((monitor, port)) = monitor else {
-                return Self::exchange(socket, &data, false, &mut |_| {});
-            };
-            // Without the monitor listening the kernel doesn't make the notifications at all. What others commit
-            // meanwhile is told by the generation: it moved by more than this transaction.
-            let before = Self::generation(socket)?;
-            let _ = rustix::net::bind(&*monitor, &SocketAddrNetlink::new(port, 0));
             let result = Self::exchange(socket, &data, false, &mut |_| {});
-            let _ = rustix::net::bind(&*monitor, &SocketAddrNetlink::new(port, GROUP_NFTABLES));
-            let after = Self::generation(socket)?;
-            let expected = match before.wrapping_add(1) {
-                0 => 1,
-                g => g,
-            };
-            if result.is_err() || after != expected {
-                self.shared.drift.store(true, Ordering::SeqCst);
-            }
+            let after = Self::generation(socket).ok();
+            let alone = result.is_ok()
+                && self.known() == Some(before)
+                && after == Some(next_generation(before));
+            self.set_known(if alone { after } else { None });
             result
         })
     }
@@ -286,7 +268,7 @@ impl Kernel {
     /// The first datagram of a dump, on a socket of its own that is closed after (the kernel would otherwise keep
     /// the dump going): whether a set has elements, without reading them all.
     pub fn dump_first(&self, build: &dyn Fn(u32) -> Vec<u8>) -> Result<Vec<u8>, Error> {
-        let (fd, _) = open()?;
+        let fd = open()?;
         let data = build(1);
         send(&fd, &data)?;
         let mut buf = vec![0u8; RECV_BUFFER];
@@ -335,103 +317,22 @@ impl Kernel {
         generation.ok_or_else(|| Error::Netlink("no generation".to_owned()))
     }
 
-    /// Whether everything that changed the table since the last call was this process: a [`Monitor`] runs and
-    /// saw nothing else. Resets what it saw.
+    /// Whether anything committed to `nf_tables` since this process last knew what its table holds. Doesn't change
+    /// what is known.
+    #[must_use]
+    pub fn changed(&self) -> bool {
+        let now = self.with(Self::generation).ok();
+        now.is_none() || now != self.known()
+    }
+
+    /// Whether nothing committed to `nf_tables` since the last call or this process' own last commit. When
+    /// something did, the caller reads its table back, and what it reads is known from now on: anything committed
+    /// while it reads moves the generation again.
     #[must_use]
     pub fn unchanged(&self) -> bool {
-        let drift = self.shared.drift.swap(false, Ordering::SeqCst);
-        self.shared.watching.load(Ordering::SeqCst) && !drift
-    }
-
-    /// Subscribes to `nf_tables`' notifications, to learn when another program changes `table`.
-    pub fn monitor(&self, table: &str) -> Result<Monitor, Error> {
-        let fd = rustix::net::socket_with(
-            AddressFamily::NETLINK,
-            SocketType::RAW,
-            SocketFlags::CLOEXEC,
-            Some(netlink::NETFILTER),
-        )
-        .map_err(|e| io_error("netlink socket", e))?;
-        rustix::net::bind(&fd, &SocketAddrNetlink::new(0, GROUP_NFTABLES))
-            .map_err(|e| io_error("bind", e))?;
-        let port = rustix::net::getsockname(&fd)
-            .ok()
-            .and_then(|a| SocketAddrNetlink::try_from(a).ok())
-            .map_or(0, |a| a.pid());
-        if sockopt::set_socket_recv_buffer_size_force(&fd, MONITOR_BUFFER).is_err() {
-            let _ = sockopt::set_socket_recv_buffer_size(&fd, MONITOR_BUFFER);
-        }
-        let fd = Arc::new(fd);
-        if let Ok(mut m) = self.shared.monitor.lock() {
-            *m = Some((Arc::clone(&fd), port));
-        }
-        // What happened before it subscribed is unknown.
-        self.shared.drift.store(true, Ordering::SeqCst);
-        self.shared.watching.store(true, Ordering::SeqCst);
-        Ok(Monitor {
-            fd,
-            table: table.as_bytes().to_vec(),
-            shared: Arc::clone(&self.shared),
-            buf: vec![0u8; RECV_BUFFER],
-            touched: false,
-        })
-    }
-}
-
-/// `nf_tables`' notifications, filtered for changes to one table by another program.
-pub struct Monitor {
-    fd: Arc<OwnedFd>,
-    table: Vec<u8>,
-    shared: Arc<Shared>,
-    buf: Vec<u8>,
-    /// Whether a notification of the transaction being read touched the table.
-    touched: bool,
-}
-
-impl Monitor {
-    /// Blocks until another program committed a change to the table (or notifications were lost, so that it
-    /// can't be known). The next reconcile then reads the table back.
-    pub fn wait(&mut self) -> Result<(), Error> {
-        loop {
-            let len = match rustix::net::recv(&*self.fd, &mut self.buf[..], RecvFlags::empty()) {
-                Ok((len, _)) => len,
-                Err(Errno::INTR | Errno::AGAIN) => continue,
-                // The socket's buffer overflowed: notifications were lost.
-                Err(Errno::NOBUFS) => {
-                    self.touched = false;
-                    self.shared.drift.store(true, Ordering::SeqCst);
-                    return Ok(());
-                }
-                Err(e) => return Err(io_error("monitor", e)),
-            };
-            let ours = self.shared.port.load(Ordering::SeqCst);
-            let mut changed = false;
-            for message in Messages(self.buf.get(..len).unwrap_or(&[])) {
-                if message.nft().is_none() || message.pid == ours && ours != 0 {
-                    continue;
-                }
-                if message.nft() == Some(wire::NFT_MSG_NEWGEN) {
-                    changed |= std::mem::take(&mut self.touched);
-                } else if message.family() == Some(wire::NFPROTO_INET)
-                    && wire::event_table(&message) == Some(self.table.as_slice())
-                {
-                    self.touched = true;
-                }
-            }
-            if changed {
-                self.shared.drift.store(true, Ordering::SeqCst);
-                return Ok(());
-            }
-        }
-    }
-}
-
-impl Drop for Monitor {
-    fn drop(&mut self) {
-        self.shared.watching.store(false, Ordering::SeqCst);
-        self.shared.drift.store(true, Ordering::SeqCst);
-        if let Ok(mut m) = self.shared.monitor.lock() {
-            *m = None;
-        }
+        let now = self.with(Self::generation).ok();
+        let same = now.is_some() && now == self.known();
+        self.set_known(now);
+        same
     }
 }

@@ -67,6 +67,7 @@ database. A full example is [`dist/config.toml`](dist/config.toml).
 | `firewall.table` | `barbican` | The `inet` table barbican owns. |
 | `firewall.priority` | `-190` | Of its prerouting chain: after connection tracking (-200), before NAT (-100). |
 | `firewall.nft` | `nft` | |
+| `firewall.check_interval` | `60` | Seconds between checks whether another program changed nftables, and readings of the drop counters. |
 | `geoip.country`, `geoip.asn` | `/var/lib/barbican/dbip-*-lite.mmdb` | Databases in the MaxMind DB format (DB-IP Lite, or MaxMind's GeoLite2). |
 | `geoip.download` | `true` | Download DB-IP's free databases when missing, and again once a month. |
 | `docker.socket` | `/run/docker.sock` | The Docker API, for docker sources. |
@@ -193,10 +194,13 @@ The table and its chain are made with `nft`; elements are changed straight over 
 transaction whatever the lists hold (`nft` itself reads every element of every set before it changes anything,
 seconds with a large blocklist loaded). Only what changed is written: a ban, a lift, an edit of the allow or deny
 list, new lists (only the prefixes that changed; a restart doesn't load unchanged lists again). The kernel times bans
-out by itself. What the kernel has is read back at the start and when another program changed the table (barbican
-follows nftables' notifications, as `nft monitor` does), so a flushed ruleset or a hand-edited set is put right at
-once, and an idle agent costs nothing. Should netlink fail, everything goes through `nft` instead, reading the sets
-back every minute. Stopping barbican leaves the table in place.
+out by itself. What the kernel has is read back at the start and when another program changed nftables: the kernel
+counts every commit in the ruleset's generation (what `nft` checks its own cache with), and barbican asks for it once
+a minute, one small request. So a flushed ruleset or a hand-edited set is put right within a minute, and an idle
+agent costs next to nothing. (It doesn't subscribe to nftables' notifications: while anyone listens, the kernel makes
+a notification of every element of every commit and holds them until the commit ends, gigabytes for another
+program's large set load.) Should netlink fail, everything goes through `nft` instead, reading the sets back every
+minute. Stopping barbican leaves the table in place.
 
 **At boot** the unit runs before `network-pre.target` and Docker, and reports ready only once the table is back: no
 packet reaches a service before the blocks are in place.

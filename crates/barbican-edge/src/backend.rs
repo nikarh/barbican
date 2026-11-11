@@ -1,6 +1,6 @@
 //! The firewall an edge agent keeps equal to what its upstreams block.
 
-use barbican_common::nft::{Counters, Desired, Firewall, Monitor, NftCommand, Runner};
+use barbican_common::nft::{Counters, Desired, Firewall, NftCommand, Runner};
 
 use crate::daemon::{Config, log};
 
@@ -15,32 +15,17 @@ pub trait Backend: Send {
     fn counters(&mut self) -> Option<Counters>;
     /// Removes its rules and sets.
     fn remove(&mut self) -> Result<(), String>;
-    /// Something that blocks until another program changed the firewall, so that it is only reconciled then.
-    fn monitor(&self) -> Option<Result<Monitor, String>> {
-        None
-    }
-    /// Without a monitor: whether the firewall may need reconciling (as cheaply as that can be told). `now` is
-    /// the current unix time.
+    /// Whether the firewall may need reconciling (another program changed it), as cheaply as that can be told:
+    /// asked every minute. `now` is the current unix time.
     fn check(&mut self, _now: u64) -> bool {
         true
     }
 }
 
-/// What can tell that the table changed: nftables' notifications.
-pub trait Watch {
-    fn monitor(&self, table: &str) -> Option<Result<Monitor, String>>;
-}
-
-impl Watch for NftCommand {
-    fn monitor(&self, table: &str) -> Option<Result<Monitor, String>> {
-        Some(NftCommand::monitor(self, table).map_err(|e| e.to_string()))
-    }
-}
-
 /// nftables: the table of `barbican_common::nft`, as on the agent.
-pub struct Nft<R: Runner + Watch + Send>(pub Firewall<R>);
+pub struct Nft<R: Runner + Send>(pub Firewall<R>);
 
-impl<R: Runner + Watch + Send> Nft<R> {
+impl<R: Runner + Send> Nft<R> {
     fn notice(&mut self) {
         if let Some(e) = self.0.take_notice() {
             log(
@@ -51,7 +36,7 @@ impl<R: Runner + Watch + Send> Nft<R> {
     }
 }
 
-impl<R: Runner + Watch + Send> Backend for Nft<R> {
+impl<R: Runner + Send> Backend for Nft<R> {
     fn describe(&self) -> String {
         format!("nftables table inet {}", self.0.table())
     }
@@ -80,8 +65,8 @@ impl<R: Runner + Watch + Send> Backend for Nft<R> {
         self.0.remove().map_err(|e| e.to_string())
     }
 
-    fn monitor(&self) -> Option<Result<Monitor, String>> {
-        self.0.runner().monitor(self.0.table())
+    fn check(&mut self, _now: u64) -> bool {
+        self.0.check()
     }
 }
 

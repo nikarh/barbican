@@ -94,7 +94,7 @@ pub struct EdgeClient {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct Firewall {
     /// Off: decide and record everything, but leave nftables alone (as `--dry-run` does).
     pub enabled: bool,
@@ -103,6 +103,9 @@ pub struct Firewall {
     pub priority: i32,
     /// The nft program.
     pub nft: String,
+    /// Seconds between checks whether another program changed nftables (one small request each), and between
+    /// readings of the drop counters.
+    pub check_interval: u64,
 }
 
 impl Default for Firewall {
@@ -112,6 +115,7 @@ impl Default for Firewall {
             table: "barbican".to_owned(),
             priority: -190,
             nft: "nft".to_owned(),
+            check_interval: 60,
         }
     }
 }
@@ -294,6 +298,11 @@ impl Config {
                 "firewall.table: letters, digits, '_' and '-' only".to_owned(),
             ));
         }
+        if self.firewall.check_interval == 0 {
+            return Err(Error::Invalid(
+                "firewall.check_interval: at least 1 (seconds)".to_owned(),
+            ));
+        }
         Ok(())
     }
 }
@@ -433,6 +442,15 @@ mod tests {
             parse("[firewall]\ntable = \"a b\"\nenabled = true\npriority = 0\nnft = \"nft\"")
                 .is_err()
         );
+        assert!(parse("[firewall]\ncheck_interval = 0").is_err());
         assert!(parse("unknown = 1").is_err());
+    }
+
+    #[test]
+    fn firewall_options_default_one_by_one() {
+        let config = parse("[firewall]\nenabled = false").unwrap();
+        assert!(!config.firewall.enabled);
+        assert_eq!(config.firewall.table, "barbican");
+        assert_eq!(config.firewall.check_interval, 60);
     }
 }

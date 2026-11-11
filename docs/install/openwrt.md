@@ -46,6 +46,9 @@ config upstream 'server'
 then `/etc/init.d/barbican-edge restart`. **Services → Barbican → Status** (or `barbican-edge status`) shows whether
 it follows its agents and what it blocks. See [Connecting an edge to an agent](README.md#connecting-an-edge-to-an-agent).
 
+Every minute (`option check_interval`, in seconds) the edge asks nftables for the ruleset's generation, one small
+request: when another program changed the ruleset (a firewall restart flushes it), the table is put right.
+
 The state is saved to `/etc/barbican/state.json` when it changed, at most once an hour (flash wears), and on a clean
 stop; at boot it is put back before the firewall and the network start, so blocks hold across reboots and while the
 agents are unreachable.

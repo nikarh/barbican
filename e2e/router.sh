@@ -53,6 +53,7 @@ cat >"${TMPDIR:-/tmp}/barbican-e2e-uci" <<EOF
 config barbican 'main'
 	option enabled '1'
 	option persist_interval '1'
+	option check_interval '1'
 
 config upstream 'server'
 	option url 'https://10.99.0.1:7380'
@@ -81,7 +82,7 @@ else
 fi
 
 say "another program changes the table"
-# nftables tells of it (the notifications `nft monitor` shows): the edge puts it right then, it doesn't poll.
+# The edge's next check of the ruleset's generation (every second here) notices, and it puts it right.
 router 'nft delete element inet barbican host4 "{ 203.0.113.77 }"'
 if wait_until 5 in_set; then pass "a block removed by hand is put back"; else fail "a block removed by hand stays removed"; fi
 router 'nft delete table inet barbican'
