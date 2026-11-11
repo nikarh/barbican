@@ -1,5 +1,6 @@
-//! Blocklists from the internet ("feeds"): plain lists of addresses and prefixes, fetched now and then. A feed
-//! either blocks what it lists as a whole, or is only data for rules (their `listed` condition) and the UI.
+//! Lists from the internet ("feeds"): plain lists of addresses and prefixes, fetched now and then. A feed either
+//! blocks what it lists as a whole, or allows it (never banned, accepted before any drop: e.g. a CDN's proxies, whose
+//! addresses carry everyone's traffic), or is only data for rules (their `listed` condition) and the UI.
 
 use std::time::Duration;
 
@@ -23,6 +24,10 @@ pub struct FeedDef {
     pub enabled: bool,
     /// Block every address it lists. Otherwise the list is only data for rules and the UI.
     pub block: bool,
+    /// Allow every address it lists, as the allow list does: never banned, and accepted before any drop rule here
+    /// and on the edges. Not together with `block`.
+    #[serde(default)]
+    pub allow: bool,
     #[cfg_attr(test, ts(type = "number"))]
     pub refresh_secs: u64,
     /// HTTP basic authentication, for lists behind an account (e.g. a CrowdSec blocklist integration).
@@ -41,6 +46,7 @@ pub fn presets() -> Vec<FeedDef> {
         url: url.to_owned(),
         enabled: true,
         block,
+        allow: false,
         refresh_secs: hours * 3_600,
         username: None,
         password: None,
@@ -76,6 +82,21 @@ pub fn presets() -> Vec<FeedDef> {
             false,
             6,
         ),
+        // A site behind Cloudflare's proxy is reached from Cloudflare's addresses, not its visitors'; some of them
+        // are placed in Asia, Africa or South America by the geolocation databases, whatever data centre uses them.
+        FeedDef {
+            allow: true,
+            ..preset("Cloudflare", "https://www.cloudflare.com/ips-v4", false, 24)
+        },
+        FeedDef {
+            allow: true,
+            ..preset(
+                "Cloudflare (IPv6)",
+                "https://www.cloudflare.com/ips-v6",
+                false,
+                24,
+            )
+        },
     ]
 }
 

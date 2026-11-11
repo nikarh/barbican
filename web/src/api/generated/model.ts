@@ -254,7 +254,12 @@ name: string, url: string, enabled: boolean,
 /**
  * Block every address it lists. Otherwise the list is only data for rules and the UI.
  */
-block: boolean, refreshSecs: number, 
+block: boolean, 
+/**
+ * Allow every address it lists, as the allow list does: never banned, and accepted before any drop rule here
+ * and on the edges. Not together with `block`.
+ */
+allow: boolean, refreshSecs: number, 
 /**
  * HTTP basic authentication, for lists behind an account (e.g. a CrowdSec blocklist integration).
  */

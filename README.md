@@ -174,9 +174,15 @@ many people, scanners among them. Allowing them would let anyone through; bannin
 everyone else using them. Give them short bans instead: a length for AS13335 (Cloudflare) and one for the "iCloud
 Private Relay" blocklist preset (Apple's published egress ranges), as data rather than a block.
 
-**Blocklists**: Spamhaus DROP, FireHOL level 1, blocklist.de and Tor's exit list can be added in one click, any list
-of addresses by URL (with basic authentication: CrowdSec's blocklists through a "blocklist integration" of a console
-account). A list either blocks as a whole, or is data: rules can ask for "listed in", and address pages show it.
+**Feeds** (lists fetched from the internet): Spamhaus DROP, FireHOL level 1, blocklist.de, Tor's exit list and
+Cloudflare's address ranges can be added in one click, any list of addresses by URL (with basic authentication:
+CrowdSec's blocklists through a "blocklist integration" of a console account). A list either blocks as a whole,
+allows as a whole (never banned, let through before any block, here and on the edges, like the allow list), or is
+data: rules can ask for "listed in", and address pages show it.
+
+**Behind Cloudflare's proxy**, a site's visitors arrive from Cloudflare's addresses, and geolocation databases place
+some of those in Asia, Africa or South America whatever data centre uses them: blocking those continents would then
+drop your own visits now and then. Allow Cloudflare's ranges (the "Allow Cloudflare" feeds, refreshed daily).
 
 ## The firewall
 

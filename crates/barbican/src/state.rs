@@ -158,7 +158,7 @@ fn fnv(bytes: impl Iterator<Item = u8>, mut hash: u64) -> u64 {
 }
 
 impl State {
-    /// Whether no rule may act on the address: it is exempt, or on the allow list.
+    /// Whether no rule may act on the address: it is exempt, on the allow list, or in a feed that allows.
     #[must_use]
     pub fn allowed(&self, ip: IpAddr, now: i64) -> bool {
         self.exempt.iter().any(|n| n.contains_ip(ip))
@@ -166,6 +166,12 @@ impl State {
                 .entries
                 .iter()
                 .any(|e| e.allow && e.until.is_none_or(|u| u > now) && e.net.contains_ip(ip))
+            || self.allowing_feeds().any(|f| f.loaded.set.contains(ip))
+    }
+
+    /// The enabled feeds whose addresses are allowed.
+    pub fn allowing_feeds(&self) -> impl Iterator<Item = &Feed> {
+        self.feeds.iter().filter(|f| f.def.enabled && f.def.allow)
     }
 
     /// The active ban that covers the address, if any.
@@ -221,7 +227,8 @@ impl State {
         self.trust.retain(|_, t| t.until > now);
     }
 
-    /// Blocks (bans and the deny list) and allows (exempt and the allow list), as the firewall and edges get them.
+    /// Blocks (bans and the deny list) and allows (exempt, the allow list and the feeds that allow), as the firewall
+    /// and edges get them.
     #[must_use]
     pub fn blocks_and_allows(&self, now: i64) -> (Vec<Block>, Vec<Net>) {
         let until = |u: Option<i64>| u.map(|u| u64::try_from(u).unwrap_or(0));
@@ -235,6 +242,9 @@ impl State {
             })
             .collect();
         let mut allows = self.exempt.clone();
+        for feed in self.allowing_feeds() {
+            allows.extend(feed.loaded.nets.iter().copied());
+        }
         for e in &self.entries {
             if e.until.is_some_and(|u| u <= now) {
                 continue;
@@ -385,6 +395,7 @@ mod tests {
                 url: String::new(),
                 enabled: true,
                 block: true,
+                allow: false,
                 refresh_secs: 3_600,
                 username: None,
                 password: None,
@@ -402,5 +413,39 @@ mod tests {
         state.feeds[0].def.block = false;
         assert_eq!(state.lists().version, a.version);
         assert_eq!(state.listed(ip("203.0.113.5")), vec!["x"]);
+    }
+
+    #[test]
+    fn a_feed_that_allows_is_allowed_everywhere() {
+        let mut state = State::default();
+        state.feeds.push(Feed {
+            def: FeedDef {
+                id: 1,
+                name: "cdn".into(),
+                url: String::new(),
+                enabled: true,
+                block: false,
+                allow: true,
+                refresh_secs: 3_600,
+                username: None,
+                password: None,
+            },
+            loaded: Arc::new(Loaded::from_data(
+                "162.158.0.0/15
+",
+            )),
+            fetched: None,
+            succeeded: None,
+            changed: None,
+            error: None,
+        });
+        // Never banned, allowed on the firewall and the edges, and not in the list sets.
+        assert!(state.allowed(ip("162.158.1.2"), 0));
+        assert!(!state.allowed(ip("203.0.113.1"), 0));
+        assert!(state.blocks_and_allows(0).1.contains(&n("162.158.0.0/15")));
+        assert_eq!(state.lists().nets.len(), 0);
+        state.feeds[0].def.enabled = false;
+        assert!(!state.allowed(ip("162.158.1.2"), 0));
+        assert_eq!(state.blocks_and_allows(0).1.len(), 0);
     }
 }

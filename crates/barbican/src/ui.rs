@@ -1080,6 +1080,11 @@ async fn feed_save(app: &Arc<App>, mut def: FeedDef) -> Result<Feed, RpcError> {
         return Err(bad("the URL must be http or https"));
     }
     def.url = url.to_string();
+    if def.block && def.allow {
+        return Err(bad(
+            "a feed either blocks or allows what it lists, not both",
+        ));
+    }
     def.refresh_secs = def.refresh_secs.max(crate::run::FEED_MIN_REFRESH);
     let previous = app.state.read().ok().and_then(|s| {
         s.feeds
