@@ -34,6 +34,7 @@ The package enables and starts the agent. Add the agents it follows in LuCI (**S
 ```text
 config barbican 'main'
 	option enabled '1'
+	option dry_run '0'             # 1: follow and save, but change nothing in the firewall
 	option lists '1'               # also the agents' country blocks and blocking lists
 	option persist_interval '3600'
 
