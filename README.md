@@ -10,8 +10,6 @@ the kernel, on the server and, through small edge agents, on your router. Countr
 blocked as a whole. A web UI shows what every address tried and why it was banned, and is where rules, ban lengths,
 countries and lists are edited. It is one program with one configuration file and a SQLite database.
 
-**Documentation: <https://barbican.arhipov.net/>**
-
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="site/src/assets/screenshots/overview-dark.webp">
   <img alt="barbican's overview: bans and events of the last 30 days, recent bans, the firewall, geolocation and feeds." src="site/src/assets/screenshots/overview-light.webp">
@@ -52,7 +50,7 @@ Try it first without touching the firewall: `barbican --dry-run` (or `[firewall]
 
 ## Documentation
 
-<https://barbican.arhipov.net/> (a version for each release). Start with:
+The [documentation site](https://barbican.arhipov.net/) has a version for each release. Good places to start:
 
 - [Introduction](https://barbican.arhipov.net/start/introduction/), [Compared with other tools](https://barbican.arhipov.net/start/comparison/) and [Quick start](https://barbican.arhipov.net/start/quick-start/)
 - [Planning a deployment](https://barbican.arhipov.net/guides/deployment/): where each part runs so that blocks work
