@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-The UI is full control over barbican: whoever can use it can ban anyone, lift any ban, allow any address and rewrite every rule. It has no login of its own, because your reverse proxy already authenticates users better than a second password prompt would. So the work goes into making sure nothing but an authenticated user, through your reverse proxy, can reach it.
+The UI is full control over Barbican: whoever can use it can ban anyone, lift any ban, allow any address and rewrite every rule. It has no login of its own, because your reverse proxy already authenticates users better than a second password prompt would. So the work goes into making sure nothing but an authenticated user, through your reverse proxy, can reach it.
 
 ## No network listener
 
@@ -45,7 +45,7 @@ Development needs shortcuts, such as a proxy without a trusted proxy. Those exis
 | Anyone on the internet | Get their own address banned. Use a CDN or open proxy to send requests from addresses you don't ban | Reach the UI or the agent's socket. Get an allowed or exempt address banned. Talk to an edge |
 | A host on your LAN | Reach the reverse proxy's login page. Connect to the edge API port | Use the edge API without a token, or impersonate the agent to an edge (pinned certificate). Reach the UI proxy directly |
 | A process on the agent's host, not root and not in the group | Write to logs it may write to, and so get addresses banned (never allowed ones) | Connect to the socket (peer credentials), reach the UI proxy, change the firewall |
-| Another container on the same host | Nothing through barbican | Reach the UI proxy, which sits on a network of its own and answers only the reverse proxy's address |
+| Another container on the same host | Nothing through Barbican | Reach the UI proxy, which sits on a network of its own and answers only the reverse proxy's address |
 | Root on the agent's host | Everything | |
 
 Everything an attacker can achieve through logs is limited to banning addresses that aren't allowed, and every ban can be lifted in the UI. See [Security](/internals/security/) for logs, the service's sandbox and reporting vulnerabilities.

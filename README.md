@@ -1,18 +1,18 @@
-# barbican
+# Barbican
 
 [![CI](https://github.com/nikarh/barbican/actions/workflows/ci.yml/badge.svg)](https://github.com/nikarh/barbican/actions/workflows/ci.yml)
 [![Docs](https://img.shields.io/badge/docs-barbican.arhipov.net-b5832a)](https://barbican.arhipov.net/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE-MIT)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE-APACHE)
 
-barbican reads your servers' logs, decides with rules which addresses are abusing your services, and blocks them in
+Barbican reads your servers' logs, decides with rules which addresses are abusing your services, and blocks them in
 the kernel, on the server and, through small edge agents, on your router. Countries and public blocklists can be
 blocked as a whole. A web UI shows what every address tried and why it was banned, and is where rules, ban lengths,
 countries and lists are edited. It is one program with one configuration file and a SQLite database.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="site/src/assets/screenshots/overview-dark.webp">
-  <img alt="barbican's overview: bans and events of the last 30 days, recent bans, the firewall, geolocation and feeds." src="site/src/assets/screenshots/overview-light.webp">
+  <img alt="Barbican's overview: bans and events of the last 30 days, recent bans, the firewall, geolocation and feeds." src="site/src/assets/screenshots/overview-light.webp">
 </picture>
 
 ```text
@@ -68,6 +68,6 @@ See [Development](https://barbican.arhipov.net/project/development/) for buildin
 
 IP geolocation by [DB-IP](https://db-ip.com), under the
 [Creative Commons Attribution 4.0 International License](https://creativecommons.org/licenses/by/4.0/), when
-barbican downloads its databases.
+Barbican downloads its databases.
 
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option.

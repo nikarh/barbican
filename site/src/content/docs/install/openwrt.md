@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-`barbican-edge` blocks what barbican agents ban, for everything the router forwards and for the router itself. It needs nftables with JSON support (`nftables-json`, which OpenWrt's images have).
+`barbican-edge` blocks what Barbican agents ban, for everything the router forwards and for the router itself. It needs nftables with JSON support (`nftables-json`, which OpenWrt's images have).
 
 Pick the build for the router's CPU: `x86_64`, `aarch64`, or `armv7` (32-bit ARM with an FPU: Cortex-A7, A9, A15; `cat /proc/cpuinfo` lists `vfp` among its features). The packages are the same for every OpenWrt target of that CPU. The examples below use `armv7`.
 

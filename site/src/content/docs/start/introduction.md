@@ -1,11 +1,11 @@
 ---
 title: Introduction
-description: What barbican does, what it is made of, what it works with today, and what it doesn't do.
+description: What Barbican does, what it is made of, what it works with today, and what it doesn't do.
 sidebar:
   order: 1
 ---
 
-barbican watches the logs of the services you expose to the internet and blocks the addresses that abuse them. Someone scanning for `.env` files, guessing SSH passwords or hammering your login portal gets banned in the firewall within a second, on the server and, if you want, on your router for the whole network. You see what every address tried and why it was banned in a web UI, which is also where you change the rules.
+Barbican watches the logs of the services you expose to the internet and blocks the addresses that abuse them. Someone scanning for `.env` files, guessing SSH passwords or hammering your login portal gets banned in the firewall within a second, on the server and, if you want, on your router for the whole network. You see what every address tried and why it was banned in a web UI, which is also where you change the rules.
 
 It is one program with one configuration. Reading logs, deciding, blocking, country and blocklist filtering, the UI and the router side all come together, so there are no jails, bouncers, dashboards or cron scripts to wire up yourself.
 
@@ -25,7 +25,7 @@ The **UI** is served by the agent on a local socket and reached by browsers thro
 
 ## Pluggable parts and what exists today
 
-Each stage has a small interface, and the pieces below are the implementations that exist today. Adding a new log format, log store or firewall means adding one more of them; the rest of barbican doesn't change.
+Each stage has a small interface, and the pieces below are the implementations that exist today. Adding a new log format, log store or firewall means adding one more of them; the rest of Barbican doesn't change.
 
 | Part | What it does | Available today |
 | --- | --- | --- |
@@ -44,7 +44,7 @@ Packages exist for Debian and Ubuntu (`.deb`, plus an apt repository), Arch Linu
 1. A source reads a line, and its parser turns it into an event, or skips it.
 2. Rules match the event: by path, method, status, host, user agent, user name, whether a blocklist lists the address, and so on. A rule bans when an address reaches its threshold within its time window.
 3. The agent records the event, keeps addresses people logged in from trusted, and picks a ban length from the rule and the policy (by country, network or blocklist, longer for repeat offenders).
-4. The ban becomes an element of a kernel set with a timeout, on the agent's host and on every edge. The kernel lifts it when it expires, whether barbican is running or not.
+4. The ban becomes an element of a kernel set with a timeout, on the agent's host and on every edge. The kernel lifts it when it expires, whether Barbican is running or not.
 
 Allowed addresses (your allow list, allowing feeds, your LAN and container networks) are never banned, and logins keep their address trusted for a while, so you don't lock yourself out.
 

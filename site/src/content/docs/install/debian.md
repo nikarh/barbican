@@ -7,7 +7,7 @@ sidebar:
 
 The agent's package is a static binary with its systemd unit; it depends on nothing but `nftables`.
 
-From the signed apt repository, set up once: apt then installs and upgrades barbican with the rest of the system.
+From the signed apt repository, set up once: apt then installs and upgrades Barbican with the rest of the system.
 
 ```bash
 sudo install -d -m 0755 /etc/apt/keyrings

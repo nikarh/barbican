@@ -1,11 +1,11 @@
 ---
 title: Overview
-description: The two parts of barbican, where each one runs, and the files of a release.
+description: The two parts of Barbican, where each one runs, and the files of a release.
 sidebar:
   order: 1
 ---
 
-barbican has two parts: the **agent**, on a server whose logs it reads, and, optionally, **edge agents** on routers, which block what one or more agents ban for the whole network.
+Barbican has two parts: the **agent**, on a server whose logs it reads, and, optionally, **edge agents** on routers, which block what one or more agents ban for the whole network.
 
 | Where | Guide |
 | --- | --- |

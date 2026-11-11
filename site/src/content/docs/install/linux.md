@@ -19,6 +19,6 @@ sudo systemctl daemon-reload
 
 Edit `/etc/barbican/config.toml` (at least its `[[source]]` tables, see [Sources and parsers](/guides/sources/)), then `sudo systemctl enable --now barbican`.
 
-The unit runs barbican as a user of its own (`DynamicUser`) with `CAP_NET_ADMIN` only, before the network is up and before Docker: it reports itself ready once its blocks are in place. See [Security](/internals/security/#the-service) for the rest of its sandbox.
+The unit runs Barbican as a user of its own (`DynamicUser`) with `CAP_NET_ADMIN` only, before the network is up and before Docker: it reports itself ready once its blocks are in place. See [Security](/internals/security/#the-service) for the rest of its sandbox.
 
 Without systemd, run `barbican` as root, early in boot; it needs `nft` in its `PATH` (or `firewall.nft` set to its path).

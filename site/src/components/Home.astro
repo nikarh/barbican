@@ -33,7 +33,7 @@ const parts = [
 	],
 	[
 		'Firewalls',
-		'nftables on the server and on OpenWrt; iptables with ipset on router firmware without nftables. Blocks are kernel sets with timeouts, so they hold while barbican is stopped.',
+		'nftables on the server and on OpenWrt; iptables with ipset on router firmware without nftables. Blocks are kernel sets with timeouts, so they hold while Barbican is stopped.',
 		'/internals/firewall/',
 	],
 	[
@@ -48,7 +48,7 @@ const parts = [
 	<section class="intro">
 		<div class="lead">
 			<p class="summary">
-				barbican reads your servers’ logs, decides with rules which addresses are abusing your services, and blocks
+				Barbican reads your servers’ logs, decides with rules which addresses are abusing your services, and blocks
 				them in the kernel, on the server and on your router.
 			</p>
 			<p>
@@ -65,13 +65,13 @@ const parts = [
 		<div class="shot">
 			<Screenshot
 				name="overview"
-				alt="barbican's overview: bans and events of the last 30 days, recent bans, the firewall, feeds, sources and edges, bans by country and events by rule."
+				alt="Barbican's overview: bans and events of the last 30 days, recent bans, the firewall, feeds, sources and edges, bans by country and events by rule."
 			/>
 		</div>
 	</section>
 
 	<section class="why">
-		<h2>Why barbican</h2>
+		<h2>Why Barbican</h2>
 		<ul>
 			<li>
 				<strong>Everything in one place.</strong> Bans from logs, country blocking and blocklists usually take three tools
@@ -213,7 +213,7 @@ apk add --allow-untrusted ./barbican-edge-armv7.apk ./luci-app-barbican.apk`}
 	<section class="next">
 		<h2>Reading order</h2>
 		<ol>
-			<li><a href={link('/start/introduction/')}>Introduction</a>: the parts, and what barbican isn’t.</li>
+			<li><a href={link('/start/introduction/')}>Introduction</a>: the parts, and what Barbican isn’t.</li>
 			<li><a href={link('/guides/deployment/')}>Planning a deployment</a>: where each part runs so that blocks work.</li>
 			<li><a href={link('/start/quick-start/')}>Quick start</a>: one server, one log, a dry run, then blocking.</li>
 			<li><a href={link('/guides/sources/')}>Sources</a> and <a href={link('/guides/rules/')}>rules</a>: what is read, and what counts as abuse.</li>
