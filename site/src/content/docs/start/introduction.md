@@ -1,44 +1,61 @@
 ---
 title: Introduction
-description: What barbican does, its parts, and how a log line becomes a block in the firewall.
+description: What barbican does, what it is made of, what it works with today, and what it doesn't do.
 sidebar:
   order: 1
 ---
 
-barbican bans addresses that abuse your services. It reads the logs of a reverse proxy, an SSH or SFTP server and an authentication portal; rules decide what counts as abuse; offenders are blocked with nftables, on the server and, through a small edge agent, on a router for the whole network. Countries and continents can be blocked as a whole, and public blocklists used, as blocks, as allow lists, or as data for rules. A web UI shows what every address tried and what was decided, and is where rules, ban lengths, countries, lists and blocklists are edited.
+barbican watches the logs of the services you expose to the internet and blocks the addresses that abuse them. Someone scanning for `.env` files, guessing SSH passwords or hammering your login portal gets banned in the firewall within a second, on the server and, if you want, on your router for the whole network. You see what every address tried and why it was banned in a web UI, which is also where you change the rules.
 
-It does what fail2ban, a log pipeline and a dashboard do together, in one process with a SQLite database.
+It is one program with one configuration. Reading logs, deciding, blocking, country and blocklist filtering, the UI and the router side all come together, so there are no jails, bouncers, dashboards or cron scripts to wire up yourself.
 
-## The parts
-
-- **The agent** (`barbican`) runs on a server whose logs it reads. It parses them, matches the events against its rules, records what matched, bans, and keeps one nftables table of its own equal to what it blocks. It runs as a systemd service with one capability, `CAP_NET_ADMIN`.
-- **The UI** is served by the agent on a unix socket only its group may use, and to browsers by a container next to your other ones (`barbican ui-proxy`, the image `ghcr.io/nikarh/barbican`) that answers only your reverse proxy. It has no login of its own: it goes behind the reverse proxy's authentication. See [the web UI](/guides/ui/).
-- **Edge agents** (`barbican-edge` with nftables on OpenWrt, `barbican-edge-ipset` with iptables and ipset on firmware without nftables) follow one or more agents and block what they block on a router, for everything it forwards. See [edge agents](/edge/overview/).
+## How it fits together
 
 ```text
- logs ─► parser ─► rules ─► engine ─► SQLite
- (docker, file,     │          │
-  journald,     (in each   bans, trust
-  VictoriaLogs)  source)       │
-                               ▼
-                    nftables (this host) ── edge API ──► barbican-edge ─► nftables (router)
+ log sources ──► parsers ──► rules ──► decisions ──► firewall on this host
+                                          │
+                                          └──► edge agents ──► firewall on routers
 ```
+
+The **agent** reads logs, keeps the database, makes every decision and serves the UI. You run one agent: it is the single place where rules, lists, trust and counters live. If services run on several machines, ship their logs to the agent (see [Planning a deployment](/guides/deployment/)).
+
+**Edge agents** run where packets enter your network, typically a router or the box that terminates TLS for your sites. They follow the agent, hold a copy of what it blocks and drop those packets in their own kernel. They read no logs and make no decisions.
+
+The **UI** is served by the agent on a local socket and reached by browsers through a small container that only answers your reverse proxy, after it authenticated the user.
+
+## Pluggable parts and what exists today
+
+Each stage has a small interface, and the pieces below are the implementations that exist today. Adding a new log format, log store or firewall means adding one more of them; the rest of barbican doesn't change.
+
+| Part | What it does | Available today |
+| --- | --- | --- |
+| Log sources | Read lines and remember where they stopped | Docker containers (through the Docker API), files (followed across rotation), the systemd journal, VictoriaLogs queries |
+| Parsers | Turn a line into an event: an HTTP request, a login, an unknown user, a protocol probe | Traefik access logs, OpenSSH (and SFTP servers built on it), Authelia, and a regular expression for any other log |
+| Feeds | Lists of addresses fetched on a schedule, used to block, to allow, or as data for rules | Any URL with addresses or prefixes, one per line, CSV or JSON lines. Presets: Spamhaus DROP, FireHOL level 1, blocklist.de, Tor exit nodes, Cloudflare's ranges |
+| Geolocation | Country and network of each address, for display, rules and country blocking | DB-IP Lite (downloaded monthly) or MaxMind GeoLite2 |
+| Firewall backends | Keep the kernel's sets equal to what should be blocked | nftables (servers and OpenWrt), iptables with ipset (routers whose kernel has no nftables) |
+| Edge platforms | Packaging and service integration on routers | OpenWrt packages with LuCI pages, a tarball with an init script for Asuswrt-Merlin and similar firmware |
+| History import | Run old logs through the rules as if read live | Timestamped log files, and a VictoriaLogs exporter |
+
+Packages exist for Debian and Ubuntu (`.deb`, plus an apt repository), Arch Linux (`.pkg.tar.zst`, plus a pacman repository) and OpenWrt (`.apk` and `.ipk`), with static binaries for any other Linux. Architectures are x86-64 and aarch64 for the agent, and x86-64, aarch64 and 32-bit ARM for edge agents. The UI container is published for amd64 and arm64.
 
 ## From a log line to a block
 
-1. A **source** reads a log: a container's log through the Docker API, a file, the systemd journal, or a VictoriaLogs query. Each continues where it stopped after a restart. See [sources and parsers](/guides/sources/).
-2. Its **parser** turns a line into an event: an HTTP request, a failed or successful login, a login as an unknown user, or a protocol probe. Lines that are none of these are skipped.
-3. **Rules** match events by their path, method, status, user agent, user name, source, whether the proxy had a route for the request, or whether a blocklist lists the address. A rule bans once its threshold is reached within its time window, or only records. See [rules and policy](/guides/rules/).
-4. The **engine** records what matched, counted per address, rule, source and hour, keeps addresses people logged in from trusted, and bans. The ban's length comes from the rule or the policy, per country, network or blocklist if you set one, and grows for repeat offenders.
-5. The **firewall** gets the ban as an element of an nftables set with a timeout: the kernel lifts it on time, whether barbican runs or not. Edge agents get it pushed within a fraction of a second. See [the firewall](/internals/firewall/).
+1. A source reads a line, and its parser turns it into an event, or skips it.
+2. Rules match the event: by path, method, status, host, user agent, user name, whether a blocklist lists the address, and so on. A rule bans when an address reaches its threshold within its time window.
+3. The agent records the event, keeps addresses people logged in from trusted, and picks a ban length from the rule and the policy (by country, network or blocklist, longer for repeat offenders).
+4. The ban becomes an element of a kernel set with a timeout, on the agent's host and on every edge. The kernel lifts it when it expires, whether barbican is running or not.
 
-Addresses on the allow list, in an allowing feed, in the exempt networks (private ranges by default), or trusted after a login are recorded but never banned.
+Allowed addresses (your allow list, allowing feeds, your LAN and container networks) are never banned, and logins keep their address trusted for a while, so you don't lock yourself out.
 
-## What it isn't
+[How a log line becomes a ban](/internals/how-it-works/) goes through this in detail.
 
-- It doesn't look at traffic, only at what services log. An attack that leaves no log line, or a line no parser understands, goes unnoticed; a [regular expression source](/guides/sources/#a-log-without-a-parser) covers other logs.
-- It isn't a general firewall: it owns one table (`inet barbican`) that drops packets from what it blocks, and changes nothing else on the host.
-- It doesn't protect a link from floods: packets are dropped when they reach the host (or the router), after they used the bandwidth. Replies to connections the host opened always pass, whoever sends them.
-- It has no users or login: whoever reaches its UI can change everything. Put the UI behind authentication.
+## What it doesn't do
+
+- It doesn't inspect traffic. It only sees what services log, so an attack that leaves no log line goes unnoticed. A [regular expression source](/guides/sources/#a-log-without-a-parser) covers logs it has no parser for.
+- It isn't a general firewall. It owns one table that drops packets from what it blocks and leaves the rest of your rules alone.
+- It doesn't protect your bandwidth from floods. Packets are dropped when they reach the host or router, after they crossed your uplink.
+- It has no user accounts. Whoever reaches the UI controls it, which is why the UI is only reachable through your reverse proxy's authentication.
+- It runs on Linux only, and it is a young project with one maintainer and no shared threat intelligence of its own. [Compared with other tools](/start/comparison/) covers where other tools are a better fit.
 
 Next: the [quick start](/start/quick-start/).
