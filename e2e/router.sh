@@ -184,7 +184,9 @@ fi
 say "cleanup"
 lift_all
 router 'apk del barbican-edge luci-app-barbican >/dev/null 2>&1; barbican-edge remove 2>/dev/null; true'
-if router '! pidof barbican-edge >/dev/null && [ ! -e /etc/rc.d/S11barbican-edge ] && [ -f /etc/config/barbican ]'; then
+# procd stops it in the background, and it saves its state as it goes: give it a moment.
+removed() { router '! pidof barbican-edge >/dev/null && [ ! -e /etc/rc.d/S11barbican-edge ] && [ -f /etc/config/barbican ]'; }
+if wait_until 10 removed; then
   pass "removing the package stops it and keeps the configuration"
 else
   fail "removing the package: $(router 'echo pid=$(pidof barbican-edge); ls /etc/rc.d | grep barbican; ls /etc/config/barbican' 2>&1 | tr '\n' ' ')"
