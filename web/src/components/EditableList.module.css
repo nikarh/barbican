@@ -79,7 +79,8 @@
   .list .value {
     grid-column: 1;
     grid-row: 2;
-    justify-self: start;
+    /* The whole width, for an input (full width on a phone, like every input there). */
+    justify-self: stretch;
     text-align: left;
   }
 
@@ -101,7 +102,8 @@
   .list[data-wide] .value {
     grid-column: 1;
     grid-row: 2;
-    justify-self: start;
+    /* The whole width, for an input (full width on a phone, like every input there). */
+    justify-self: stretch;
     text-align: left;
   }
 

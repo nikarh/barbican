@@ -113,7 +113,7 @@ function Editor({ rule, onClose }: { rule: Rule; onClose: () => void }) {
       }}
     >
       <Stack gap="sm">
-        <Group grow align="flex-start">
+        <SimpleGrid cols={{ base: 1, sm: 2 }}>
           <TextInput
             label="Name"
             value={r.name}
@@ -131,7 +131,7 @@ function Editor({ rule, onClose }: { rule: Rule; onClose: () => void }) {
             }}
             allowDeselect={false}
           />
-        </Group>
+        </SimpleGrid>
         <Textarea
           label="Description"
           autosize
@@ -252,7 +252,7 @@ function Editor({ rule, onClose }: { rule: Rule; onClose: () => void }) {
             onChange={(v) => {
               set({ threshold: Math.max(1, Number(v) || 1) })
             }}
-            w={90}
+            w={{ base: '100%', sm: 90 }}
           />
           <LengthInput
             label="Within"
@@ -267,6 +267,8 @@ function Editor({ rule, onClose }: { rule: Rule; onClose: () => void }) {
               { value: 'record', label: 'Only record' },
             ]}
             value={r.action}
+            fullWidth
+            w={{ base: '100%', sm: 'auto' }}
             onChange={(v) => {
               set({ action: v })
             }}
@@ -291,7 +293,7 @@ function Editor({ rule, onClose }: { rule: Rule; onClose: () => void }) {
                 })
               }}
               allowDeselect={false}
-              w={200}
+              w={{ base: '100%', sm: 200 }}
             />
             {r.ban.type === 'secs' && (
               <LengthInput
@@ -310,7 +312,7 @@ function Editor({ rule, onClose }: { rule: Rule; onClose: () => void }) {
               onChange={(v) => {
                 set({ prefixV4: Number(v) || 32 })
               }}
-              w={110}
+              w={{ base: '100%', sm: 110 }}
             />
             <NumberInput
               label="IPv6 prefix"
@@ -320,7 +322,7 @@ function Editor({ rule, onClose }: { rule: Rule; onClose: () => void }) {
               onChange={(v) => {
                 set({ prefixV6: Number(v) || 64 })
               }}
-              w={110}
+              w={{ base: '100%', sm: 110 }}
             />
           </Group>
         )}
