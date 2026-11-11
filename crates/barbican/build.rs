@@ -21,12 +21,33 @@ fn main() {
     }
     files.sort();
 
-    let mut out = String::from("pub static FILES: &[(&str, &[u8])] = &[\n");
+    // Each file with its brotli and gzip copies (`name.br`, `name.gz`), when the build made them.
+    let include = |path: &Path| format!("include_bytes!({:?})", path.display().to_string());
+    let variant = |path: &Path, ext: &str| {
+        let mut name = path.as_os_str().to_owned();
+        name.push(ext);
+        let path = PathBuf::from(name);
+        if path.is_file() {
+            format!("Some({})", include(&path))
+        } else {
+            "None".to_owned()
+        }
+    };
+    let mut out = String::from("pub static FILES: &[Asset] = &[\n");
     for (name, path) in &files {
+        // The copies themselves, which the build names with these exact extensions.
+        if path
+            .extension()
+            .is_some_and(|ext| ext == "br" || ext == "gz")
+        {
+            continue;
+        }
         let _ = writeln!(
             out,
-            "    ({name:?}, include_bytes!({:?})),",
-            path.display().to_string()
+            "    Asset {{ name: {name:?}, identity: {}, br: {}, gzip: {} }},",
+            include(path),
+            variant(path, ".br"),
+            variant(path, ".gz"),
         );
     }
     out.push_str("];\n");
