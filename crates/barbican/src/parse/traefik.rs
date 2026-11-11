@@ -12,13 +12,22 @@ use serde::Deserialize;
 use crate::signal::{Event, Http};
 
 /// `<client> - <user> [<time>] "<method> <path> <proto>" <status> <size> "<referer>" "<agent>" <count> "<router>"
-/// "<backend>" <duration>ms`. Garbage request lines (no protocol) still match; aborted requests have status 0.
+/// "<backend>" <duration>ms`. Garbage request lines (no protocol) still match; aborted requests have status 0. The
+/// client is a list (`a, b`) when Traefik trusts a proxy's `X-Forwarded-For` (see [`last_hop`]).
 static CLF: LazyLock<Option<Regex>> = LazyLock::new(|| {
     Regex::new(
-        r#"^(\S+) \S+ \S+ \[[^\]]*\] "(\S+) (\S+)(?: [^"]*)?" (\d{1,3}) \S+ "[^"]*" "([^"]*)" \d+ "([^"]*)""#,
+        r#"^(\S+(?:, \S+)*) \S+ \S+ \[[^\]]*\] "(\S+) (\S+)(?: [^"]*)?" (\d{1,3}) \S+ "[^"]*" "([^"]*)" \d+ "([^"]*)""#,
     )
     .ok()
 });
+
+/// The client of a request that came through proxies: Traefik writes the whole `X-Forwarded-For` it trusted
+/// (`visitor, proxy`). The last address is the one the trusted proxy itself saw connect; the ones before it are what
+/// that peer claimed, which anyone can write (blaming them would let a client get any address banned). Behind a CDN
+/// that last hop is the CDN's edge, which an allow list (Cloudflare's ranges) keeps from being banned.
+fn last_hop(client: &str) -> &str {
+    client.rsplit(',').next().unwrap_or(client).trim()
+}
 
 #[derive(Debug, Default)]
 pub struct Traefik {
@@ -82,7 +91,7 @@ impl Traefik {
             .get_or_insert_with(|| regex.capture_locations());
         regex.captures_read(locations, line)?;
         let g = |i| super::group(locations, Some(i), line);
-        let ip = super::ip(g(1)?)?;
+        let ip = super::ip(last_hop(g(1)?))?;
         Some((
             ip,
             Event::Http(Http {
@@ -99,12 +108,12 @@ impl Traefik {
 
     fn parse_json<'s>(&'s mut self, line: &'s str) -> Option<(IpAddr, Event<'s>)> {
         let parsed: Line<'s> = serde_json::from_str(line).ok()?;
-        let ip = super::ip(
+        let ip = super::ip(last_hop(
             parsed
                 .ClientHost
                 .as_deref()
                 .or(parsed.ClientAddr.as_deref())?,
-        )?;
+        ))?;
         let status = parsed.DownstreamStatus.or(parsed.OriginStatus)?;
         let routed = parsed.RouterName.as_ref().is_some_and(|r| !r.0.is_empty());
         let [path, host, agent, method] = &mut self.buffers;
@@ -202,6 +211,20 @@ mod tests {
             p.parse("2026-11-10T15:42:51Z DBG github.com/traefik/... Service selected by WRR")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn a_forwarded_chain_blames_the_last_hop() {
+        let mut p = Traefik::default();
+        let line = r#"203.0.113.9, 198.51.100.254 - - [11/Nov/2026:16:58:36 +0000] "GET /.env HTTP/1.1" 404 19 "-" "curl/8" 778 "hass@docker" "http://172.20.0.3:8080" 3ms"#;
+        let f = http(&mut p, line);
+        assert_eq!(f.0, "198.51.100.254");
+        assert_eq!((f.1.as_str(), f.2.as_str(), f.3), ("GET", "/.env", 404));
+        // A client writing its own X-Forwarded-For doesn't choose whom to blame.
+        let forged = r#"192.0.2.1, 192.0.2.2, 203.0.113.50 - - [11/Nov/2026:16:58:36 +0000] "GET / HTTP/1.1" 200 1 "-" "-" 1 "-" "-" 0ms"#;
+        assert_eq!(http(&mut p, forged).0, "203.0.113.50");
+        let json = r#"{"ClientHost":"192.0.2.44, 198.51.100.7","RequestMethod":"GET","RequestPath":"/","DownstreamStatus":200}"#;
+        assert_eq!(http(&mut p, json).0, "198.51.100.7");
     }
 
     #[test]
