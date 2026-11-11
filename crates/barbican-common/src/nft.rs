@@ -17,10 +17,11 @@
 //! transaction whatever the lists hold.
 //!
 //! Reconciling changes only the difference between what should be blocked and what the kernel has. What the kernel
-//! has is read back (`NFT_MSG_GETSETELEM` of the ban and allow sets) at the start, and again only when someone else
-//! changed the table: a [`Monitor`] follows `nf_tables`' notifications and tells. Otherwise it is what this process
-//! wrote, less what timed out. So expirations, a restart, a flushed ruleset or a hand-edited set are all corrected,
-//! and an idle agent does nothing at all.
+//! has is read back (`NFT_MSG_GETSETELEM` of the ban and allow sets) at the start, and again only when something
+//! else committed to `nf_tables`: the kernel counts every commit in the ruleset's generation, which `nft` checks its
+//! own cache with too. Otherwise it is what this process wrote, less what timed out. [`Firewall::check`] asks for
+//! the generation alone (one small request), so checking every minute costs next to nothing, and a restart, a
+//! flushed ruleset or a hand-edited set is corrected within that minute.
 //!
 //! The list sets are never read back as a rule: they change by the difference to what was written last, and a set
 //! of one element (`lists_version`, written in the same transaction) tells after a restart whether they hold the
@@ -41,7 +42,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-pub use kernel::{Kernel, Monitor};
+pub use kernel::Kernel;
 
 use crate::net::{Family, Net, collapse};
 
@@ -81,20 +82,22 @@ pub trait Runner {
 /// `nf_tables` over netlink. A trait so that tests can record the messages instead. Requests are built by a
 /// function of the first sequence number to use.
 pub trait Netlink {
-    /// Applies a transaction: a batch whose messages each ask for an acknowledgement. `bulk`: it changes many
-    /// elements (a flush counts), so notifications of it are better not made.
-    fn transact(&self, build: &dyn Fn(u32) -> Vec<u8>, bulk: bool) -> Result<(), Error>;
+    /// Applies a transaction: a batch whose messages each ask for an acknowledgement.
+    fn transact(&self, build: &dyn Fn(u32) -> Vec<u8>) -> Result<(), Error>;
     /// The messages a dump request answers with.
     fn dump(&self, build: &dyn Fn(u32) -> Vec<u8>) -> Result<Vec<u8>, Error>;
     /// The first of them only.
     fn dump_first(&self, build: &dyn Fn(u32) -> Vec<u8>) -> Result<Vec<u8>, Error>;
-    /// Whether only this process changed the table since the last call (a monitor watched it).
+    /// Whether only this process committed to `nf_tables` since the last call. When not, the caller reads its
+    /// table back.
     fn unchanged(&self) -> bool;
+    /// Whether anything else committed since this process last knew what its table holds, without forgetting it.
+    fn changed(&self) -> bool;
 }
 
 impl Netlink for Kernel {
-    fn transact(&self, build: &dyn Fn(u32) -> Vec<u8>, bulk: bool) -> Result<(), Error> {
-        Kernel::transact(self, build, bulk)
+    fn transact(&self, build: &dyn Fn(u32) -> Vec<u8>) -> Result<(), Error> {
+        Kernel::transact(self, build)
     }
 
     fn dump(&self, build: &dyn Fn(u32) -> Vec<u8>) -> Result<Vec<u8>, Error> {
@@ -107,6 +110,10 @@ impl Netlink for Kernel {
 
     fn unchanged(&self) -> bool {
         Kernel::unchanged(self)
+    }
+
+    fn changed(&self) -> bool {
+        Kernel::changed(self)
     }
 }
 
@@ -130,12 +137,6 @@ impl NftCommand {
             program: program.to_owned(),
             kernel: Kernel::default(),
         }
-    }
-
-    /// Follows `nf_tables`' notifications, to learn when another program changes `table`. Until one runs, each
-    /// reconcile reads the sets back.
-    pub fn monitor(&self, table: &str) -> Result<Monitor, Error> {
-        self.kernel.monitor(table)
     }
 
     fn spawn_error(&self, source: std::io::Error) -> Error {
@@ -419,7 +420,7 @@ pub struct Firewall<R: Runner> {
     priority: i32,
     /// The version and content the list sets hold, when known.
     lists: Option<(String, Arc<Vec<Net>>)>,
-    /// What the kernel holds, while it is known (changes go over netlink and a monitor watches the table).
+    /// What the kernel holds, while it is known (changes go over netlink, and nothing else committed since).
     model: Option<Model>,
     /// The last netlink failure reported, and one not reported yet.
     netlink_failure: Option<String>,
@@ -526,6 +527,16 @@ impl<R: Runner> Firewall<R> {
                 ))
             }
             Err(e) => Err(e),
+        }
+    }
+
+    /// Whether the table may differ from what it should hold, so that [`Self::reconcile`] is due: something else
+    /// committed to `nf_tables` since this process last knew what the table holds, or that can't be told (no
+    /// netlink). Cheap enough to ask every minute.
+    pub fn check(&self) -> bool {
+        match (&self.model, self.runner.netlink()) {
+            (Some(_), Some(netlink)) => netlink.changed(),
+            _ => true,
         }
     }
 
@@ -810,12 +821,7 @@ impl<R: Runner> Firewall<R> {
         })?;
         if !plan.is_empty() {
             let table = self.table.clone();
-            let bulk = plan
-                .sets
-                .iter()
-                .any(|(_, c)| c.flush || c.add.len() + c.remove.len() > 1000);
-            self.netlink()?
-                .transact(&|seq| batch(&table, &plan, seq), bulk)?;
+            self.netlink()?.transact(&|seq| batch(&table, &plan, seq))?;
         }
         for ((set, family), c) in plan.sets {
             if set == Set::List {
@@ -1501,7 +1507,7 @@ mod tests {
     }
 
     impl Netlink for FakeNetlink {
-        fn transact(&self, build: &dyn Fn(u32) -> Vec<u8>, _bulk: bool) -> Result<(), Error> {
+        fn transact(&self, build: &dyn Fn(u32) -> Vec<u8>) -> Result<(), Error> {
             if let Some(e) = self.fail.borrow_mut().take() {
                 return Err(e);
             }
@@ -1526,6 +1532,10 @@ mod tests {
 
         fn unchanged(&self) -> bool {
             self.unchanged.get()
+        }
+
+        fn changed(&self) -> bool {
+            !self.unchanged.get()
         }
     }
 
@@ -1661,6 +1671,7 @@ mod tests {
 
         // Nobody else changed the table: nothing is read, nothing written.
         fake.nl.unchanged.set(true);
+        assert!(!fw.check());
         fake.nl.dumped.borrow_mut().clear();
         let changes = fw.reconcile(&desired, 10_030).unwrap();
         assert_eq!(changes, Changes::default());
@@ -1692,6 +1703,7 @@ mod tests {
 
         // Someone else changed the table: it is read back.
         fake.nl.unchanged.set(false);
+        assert!(fw.check());
         fw.reconcile(&desired, 10_100).unwrap();
         assert_eq!(fake.nl.dumped.borrow().len(), 9);
     }

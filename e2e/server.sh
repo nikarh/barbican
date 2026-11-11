@@ -111,6 +111,10 @@ listen = "0.0.0.0:7380"
 name = "router"
 token = "e2e-router-token-0123456789"
 
+[firewall]
+# Whether another program changed nftables: every minute by default.
+check_interval = 1
+
 [geoip]
 country = "/opt/barbican/dbip-country-lite.mmdb"
 download = false
@@ -246,7 +250,8 @@ ${RPC} ban.lift "{\"id\": ${id}}" >/dev/null &
 ms=$(time_until att_now)
 wait
 if ((ms < 500)); then pass "lifted within ${ms} ms"; else fail "lifting took ${ms} ms with the large list loaded"; fi
-# Another program changing the table while the agent runs: it is put right, without waiting for a timer.
+# Another program changing the table while the agent runs: the next check of the ruleset's generation (every second
+# here) notices, and it is put right.
 ${RPC} ban.create '{"net": "203.0.113.10", "secs": 600, "reason": "e2e"}' >/dev/null
 wait_until 5 att_blocked || true
 nft delete element inet barbican host4 '{ 203.0.113.10 }'

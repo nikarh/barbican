@@ -1,7 +1,7 @@
 //! Keeping nftables, and the edges' journal, equal to the state; and the parts of the state derived from others:
 //! the rule set sources match with, and the list sets (blocked countries and blocking feeds).
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -11,9 +11,6 @@ use barbican_common::nft::{Firewall, NftCommand};
 use crate::app::{App, now};
 use crate::rules::RuleSet;
 
-/// How often the drop counters are read, and, when nothing watches the table for changes by others, how often the
-/// state is applied anyway (a flushed table).
-const TICK: Duration = Duration::from_secs(60);
 /// Changes coming in a burst are applied together.
 const DEBOUNCE: Duration = Duration::from_millis(200);
 
@@ -223,56 +220,32 @@ async fn idle(app: &Arc<App>, nft: Option<&Nft>) {
     }
 }
 
-/// Follows nftables' notifications in a thread of its own, and wakes the firewall when another program changed the
-/// table. What it returns stays true while it does.
-fn watch(app: &Arc<App>, nft: &Nft) -> Option<Arc<AtomicBool>> {
-    let monitor = {
-        let fw = nft.lock().ok()?;
-        fw.runner().monitor(fw.table())
-    };
-    let mut monitor = match monitor {
-        Ok(monitor) => monitor,
-        Err(e) => {
-            tracing::warn!(error = %e, "Can't follow nftables' notifications; the sets are read back every minute");
-            return None;
-        }
-    };
-    let alive = Arc::new(AtomicBool::new(true));
-    let thread_alive = Arc::clone(&alive);
-    let app = Arc::clone(app);
-    let spawned = std::thread::Builder::new()
-        .name("nft-monitor".to_owned())
-        .spawn(move || {
-            loop {
-                if let Err(e) = monitor.wait() {
-                    tracing::warn!(error = %e, "Following nftables' notifications failed; the sets are read back every minute");
-                    break;
-                }
-                tracing::debug!("The table changed, or notifications were lost: reading it back");
-                app.firewall_wake.notify_one();
-            }
-            thread_alive.store(false, Ordering::Relaxed);
-            app.firewall_wake.notify_one();
-        });
-    spawned.is_ok().then_some(alive)
+/// Whether another program committed to nftables since the table was last applied (one small request asking for
+/// the ruleset's generation), so that it is applied again.
+async fn drifted(nft: Option<&Nft>) -> bool {
+    let Some(nft) = nft else { return false };
+    let nft = Arc::clone(nft);
+    tokio::task::spawn_blocking(move || nft.lock().is_ok_and(|fw| fw.check()))
+        .await
+        .unwrap_or(false)
 }
 
-/// Applies the state whenever something changed, when another program changed the table, and when an allow entry
-/// runs out (the kernel times bans out by itself). Without notifications to follow, every minute too.
+/// Applies the state whenever something changed, when an allow entry runs out (the kernel times bans out by
+/// itself), and when another program changed nftables (checked every minute).
 pub async fn run(app: Arc<App>, nft: Option<Nft>) {
-    let watched = nft.as_ref().and_then(|nft| watch(&app, nft));
-    // What changed before the monitor started.
+    // How often the drop counters are read, and whether another program changed the table checked (a flushed
+    // ruleset, a restarted firewall).
+    let tick = Duration::from_secs(app.config.firewall.check_interval);
+    // Whatever the table holds at the start.
     app.firewall_wake.notify_one();
     loop {
-        let periodic =
-            nft.is_some() && !watched.as_ref().is_some_and(|w| w.load(Ordering::Relaxed));
         let due = app
             .state
             .read()
             .ok()
             .and_then(|state| state.next_due(now()));
-        let wait = due.map_or(TICK, |at| {
-            Duration::from_secs(u64::try_from(at - now() + 1).unwrap_or(1)).min(TICK)
+        let wait = due.map_or(tick, |at| {
+            Duration::from_secs(u64::try_from(at - now() + 1).unwrap_or(1)).min(tick)
         });
         let woken = tokio::select! {
             () = app.firewall_wake.notified() => {
@@ -281,7 +254,10 @@ pub async fn run(app: Arc<App>, nft: Option<Nft>) {
             }
             () = tokio::time::sleep(wait) => false,
         };
-        if woken || periodic || due.is_some_and(|at| at <= now()) {
+        if woken || due.is_some_and(|at| at <= now()) {
+            apply(&app, nft.as_ref()).await;
+        } else if drifted(nft.as_ref()).await {
+            tracing::debug!("nftables changed meanwhile: reading the table back");
             apply(&app, nft.as_ref()).await;
         } else {
             idle(&app, nft.as_ref()).await;

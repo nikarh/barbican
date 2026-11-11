@@ -29,6 +29,8 @@ enabled = true
 table = "barbican"
 priority = -190
 nft = "nft"
+# Seconds between checks whether another program changed nftables (one small request).
+check_interval = 60
 
 # Country and ASN databases in the MaxMind DB format. With download = true, DB-IP's free "Lite" databases
 # (CC BY 4.0, https://db-ip.com) are downloaded to these paths when missing, and again once a month.
