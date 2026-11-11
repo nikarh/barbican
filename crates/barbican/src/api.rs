@@ -373,7 +373,8 @@ pub struct FirewallStatus {
     /// Addresses and prefixes blocked by bans and the deny list.
     #[cfg_attr(test, ts(type = "number"))]
     pub blocks: u64,
-    /// Prefixes in the list sets (countries and blocking feeds).
+    /// Prefixes of countries and blocking feeds that go into the list sets (without IPv6, its prefixes don't).
+    /// They are counted as the lists have them: the sets hold them merged into ranges, fewer elements.
     #[cfg_attr(test, ts(type = "number"))]
     pub listed: u64,
     #[cfg_attr(test, ts(type = "number"))]
@@ -446,7 +447,8 @@ pub struct EdgeReport {
     /// Addresses and prefixes it blocks for bans and deny lists, of all the agents it follows.
     #[cfg_attr(test, ts(type = "number"))]
     pub blocks: u64,
-    /// Country and blocklist prefixes it holds.
+    /// Country and blocklist prefixes it loads (without IPv6, its prefixes don't). An nftables edge holds them
+    /// merged into ranges, fewer elements.
     #[cfg_attr(test, ts(type = "number"))]
     pub listed: u64,
     /// Packets and bytes its firewall dropped for a ban, since its rules were made.

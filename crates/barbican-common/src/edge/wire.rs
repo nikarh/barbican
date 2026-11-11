@@ -179,7 +179,8 @@ pub struct Report {
     pub applied: Option<u64>,
     /// Addresses and prefixes it blocks for bans and deny lists.
     pub blocks: u64,
-    /// Prefixes of countries and blocklists.
+    /// Prefixes of countries and blocklists it loads, as the lists have them (nftables holds them merged into
+    /// ranges, fewer elements).
     pub listed: u64,
     /// What its firewall dropped, since its rules were made.
     pub dropped: Counters,
