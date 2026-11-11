@@ -26,16 +26,30 @@ function until(t) {
 	return _('%d more days').format(Math.ceil(s / 86400));
 }
 
+// The status, or why there is none: { error: 'denied' | 'missing' | 'invalid' }.
 function load() {
 	return fs.read(STATUS).then(function(text) {
-		return JSON.parse(text);
-	}).catch(function() {
-		return null;
+		try {
+			return JSON.parse(text);
+		} catch (e) {
+			return { error: 'invalid' };
+		}
+	}).catch(function(e) {
+		// A LuCI session gets the permissions that existed when it logged in: one older than this app can't read it.
+		return { error: (e && e.name === 'PermissionError') ? 'denied' : 'missing' };
 	});
 }
 
 function summary(s) {
-	if (!s) {
+	if (s && s.error === 'denied') {
+		return E('div', { 'class': 'alert-message warning' },
+			_('This page may not read %s yet: log out of LuCI and back in (a session keeps the permissions it had at login, from before barbican was installed).').format(STATUS));
+	}
+	if (s && s.error === 'invalid') {
+		return E('div', { 'class': 'alert-message warning' },
+			_('%s isn\'t valid JSON. Check "logread -e barbican".').format(STATUS));
+	}
+	if (!s || s.error) {
 		return E('div', { 'class': 'alert-message warning' },
 			_('barbican-edge isn\'t running (no %s). Check its settings and "logread -e barbican".').format(STATUS));
 	}
@@ -63,7 +77,7 @@ function upstreams(s) {
 		E('th', { 'class': 'th' }, _('Listed')),
 		E('th', { 'class': 'th' }, _('Last heard from'))
 	]);
-	var rows = (s ? s.upstreams : []).map(function(u) {
+	var rows = (s && !s.error ? s.upstreams : []).map(function(u) {
 		return E('tr', { 'class': 'tr' }, [
 			E('td', { 'class': 'td' }, [ E('strong', {}, u.name), E('br'), E('small', {}, u.url) ]),
 			E('td', { 'class': 'td' }, u.connected
@@ -86,7 +100,7 @@ function blocks(s) {
 		E('th', { 'class': 'th' }, _('Lasts')),
 		E('th', { 'class': 'th' }, _('From'))
 	]);
-	var recent = s ? s.recent : [];
+	var recent = s && !s.error ? s.recent : [];
 	var rows = recent.map(function(b) {
 		return E('tr', { 'class': 'tr' }, [
 			E('td', { 'class': 'td' }, E('code', {}, b.net)),
