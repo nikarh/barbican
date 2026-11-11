@@ -17,6 +17,8 @@ export function BansScreen() {
   const [active, setActive] = useState(true)
   const [banning, setBanning] = useState(false)
   const tier = useTier()
+  // On a phone, the search takes a line and the rest share the next one.
+  const phone = tier === 'phone'
 
   const columns = useMemo(() => {
     const all: Column<Ban>[] = [
@@ -77,8 +79,8 @@ export function BansScreen() {
   )
 
   return (
-    <Stack gap="sm" className="fill">
-      <Group gap="sm" wrap="wrap">
+    <Stack gap={phone ? 8 : 'sm'} className="fill">
+      <Group gap={phone ? 8 : 'sm'} wrap="wrap">
         <TextInput
           placeholder="Address, prefix, country code or reason"
           leftSection={<IconSearch size={16} />}
@@ -86,9 +88,11 @@ export function BansScreen() {
           onChange={(e) => {
             setQuery(e.currentTarget.value)
           }}
-          style={{ flex: '1 1 240px' }}
+          style={{ flex: phone ? '1 1 100%' : '1 1 240px' }}
         />
         <SegmentedControl
+          fullWidth={phone}
+          style={phone ? { flex: '1 1 0' } : undefined}
           value={active ? 'active' : 'all'}
           onChange={(v) => {
             setActive(v === 'active')
