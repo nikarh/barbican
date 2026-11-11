@@ -13,7 +13,15 @@ RPC="python3 ${DIR}/rpc.py"
 LOG=/var/log/e2e/access.log
 failures=0
 
-say() { printf '\n== %s\n' "$*"; }
+# Each section says how long it took, so that the slow ones stand out.
+section_start=
+say() {
+  local now
+  now=$(date +%s%3N)
+  [[ -z "${section_start}" ]] || printf '  (%d ms)\n' $((now - section_start))
+  section_start=${now}
+  printf '\n== %s\n' "$*"
+}
 pass() { printf '  ok   %s\n' "$*"; }
 fail() {
   printf '  FAIL %s\n' "$*"
@@ -31,9 +39,9 @@ wait_until() {
 }
 
 # Dropped packets show as a connection that doesn't happen. Over a veth the kernel answers a SYN in well under a
-# millisecond, busy or not, so half a second without an answer means dropped.
+# millisecond, busy or not, so 150 ms without an answer means dropped (each check that finds a block waits that long).
 reach() { # <netns> <source address> <target>
-  ip netns exec "$1" curl -s -o /dev/null --connect-timeout 0.5 -m 3 --interface "$2" "http://$3:8080/"
+  ip netns exec "$1" curl -s -o /dev/null --connect-timeout 0.15 -m 3 --interface "$2" "http://$3:8080/"
 }
 blocked() { ! reach "$@"; }
 att() { reach att 203.0.113.10 203.0.113.1; }

@@ -52,3 +52,12 @@ inherits = "release"
 opt-level = "s"
 lto = true
 codegen-units = 1
+
+# The end-to-end tests: what the release builds are (no debug assertions, panics abort), but the workspace's own
+# crates unoptimised, which compiles them in about half the time; the dependencies stay optimised.
+[profile.e2e]
+inherits = "release"
+opt-level = 0
+
+[profile.e2e.package."*"]
+opt-level = 3

@@ -11,9 +11,19 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 # The packages of scripts/package-openwrt.sh.
 PACKAGES="$1"
 vm=e2e/vm.sh
+# The router VM's console, as e2e/vm.sh keeps it: a reboot shows there at once.
+console="${BARBICAN_VM_DIR:-${XDG_CACHE_HOME:-${HOME}/.cache}/barbican-e2e}/router/console.log"
 failures=0
 
-say() { printf '\n== %s\n' "$*"; }
+# Each section says how long it took, so that the slow ones stand out.
+section_start=
+say() {
+  local now
+  now=$(date +%s%3N)
+  [[ -z "${section_start}" ]] || printf '  (%d ms)\n' $((now - section_start))
+  section_start=${now}
+  printf '\n== %s\n' "$*"
+}
 pass() { printf '  ok   %s\n' "$*"; }
 fail() {
   printf '  FAIL %s\n' "$*"
@@ -24,14 +34,15 @@ wait_until() {
   shift
   until "$@"; do
     ((SECONDS < deadline)) || return 1
-    sleep 0.5
+    sleep 0.1
   done
 }
 
 router() { "${vm}" router ssh "$@"; }
 server() { "${vm}" server ssh "$@"; }
 rpc() { server "sudo python3 /opt/barbican/rpc.py $*"; }
-ping_from() { server "ping -c 1 -W 1 -I $1 10.99.0.2 >/dev/null 2>&1"; }
+# Over the VMs' link an answer takes about a millisecond: 300 ms without one means dropped.
+ping_from() { server "ping -c 1 -W 0.3 -I $1 10.99.0.2 >/dev/null 2>&1"; }
 attacker_through() { ping_from 203.0.113.77; }
 attacker_blocked() { ! ping_from 203.0.113.77; }
 in_set() { router "nft list set inet barbican host4 2>/dev/null | grep -q '203.0.113.77'"; }
@@ -148,10 +159,16 @@ else
 fi
 # The state is saved when the edge stops cleanly: the reboot below does that.
 server 'sudo systemctl stop barbican'
-router 'reboot' || true
-# Until the old system is gone (SSH answers for a while during the shutdown), then until the new one is up.
-down() { ! router true 2>/dev/null; }
-wait_until 120 down || true
+# Until the kernel boots again (its banner on the console), then until the system is up. SSH would answer for a
+# while during the shutdown, and the shared connection outlives the old system until it times out.
+boots() { LC_ALL=C grep -ac 'Linux version' "${console}" || true; }
+before=$(boots)
+# A clean stop saves the state, as at a reboot (procd stops it the same way); then the machine restarts at once,
+# without the seconds OpenWrt's shutdown takes to stop everything else.
+router '/etc/init.d/barbican-edge stop && sync && reboot -f' || true
+rebooted() { (($(boots) > before)); }
+wait_until 120 rebooted || true
+"${vm}" router forget
 "${vm}" router up >/dev/null 2>&1
 router 'ip route replace 203.0.113.77/32 dev eth1'
 if in_set && attacker_blocked; then pass "blocks are back after a reboot, with the agent down"; else fail "the router forgot its blocks"; fi
