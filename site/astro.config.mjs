@@ -25,6 +25,8 @@ export default defineConfig({
 			description:
 				'Bans addresses that abuse your services, from the logs of a reverse proxy, SSH and an authentication portal, with nftables on the server and on routers.',
 			favicon: '/favicon.svg',
+			// The site has its own dark theme: Dark Reader leaves it alone
+			head: [{ tag: 'meta', attrs: { name: 'darkreader-lock' } }],
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/nikarh/barbican' }],
 			editLink: { baseUrl: 'https://github.com/nikarh/barbican/edit/main/site/' },
 			lastUpdated: false,
