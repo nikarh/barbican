@@ -20,13 +20,11 @@ import {
 import { IconArrowDown, IconArrowUp, IconPencil, IconPlus, IconTrash } from '@tabler/icons-react'
 import { useState } from 'react'
 
-import { useAction, useFeeds, useMeta, useRules } from '../api/hooks'
+import { useAction, useFeeds, useMeta, useRules, useRulesDefaults } from '../api/hooks'
 import type { BanLength, Kind, Rule } from '../api/generated/model'
-import { rpc } from '../api/rpc'
 import { ActionCard } from '../components/ActionCard'
 import { LengthInput } from '../components/ui'
 import { formatLength, KIND_LABELS } from '../lib/format'
-import { useQuery } from '@tanstack/react-query'
 
 const NEW_RULE: Rule = {
   id: 0,
@@ -345,11 +343,7 @@ function Editor({ rule, onClose }: { rule: Rule; onClose: () => void }) {
 
 export function RulesScreen() {
   const rules = useRules()
-  const defaults = useQuery({
-    queryKey: ['rulesDefaults'],
-    queryFn: () => rpc.call('rules.defaults'),
-    staleTime: Infinity,
-  })
+  const defaults = useRulesDefaults()
   const [editing, setEditing] = useState<Rule | null>(null)
   const save = useAction('rule.save')
   const remove = useAction('rule.delete', 'Rule deleted')
