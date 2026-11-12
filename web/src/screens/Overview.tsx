@@ -5,7 +5,6 @@ import type { EdgeStatus, Feed, FirewallStatus, Live } from '../api/generated/mo
 import { Bars } from '../components/Bars'
 import { EdgeLines } from '../components/Edges'
 import { GeoSummary } from '../components/Geo'
-import status from '../components/Status.module.css'
 import { Country, Panel, Stat } from '../components/ui'
 import { edgeDropped } from '../lib/edges'
 import { ago, compact, count, day, KIND_LABELS, remaining } from '../lib/format'
@@ -59,22 +58,35 @@ function LiveFeed() {
   )
 }
 
-/** A blocklist's line for the overview: its name, how many prefixes, and how recent the list is. */
+/** A blocklist for the overview, laid out like a source: its name and what it does, then how many prefixes and how
+ * recent the list is (or why it fails). */
 function FeedLine({ feed: f, now }: { feed: Feed; now: number }) {
-  const ok = f.error === null && f.changed !== null
-  let when = f.succeeded === null ? 'not yet' : `checked ${ago(f.succeeded, now)}`
+  const failing = f.def.enabled && f.error !== null
+  let role = 'blocked'
+  if (f.def.allow) role = 'allowed'
+  else if (!f.def.block) role = 'data'
+  let when = f.succeeded === null ? 'not yet checked' : `checked ${ago(f.succeeded, now)}`
   if (!f.def.enabled) when = 'off'
-  else if (f.error !== null) when = 'failing'
   return (
-    <div className={status.line} title={f.error ?? undefined}>
-      <span className={status.dot} data-ok={ok || !f.def.enabled} data-off={!f.def.enabled} />
-      <span className={status.value}>{f.def.name}</span>
-      <span className={status.faint}>
-        {count(f.count)} prefixes{f.def.allow ? ' · allowed' : f.def.block ? '' : ' · data'}
-      </span>
-      <span className={status.when} data-bad={f.error !== null && f.def.enabled}>
-        {when}
-      </span>
+    <div className={classes.source}>
+      <span
+        className={classes.state}
+        data-ok={!f.def.enabled || (f.error === null && f.changed !== null)}
+        data-off={!f.def.enabled}
+      />
+      <div style={{ minWidth: 0 }}>
+        <Text fz={13} fw={600} truncate>
+          {f.def.name} <span className={classes.parser}>{role}</span>
+        </Text>
+        {failing && (
+          <Text fz={12} c="var(--status-bad)" truncate title={f.error ?? undefined}>
+            {f.error}
+          </Text>
+        )}
+        <Text fz={12} c="var(--ink-faint)">
+          {count(f.count)} prefixes · {when}
+        </Text>
+      </div>
     </div>
   )
 }
@@ -270,7 +282,7 @@ export function OverviewScreen() {
               </a>
             }
           >
-            <Stack gap={6}>
+            <Stack gap={8}>
               {feeds.data?.length === 0 && (
                 <Text fz={13} c="var(--ink-dim)">
                   None yet
