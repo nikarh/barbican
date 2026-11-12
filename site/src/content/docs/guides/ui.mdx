@@ -7,7 +7,7 @@ sidebar:
 
 import Screenshot from '../../../components/Screenshot.astro';
 
-The UI is one page and one WebSocket (`/api/ws`), served by the agent on its unix socket only, and to browsers by [`barbican ui-proxy` in a container](/guides/reverse-proxy/#the-ui-container) behind your reverse proxy's authentication. Everything it shows is live: new events, bans and edge reports arrive as they happen. It has no login of its own and is full control over the agent: see [Behind a reverse proxy](/guides/reverse-proxy/) for who can reach it.
+The UI is one page and one WebSocket (`/api/ws`), served by the agent on its unix socket only, and to browsers by [`barbican ui-proxy` in a container](/guides/reverse-proxy/#the-ui-container) behind your reverse proxy's authentication. Everything it shows is live: new events, bans and edge reports arrive as they happen. The open screen's data comes first; every other screen's is loaded right after, so switching shows a screen at once, and it asks for its current data as it opens. A form you have changed keeps your changes when newer data arrives. It has no login of its own and is full control over the agent: see [Behind a reverse proxy](/guides/reverse-proxy/) for who can reach it.
 
 The screens are **Overview**, **Addresses**, **Bans**, **Events**, **Rules** and **Settings**. On a phone they are a tab bar at the bottom (without Events), which hides while you scroll. The header shows whether the UI is connected (**Live**); when the agent can't be reached, a banner says so and why, and the UI reconnects on its own.
 

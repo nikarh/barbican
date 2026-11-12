@@ -528,6 +528,12 @@ function BlockedPanel({
 
 function PolicyForm({ policy }: { policy: Policy }) {
   const [p, setP] = useState(policy)
+  // A newer saved policy (refetched, or saved elsewhere) replaces what the form shows, unless it was edited.
+  const [base, setBase] = useState(policy)
+  if (policy !== base) {
+    setBase(policy)
+    if (JSON.stringify(p) === JSON.stringify(base)) setP(policy)
+  }
   const save = useAction('policy.update', 'Saved')
   const set = (patch: Partial<Policy>) => {
     setP((x) => ({ ...x, ...patch }))
@@ -589,8 +595,7 @@ function PolicyTab() {
   const policy = usePolicy()
   if (policy.error) return <Alert color="red">{policy.error.message}</Alert>
   if (!policy.data) return null
-  // Remounted when the saved policy changes, so the form starts from it.
-  return <PolicyForm key={JSON.stringify(policy.data)} policy={policy.data} />
+  return <PolicyForm policy={policy.data} />
 }
 
 function EntriesTab() {

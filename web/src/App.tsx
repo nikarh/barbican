@@ -1,25 +1,55 @@
-import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from 'react'
 
+import { preloadAll, preloadOwn } from './api/preload'
 import { rpc } from './api/rpc'
 import { Kept } from './components/Kept'
 import { Shell } from './components/Shell'
 import { useRoute, type Screen } from './lib/router'
 import { OverviewScreen } from './screens/Overview'
 
+/** A screen in a script of its own: loaded on first use or ahead (`load`). Once loaded it renders at once, where
+ * `lazy` alone would suspend for a frame the first time it renders, showing nothing, even when loaded ahead. */
+function screen<P extends object>(
+  importer: () => Promise<ComponentType<P>>,
+): { load: () => Promise<unknown>; Component: ComponentType<P> } {
+  let loaded: ComponentType<P> | null = null
+  let loading: Promise<{ default: ComponentType<P> }> | null = null
+  const load = () => {
+    loading ??= importer().then((component) => {
+      loaded = component
+      return { default: component }
+    })
+    return loading
+  }
+  const Lazy = lazy(load)
+  const Component = (props: P) => {
+    const Loaded = loaded
+    return Loaded === null ? <Lazy {...props} /> : <Loaded {...props} />
+  }
+  return { load, Component }
+}
+
 // The overview is in the first script; every other screen (the grids among them) loads after it, so that the
 // first page has less to download and run.
-const load = {
-  addresses: () => import('./screens/Addresses'),
-  bans: () => import('./screens/Bans'),
-  events: () => import('./screens/Events'),
-  rules: () => import('./screens/Rules'),
-  settings: () => import('./screens/Settings'),
-}
-const AddressesScreen = lazy(() => load.addresses().then((m) => ({ default: m.AddressesScreen })))
-const BansScreen = lazy(() => load.bans().then((m) => ({ default: m.BansScreen })))
-const EventsScreen = lazy(() => load.events().then((m) => ({ default: m.EventsScreen })))
-const RulesScreen = lazy(() => load.rules().then((m) => ({ default: m.RulesScreen })))
-const SettingsScreen = lazy(() => load.settings().then((m) => ({ default: m.SettingsScreen })))
+const addresses = screen(() => import('./screens/Addresses').then((m) => m.AddressesScreen))
+const bans = screen(() => import('./screens/Bans').then((m) => m.BansScreen))
+const events = screen(() => import('./screens/Events').then((m) => m.EventsScreen))
+const rules = screen(() => import('./screens/Rules').then((m) => m.RulesScreen))
+const settings = screen(() => import('./screens/Settings').then((m) => m.SettingsScreen))
+const AddressesScreen = addresses.Component
+const BansScreen = bans.Component
+const EventsScreen = events.Component
+const RulesScreen = rules.Component
+const SettingsScreen = settings.Component
 
 const TITLES: Record<Screen, string> = {
   overview: 'Overview',
@@ -46,33 +76,39 @@ export function App() {
   // browser has a moment, so that they don't hold it up.
   const [opened, setOpened] = useState<KeptScreen[]>([])
   if (isKept(route.screen) && !opened.includes(route.screen)) setOpened([...opened, route.screen])
+  const client = useQueryClient()
+  const first = useRef(route)
   useEffect(() => {
     let cancel: () => void = () => undefined
     let live = true
-    void rpc.settled().then(() => {
-      if (!live) return
-      const all = () => {
-        setOpened((o) => [...o, ...KEPT.filter((s) => !o.includes(s))])
-        void load.rules()
-        void load.settings()
-      }
-      if (typeof window.requestIdleCallback !== 'function') {
-        const id = window.setTimeout(all, 200)
-        cancel = () => {
-          window.clearTimeout(id)
+    // The first screen's data alone, then (once nothing it asked for is outstanding) every other screen's.
+    void preloadOwn(client, first.current)
+      .then(() => rpc.settled())
+      .then(() => {
+        if (!live) return
+        void preloadAll(client)
+        const all = () => {
+          setOpened((o) => [...o, ...KEPT.filter((s) => !o.includes(s))])
+          void rules.load()
+          void settings.load()
         }
-      } else {
-        const id = window.requestIdleCallback(all, { timeout: 1000 })
-        cancel = () => {
-          window.cancelIdleCallback(id)
+        if (typeof window.requestIdleCallback !== 'function') {
+          const id = window.setTimeout(all, 200)
+          cancel = () => {
+            window.clearTimeout(id)
+          }
+        } else {
+          const id = window.requestIdleCallback(all, { timeout: 1000 })
+          cancel = () => {
+            window.cancelIdleCallback(id)
+          }
         }
-      }
-    })
+      })
     return () => {
       live = false
       cancel()
     }
-  }, [])
+  }, [client])
   const kept = (screen: KeptScreen, content: ReactNode) =>
     opened.includes(screen) && (
       <Kept key={screen} shown={route.screen === screen}>

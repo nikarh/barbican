@@ -1,5 +1,11 @@
 import { notifications } from '@mantine/notifications'
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  keepPreviousData,
+  queryOptions,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import type { EdgeStatus, Live } from './generated/model'
@@ -9,16 +15,81 @@ export function useConnection(): Connection {
   return useSyncExternalStore(rpc.subscribeState, rpc.getConnection)
 }
 
-export function useMeta() {
-  return useQuery({ queryKey: ['meta'], queryFn: () => rpc.call('meta.get'), staleTime: Infinity })
-}
+/** What a screen shows is asked for again each time it mounts, unless it arrived this recently (it was just
+ * preloaded, or another part of the screen asked): the screen shows what it has meanwhile, then the current data. */
+const FRESH = 2_000
 
-export function useOverview() {
-  return useQuery({
+/** Every query a screen shows, in one place: the screens' hooks use them, and so does preloading (see preload.ts). */
+export const queries = {
+  meta: queryOptions({
+    queryKey: ['meta'],
+    queryFn: () => rpc.call('meta.get'),
+    staleTime: Infinity,
+  }),
+  overview: queryOptions({
     queryKey: ['overview'],
     queryFn: () => rpc.call('overview.get'),
     refetchInterval: 15_000,
-  })
+    staleTime: FRESH,
+  }),
+  entries: queryOptions({
+    queryKey: ['entries'],
+    queryFn: () => rpc.call('entries.list'),
+    staleTime: FRESH,
+  }),
+  rules: queryOptions({
+    queryKey: ['rules'],
+    queryFn: () => rpc.call('rules.list'),
+    staleTime: FRESH,
+  }),
+  rulesDefaults: queryOptions({
+    queryKey: ['rulesDefaults'],
+    queryFn: () => rpc.call('rules.defaults'),
+    staleTime: Infinity,
+  }),
+  policy: queryOptions({
+    queryKey: ['policy'],
+    queryFn: () => rpc.call('policy.get'),
+    staleTime: FRESH,
+  }),
+  /** How much blocking these countries and continents takes; it only changes with the geolocation database. */
+  coverage: (countries: string[], continents: string[]) =>
+    queryOptions({
+      queryKey: ['coverage', countries, continents],
+      queryFn: () => rpc.call('countries.coverage', { countries, continents }),
+      staleTime: 10 * 60_000,
+    }),
+  geoip: queryOptions({
+    queryKey: ['geoip'],
+    queryFn: () => rpc.call('geoip.status'),
+    refetchInterval: 60_000,
+    staleTime: FRESH,
+  }),
+  feeds: queryOptions({
+    queryKey: ['feeds'],
+    queryFn: () => rpc.call('feeds.list'),
+    refetchInterval: 30_000,
+    staleTime: FRESH,
+  }),
+  feedPresets: queryOptions({
+    queryKey: ['feedPresets'],
+    queryFn: () => rpc.call('feeds.presets'),
+    staleTime: Infinity,
+  }),
+  /** Kept current by a subscription while shown (see useEdges). */
+  edges: queryOptions({
+    queryKey: ['edges'],
+    queryFn: () => rpc.call('edges.list'),
+    staleTime: Infinity,
+  }),
+}
+
+export function useMeta() {
+  return useQuery(queries.meta)
+}
+
+export function useOverview() {
+  return useQuery(queries.overview)
 }
 
 export function useIp(ip: string) {
@@ -26,53 +97,38 @@ export function useIp(ip: string) {
 }
 
 export function useEntries() {
-  return useQuery({ queryKey: ['entries'], queryFn: () => rpc.call('entries.list') })
+  return useQuery(queries.entries)
 }
 
 export function useRules() {
-  return useQuery({ queryKey: ['rules'], queryFn: () => rpc.call('rules.list') })
+  return useQuery(queries.rules)
+}
+
+export function useRulesDefaults() {
+  return useQuery(queries.rulesDefaults)
 }
 
 export function usePolicy() {
-  return useQuery({ queryKey: ['policy'], queryFn: () => rpc.call('policy.get') })
+  return useQuery(queries.policy)
 }
 
 /** How much blocking these countries and continents takes. While a new selection is counted, the previous
  * one's counts stay. */
 export function useCoverage(countries: string[], continents: string[]) {
-  return useQuery({
-    queryKey: ['coverage', countries, continents],
-    queryFn: () => rpc.call('countries.coverage', { countries, continents }),
-    placeholderData: keepPreviousData,
-    staleTime: 10 * 60_000,
-  })
+  return useQuery({ ...queries.coverage(countries, continents), placeholderData: keepPreviousData })
 }
 
 /** `enabled: false` holds the call back: the overview asks once its own data is in. */
 export function useGeoStatus(enabled = true) {
-  return useQuery({
-    queryKey: ['geoip'],
-    queryFn: () => rpc.call('geoip.status'),
-    refetchInterval: 60_000,
-    enabled,
-  })
+  return useQuery({ ...queries.geoip, enabled })
 }
 
 export function useFeeds(enabled = true) {
-  return useQuery({
-    queryKey: ['feeds'],
-    queryFn: () => rpc.call('feeds.list'),
-    refetchInterval: 30_000,
-    enabled,
-  })
+  return useQuery({ ...queries.feeds, enabled })
 }
 
 export function useFeedPresets() {
-  return useQuery({
-    queryKey: ['feedPresets'],
-    queryFn: () => rpc.call('feeds.presets'),
-    staleTime: Infinity,
-  })
+  return useQuery(queries.feedPresets)
 }
 
 type Mutating =
@@ -142,10 +198,5 @@ export function useEdges(enabled = true) {
       () => undefined,
     )
   }, [client, enabled])
-  return useQuery({
-    queryKey: ['edges'],
-    queryFn: () => rpc.call('edges.list'),
-    staleTime: Infinity,
-    enabled,
-  })
+  return useQuery({ ...queries.edges, enabled })
 }
