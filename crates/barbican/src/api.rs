@@ -128,7 +128,8 @@ pub enum Call {
     /// Result: `null`, once the feed was fetched (or failed to be).
     #[serde(rename = "feed.refresh")]
     FeedRefresh(IdParams),
-    /// Result: `null`, then [`Live`] events.
+    /// Result: `Live[]`, the latest items (oldest first, at most 40, kept since the agent started), then [`Live`]
+    /// events. A client that subscribes again (after a reconnect) gets them again: they replace what it showed.
     #[serde(rename = "live.subscribe")]
     LiveSubscribe,
     /// Result: `EdgeStatus[]`: every configured edge client, connected or not.

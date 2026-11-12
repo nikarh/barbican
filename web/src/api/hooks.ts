@@ -105,7 +105,7 @@ export function useAction<M extends Mutating>(method: M, success?: string) {
   })
 }
 
-/** The latest live events (newest first), at most `max`. */
+/** The latest live events (newest first), at most `max`: those the agent kept, then those that come. */
 export function useLive(max: number): Live[] {
   const [events, setEvents] = useState<Live[]>([])
   const maxRef = useRef(max)
@@ -120,6 +120,9 @@ export function useLive(max: number): Live[] {
           setEvents((list) => [event, ...list].slice(0, maxRef.current))
         },
         () => undefined,
+        (recent) => {
+          setEvents(recent.slice(-maxRef.current).reverse())
+        },
       ),
     [],
   )

@@ -35,7 +35,6 @@ const GEO_CACHE: usize = 50_000;
 /// What a batch did, applied to the state once its transaction is committed.
 #[derive(Default)]
 struct Outcome {
-    live: bool,
     /// Addresses of this batch: their id, and the hits and last time not counted in the database yet.
     ips: HashMap<IpAddr, (i64, i64, i64)>,
     /// Events of this batch, counted: `(ip, hour, rule, source, what)`.
@@ -181,10 +180,7 @@ impl Engine {
     /// Records a batch of hits, and bans what crossed a threshold. Returns the new bans.
     pub async fn process(&mut self, batch: &[Hit]) -> Result<Vec<BanRow>, db::Error> {
         let now = now();
-        let mut out = Outcome {
-            live: self.app.live.receiver_count() > 0,
-            ..Outcome::default()
-        };
+        let mut out = Outcome::default();
         let mut tx = self.app.db.pool.begin().await?;
         for hit in batch {
             self.handle(&mut tx, &mut out, hit, now).await?;
@@ -319,21 +315,19 @@ impl Engine {
         *out.events
             .entry((ip_id, hit.at.div_euclid(3_600), first_id, source, what))
             .or_default() += 1;
-        if out.live {
-            out.lives.push(Live::Event {
-                at: hit.at,
-                ip: hit.ip.to_string(),
-                country: info.country.clone(),
-                source: self
-                    .names
-                    .get(usize::from(hit.source))
-                    .cloned()
-                    .unwrap_or_default(),
-                kind,
-                what: hit.what.to_string(),
-                rule: first.map(|c| c.rule.name.clone()),
-            });
-        }
+        out.lives.push(Live::Event {
+            at: hit.at,
+            ip: hit.ip.to_string(),
+            country: info.country.clone(),
+            source: self
+                .names
+                .get(usize::from(hit.source))
+                .cloned()
+                .unwrap_or_default(),
+            kind,
+            what: hit.what.to_string(),
+            rule: first.map(|c| c.rule.name.clone()),
+        });
 
         if trusted || banned || out.trusts.iter().any(|(ip, ..)| *ip == hit.ip) {
             return Ok(());
@@ -600,6 +594,25 @@ mod tests {
             .await;
         assert_eq!(again, Vec::new());
         assert_eq!(t.events().await, 2);
+    }
+
+    #[tokio::test]
+    async fn live_items_are_kept_for_subscribers_to_come() {
+        let mut t = setup().await;
+        // Nobody watches yet.
+        t.feed(WEB, &[&access("203.0.113.5", "/.env", 404, "app@docker")])
+            .await;
+        let (recent, _) = t.app.live();
+        assert!(matches!(&recent[0], Live::Event { ip, .. } if ip == "203.0.113.5"));
+        assert!(matches!(&recent[1], Live::Ban { ban } if ban.net == "203.0.113.5"));
+        // Only the latest are kept, oldest first.
+        for id in 0..100 {
+            t.app.publish(Live::Lift { id });
+        }
+        let (recent, _) = t.app.live();
+        assert_eq!(recent.len(), 40);
+        assert!(matches!(recent[0], Live::Lift { id: 60 }));
+        assert!(matches!(recent[39], Live::Lift { id: 99 }));
     }
 
     #[tokio::test]
