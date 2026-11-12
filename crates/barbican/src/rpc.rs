@@ -276,7 +276,7 @@ async fn subscribe_edges(
     Ok(())
 }
 
-/// Answers the call, then pushes live events, so the client sees the result first.
+/// Answers the call with the latest live items (oldest first), then pushes new ones as they come.
 async fn subscribe_live(
     app: &Arc<App>,
     id: &str,
@@ -284,11 +284,11 @@ async fn subscribe_live(
     subscriptions: &Subscriptions,
 ) -> Result<(), RpcError> {
     check_new(id, subscriptions)?;
-    let mut events = app.live.subscribe();
+    let (recent, mut events) = app.live();
     let _ = tx
         .send(ServerMessage::Result {
             id: id.to_owned(),
-            result: Value::Null,
+            result: serde_json::to_value(&recent).unwrap_or(Value::Null),
         })
         .await;
     let tx = tx.clone();

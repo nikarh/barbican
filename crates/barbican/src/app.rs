@@ -1,6 +1,6 @@
 //! What every part of the agent shares.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -22,6 +22,9 @@ pub struct SourceCounters {
     pub last_line: std::sync::atomic::AtomicI64,
 }
 
+/// Live items kept for subscribers to come: as many as the UI's feed shows.
+const LIVE_RECENT: usize = 40;
+
 pub struct App {
     pub config: Config,
     pub db: Db,
@@ -40,7 +43,11 @@ pub struct App {
     pub journal: Mutex<Journal>,
     /// The journal's sequence number, for edge connections waiting for news.
     pub journal_seq: watch::Sender<u64>,
-    pub live: broadcast::Sender<Live>,
+    /// The UI's live feed; subscribe with [`App::live`], which also gives the latest items.
+    live: broadcast::Sender<Live>,
+    /// The latest live items, oldest first: what a new subscriber is shown first. Locked while publishing, so that
+    /// a subscriber gets each item once, either from here or from the channel.
+    live_recent: Mutex<VecDeque<Live>>,
     pub sources: Mutex<BTreeMap<String, SourceStatus>>,
     /// Lines read and matched per source, counted without a lock.
     pub source_counters: Mutex<BTreeMap<String, Arc<SourceCounters>>>,
@@ -123,6 +130,7 @@ impl App {
             journal: Mutex::new(Journal::new(epoch, 10_000)),
             journal_seq,
             live,
+            live_recent: Mutex::new(VecDeque::with_capacity(LIVE_RECENT)),
             sources: Mutex::new(BTreeMap::new()),
             source_counters: Mutex::new(BTreeMap::new()),
             unsaved_cursors: Mutex::new(BTreeMap::new()),
@@ -148,8 +156,26 @@ impl App {
         self.edges.borrow().values().cloned().collect()
     }
 
-    /// Sends to the UI's live subscribers, if any.
+    /// Sends to the UI's live subscribers, if any, and keeps it among the latest items for those to come.
     pub fn publish(&self, live: Live) {
+        let Ok(mut recent) = self.live_recent.lock() else {
+            let _ = self.live.send(live);
+            return;
+        };
+        if recent.len() == LIVE_RECENT {
+            recent.pop_front();
+        }
+        recent.push_back(live.clone());
         let _ = self.live.send(live);
+    }
+
+    /// The latest live items (oldest first), and what is published from now on.
+    pub fn live(&self) -> (Vec<Live>, broadcast::Receiver<Live>) {
+        let recent = self.live_recent.lock();
+        let receiver = self.live.subscribe();
+        let items = recent
+            .map(|r| r.iter().cloned().collect())
+            .unwrap_or_default();
+        (items, receiver)
     }
 }

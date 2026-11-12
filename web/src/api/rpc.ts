@@ -59,7 +59,7 @@ interface Results {
   'feed.save': Feed
   'feed.delete': null
   'feed.refresh': null
-  'live.subscribe': null
+  'live.subscribe': Live[]
   'edges.list': EdgeStatus[]
   'edges.subscribe': null
   unsubscribe: null
@@ -109,6 +109,8 @@ interface Pending {
 
 interface Subscription {
   call: Call
+  /** The subscription's result, each time it is established (again, after a reconnect). */
+  onResult: (result: unknown) => void
   onEvent: (event: unknown) => void
   onError: (error: RpcError) => void
 }
@@ -274,7 +276,10 @@ export class RpcClient {
       const queued = new Set(this.queue.map((r) => r.id))
       const resubscribe = [...this.subscriptions]
         .filter(([id]) => !queued.has(id))
-        .map(([id, s]) => ({ id, ...s.call }))
+        .map(([id, s]) => {
+          this.pending.set(id, { resolve: s.onResult, reject: s.onError })
+          return { id, ...s.call }
+        })
       this.queue = [...resubscribe, ...this.queue]
       this.flush()
       this.checkSettled()
@@ -409,20 +414,24 @@ export class RpcClient {
     })
   }
 
-  /** Subscribes to a stream of events; returns the unsubscribe function. */
+  /** Subscribes to a stream of events; returns the unsubscribe function. `onResult` gets the call's result, again
+   * after each reconnect. */
   subscribe<M extends keyof Events>(
     method: M,
     onEvent: (event: Events[M]) => void,
     onError: (error: RpcError) => void,
+    onResult: (result: Result<M>) => void = () => undefined,
   ): () => void {
     const id = this.id()
     const call = { method } as Call
-    this.subscriptions.set(id, {
+    const subscription: Subscription = {
       call,
+      onResult: onResult as (result: unknown) => void,
       onEvent: onEvent as (event: unknown) => void,
       onError,
-    })
-    this.pending.set(id, { resolve: () => undefined, reject: onError })
+    }
+    this.subscriptions.set(id, subscription)
+    this.pending.set(id, { resolve: subscription.onResult, reject: onError })
     this.send({ id, ...call })
     return () => {
       if (!this.subscriptions.delete(id)) return
