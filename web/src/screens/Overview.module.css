@@ -78,6 +78,10 @@
   background: var(--status-good);
 }
 
+.state[data-off='true'] {
+  background: var(--ink-faint);
+}
+
 .parser {
   font-weight: 400;
   font-size: 12px;
