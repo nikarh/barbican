@@ -6,7 +6,6 @@ import { Bars } from '../components/Bars'
 import { EdgeLines } from '../components/Edges'
 import { GeoSummary } from '../components/Geo'
 import { Country, Panel, Stat } from '../components/ui'
-import { entries } from '../lib/feeds'
 import { edgeDropped } from '../lib/edges'
 import { ago, compact, count, day, KIND_LABELS, remaining } from '../lib/format'
 import { href, ipHref } from '../lib/router'
@@ -59,36 +58,86 @@ function LiveFeed() {
   )
 }
 
-/** A blocklist for the overview, laid out like a source: its name and what it does, then how many prefixes and how
- * recent the list is (or why it fails). */
-function FeedLine({ feed: f, now }: { feed: Feed; now: number }) {
-  const failing = f.def.enabled && f.error !== null
-  let role = 'blocked'
-  if (f.def.allow) role = 'allowed'
-  else if (!f.def.block) role = f.def.content === 'agents' ? 'for rules' : 'data'
-  let when = f.succeeded === null ? 'not yet checked' : `checked ${ago(f.succeeded, now)}`
-  if (!f.def.enabled) when = 'off'
+/** A list that needs a look, laid out like a source: its name, then why (its error, or that it has no list yet). */
+function FeedProblem({ feed: f, now }: { feed: Feed; now: number }) {
+  const failing = f.error !== null
   return (
     <div className={classes.source}>
-      <span
-        className={classes.state}
-        data-ok={!f.def.enabled || (f.error === null && f.changed !== null)}
-        data-off={!f.def.enabled}
-      />
+      <span className={classes.state} data-ok={false} data-warn={!failing} />
       <div style={{ minWidth: 0 }}>
         <Text fz={13} fw={600} truncate>
-          {f.def.name} <span className={classes.parser}>{role}</span>
+          {f.def.name}
         </Text>
-        {failing && (
-          <Text fz={12} c="var(--status-bad)" truncate title={f.error ?? undefined}>
-            {f.error}
-          </Text>
-        )}
-        <Text fz={12} c="var(--ink-faint)">
-          {entries(f)} · {when}
+        <Text
+          fz={12}
+          c={failing ? 'var(--status-bad)' : 'var(--ink-faint)'}
+          truncate
+          title={f.error ?? undefined}
+        >
+          {failing
+            ? `${f.changed === null ? 'No list: ' : `List from ${ago(f.changed, now)} in use: `}${f.error ?? ''}`
+            : 'Not fetched yet'}
         </Text>
       </div>
     </div>
+  )
+}
+
+/** The feeds in a few lines, however many there are: how many block, allow or are data, how old the oldest copy
+ * is, and by name only the lists that fail or have nothing yet (the Feeds tab has the rest). */
+function FeedsSummary({ feeds, now }: { feeds: Feed[]; now: number }) {
+  const on = feeds.filter((f) => f.def.enabled)
+  if (feeds.length === 0) {
+    return (
+      <Text fz={13} c="var(--ink-dim)">
+        None yet
+      </Text>
+    )
+  }
+  const blocking = on.filter((f) => f.def.block)
+  const allowing = on.filter((f) => f.def.allow)
+  const data = on.length - blocking.length - allowing.length
+  const problems = on.filter((f) => f.error !== null || f.changed === null)
+  const oldest = on.reduce<number | null>(
+    (min, f) =>
+      f.succeeded === null ? min : min === null ? f.succeeded : Math.min(min, f.succeeded),
+    null,
+  )
+  const shown = problems.slice(0, 4)
+  const lists = (n: number) => (n === 1 ? '1 list' : `${count(n)} lists`)
+  const row = (label: string, value: string) => (
+    <Group justify="space-between" wrap="nowrap">
+      <span>{label}</span>
+      <span className="num">{value}</span>
+    </Group>
+  )
+  return (
+    <Stack gap={6} fz={13}>
+      {row('Blocking', lists(blocking.length))}
+      {row('Allowing', lists(allowing.length))}
+      {row('Data for rules', lists(data))}
+      {feeds.length > on.length && row('Off', lists(feeds.length - on.length))}
+      {oldest !== null && row('Oldest check', ago(oldest, now))}
+      {problems.length === 0 ? (
+        <Group gap={8} wrap="nowrap">
+          <span className={classes.state} data-ok={true} style={{ marginTop: 0 }} />
+          <Text fz={12.5} c="var(--ink-dim)">
+            All {on.length} lists fetched
+          </Text>
+        </Group>
+      ) : (
+        <Stack gap={8} mt={4}>
+          {shown.map((f) => (
+            <FeedProblem key={f.def.id} feed={f} now={now} />
+          ))}
+          {problems.length > shown.length && (
+            <Text fz={12} c="var(--ink-faint)">
+              and {problems.length - shown.length} more
+            </Text>
+          )}
+        </Stack>
+      )}
+    </Stack>
   )
 }
 
@@ -283,16 +332,7 @@ export function OverviewScreen() {
               </a>
             }
           >
-            <Stack gap={8}>
-              {feeds.data?.length === 0 && (
-                <Text fz={13} c="var(--ink-dim)">
-                  None yet
-                </Text>
-              )}
-              {(feeds.data ?? []).map((f) => (
-                <FeedLine key={f.def.id} feed={f} now={now} />
-              ))}
-            </Stack>
+            {feeds.data !== undefined && <FeedsSummary feeds={feeds.data} now={now} />}
           </Panel>
 
           <Panel title="Sources">

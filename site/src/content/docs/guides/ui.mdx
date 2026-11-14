@@ -22,7 +22,8 @@ The screenshots on this site show synthetic data.
 - **Recent bans**, with their address or prefix, country, reason, when they started and how long they have left.
 - **Live**: what rules matched (and logins), new bans and lifted bans, newest first, as they happen. It opens with the latest 40 since the agent started, so it isn't empty until the next one comes.
 - **Firewall**: whether it is applied (or in dry run, or failing, with the error), how many addresses and prefixes are blocked, and how many country and list prefixes are loaded.
-- **Geolocation** and **Feeds**: the databases and lists in use, when they were last fetched, and their errors; for each list, how many entries it has (prefixes, networks or user agents) and whether it blocks, allows or is only data for rules.
+- **Geolocation**: the databases in use, when they were downloaded, and their errors.
+- **Feeds**: how many lists block, allow or are data for rules, how long ago the oldest was checked, and by name only the lists that need a look: those whose last fetch failed (with the error) or that have no list yet. The [Feeds tab](/guides/feeds/#feeds) has the rest.
 - **Sources**: each source's input, how many lines it read and matched, when the last came, and its error.
 - **Edges**: each edge that follows the agent, connected or not, enforcing or in dry run, what it holds and dropped.
 - **Banned, by country** and **Events, by rule**, over the last 30 days.
