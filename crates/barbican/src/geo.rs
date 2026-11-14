@@ -253,9 +253,10 @@ impl Geo {
         info
     }
 
-    /// Every prefix of these countries (ISO codes) and continents (two-letter codes), merged.
+    /// Every prefix of these countries (ISO codes) and continents (two-letter codes), merged; of IPv6 too only with
+    /// `ipv6`.
     #[must_use]
-    pub fn networks_of(&self, countries: &[String], continents: &[String]) -> Vec<Net> {
+    pub fn networks_of(&self, countries: &[String], continents: &[String], ipv6: bool) -> Vec<Net> {
         let Some(reader) = &self.country else {
             return Vec::new();
         };
@@ -276,6 +277,9 @@ impl Geo {
             let Some(offset) = item.offset() else {
                 continue;
             };
+            if !ipv6 && item.network().is_ok_and(|n| n.ip().is_ipv6()) {
+                continue;
+            }
             let take = *decided.entry(offset).or_insert_with(|| {
                 item.decode::<geoip2::Country>()
                     .ok()
@@ -523,7 +527,10 @@ mod tests {
         assert_eq!(geo.lookup("192.0.2.1".parse().unwrap()), Info::default());
         assert_eq!(geo.country_info(), None);
         assert_eq!(written(Path::new("/nonexistent/a.mmdb")), None);
-        assert_eq!(geo.networks_of(&["CN".to_owned()], &[]), Vec::<Net>::new());
+        assert_eq!(
+            geo.networks_of(&["CN".to_owned()], &[], true),
+            Vec::<Net>::new()
+        );
     }
 
     #[test]
@@ -625,7 +632,7 @@ mod tests {
         assert_eq!(first, again);
         assert_eq!(
             first.total.prefixes,
-            geo.networks_of(&countries, &continents).len() as u64
+            geo.networks_of(&countries, &continents, true).len() as u64
         );
         let (_, continent, cn) = &first.countries[0];
         assert_eq!(continent.as_deref(), Some("AS"));
@@ -664,7 +671,7 @@ mod tests {
         assert!(country.built > 1_600_000_000, "{country:?}");
         assert!(geo.asn_info().unwrap().kind.contains("ASN"));
         let start = std::time::Instant::now();
-        let nets = geo.networks_of(&["CN".to_owned()], &["SA".to_owned()]);
+        let nets = geo.networks_of(&["CN".to_owned()], &["SA".to_owned()], true);
         let v4 = nets
             .iter()
             .filter(|n| n.family() == barbican_common::net::Family::V4)

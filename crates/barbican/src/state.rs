@@ -6,7 +6,7 @@ use std::net::IpAddr;
 use std::sync::Arc;
 
 use barbican_common::edge::ListRef;
-use barbican_common::net::{Net, aggregate};
+use barbican_common::net::{Family, Net, aggregate};
 use barbican_common::nft::{Block, Desired};
 
 use crate::db::{BanRow, EntryRow};
@@ -139,12 +139,20 @@ pub struct State {
     /// The prefixes of the blocked countries and continents, and which ones they are of.
     pub countries: Arc<Vec<Net>>,
     pub countries_of: (Vec<String>, Vec<String>),
+    /// Whether the lists have IPv6 (`countries` holds its prefixes then): only when the host or an edge loads it.
+    pub ipv6_lists: bool,
 }
 
-/// The list sets' content and its identity.
+/// The list sets' content and its identity, per family.
 #[derive(Debug, Clone, Default)]
 pub struct Lists {
+    /// The IPv4 prefixes, then the IPv6 ones when `ipv6`; merged.
     pub nets: Arc<Vec<Net>>,
+    /// Whether `nets` has IPv6: computed only when the host or an edge loads it.
+    pub ipv6: bool,
+    /// Of the IPv4 prefixes; empty before the lists are first computed.
+    pub version_v4: String,
+    /// Of all of them, with IPv6; empty without.
     pub version: String,
 }
 
@@ -263,41 +271,84 @@ impl State {
         (blocks, allows)
     }
 
-    /// The list sets' content: blocked countries and the feeds that block.
+    /// The list sets' content: blocked countries and the feeds that block. IPv6 only with `ipv6_lists`.
     #[must_use]
     pub fn lists(&self) -> Lists {
-        let mut nets: Vec<Net> = self.countries.as_ref().clone();
-        let mut hash = fnv(b"barbican".iter().copied(), 0xcbf2_9ce4_8422_2325);
-        for feed in self.feeds.iter().filter(|f| f.def.enabled && f.def.block) {
-            nets.extend(feed.loaded.nets.iter().copied());
+        let (mut v4, mut v6) = (Vec::new(), Vec::new());
+        let feeds = self
+            .feeds
+            .iter()
+            .filter(|f| f.def.enabled && f.def.block)
+            .flat_map(|f| f.loaded.nets.iter());
+        for net in self.countries.iter().chain(feeds) {
+            match net.family() {
+                Family::V4 => v4.push(*net),
+                Family::V6 if self.ipv6_lists => v6.push(*net),
+                Family::V6 => {}
+            }
         }
-        let nets = aggregate(&nets);
+        let mut nets = aggregate(&v4);
+        let mut hash = fnv(b"barbican".iter().copied(), 0xcbf2_9ce4_8422_2325);
         for net in &nets {
             hash = fnv(net.to_bytes().into_iter(), hash);
         }
+        let version_v4 = format!("{hash:016x}");
+        let version = if self.ipv6_lists {
+            let v6 = aggregate(&v6);
+            for net in &v6 {
+                hash = fnv(net.to_bytes().into_iter(), hash);
+            }
+            nets.extend(v6);
+            format!("{hash:016x}")
+        } else {
+            String::new()
+        };
         Lists {
             nets: Arc::new(nets),
-            version: format!("{hash:016x}"),
+            ipv6: self.ipv6_lists,
+            version_v4,
+            version,
         }
     }
 
     #[must_use]
-    pub fn desired(&self, now: i64, lists: &Lists) -> Desired {
+    /// What the host's firewall holds; `ipv6`: whether it loads IPv6.
+    pub fn desired(&self, now: i64, lists: &Lists, ipv6: bool) -> Desired {
         let (block, allow) = self.blocks_and_allows(now);
         Desired {
             allow,
             block,
             lists: Arc::clone(&lists.nets),
-            lists_version: lists.version.clone(),
+            // The host's list sets change with the family it loads.
+            lists_version: if ipv6 {
+                lists.version.clone()
+            } else {
+                lists.version_v4.clone()
+            },
         }
     }
 }
 
 impl Lists {
+    /// The version an edge that loads IPv6 or not gets, `None` while it isn't computed: before the lists are, or
+    /// for IPv6 until an edge that loads it connects. Without IPv6 a version of its own, so that an edge switching
+    /// IPv6 on gets the whole list.
+    #[must_use]
+    pub fn version_for(&self, ipv6: bool) -> Option<String> {
+        if self.version_v4.is_empty() {
+            None
+        } else if ipv6 {
+            self.ipv6.then(|| self.version.clone())
+        } else {
+            Some(format!("{}+v4", self.version_v4))
+        }
+    }
+
+    /// For the journal: changes whenever any edge's list does.
     #[must_use]
     pub fn reference(&self) -> ListRef {
         ListRef {
-            version: self.version.clone(),
+            version: self.version_for(self.ipv6).unwrap_or_default(),
             count: self.nets.len(),
         }
     }
@@ -384,6 +435,7 @@ mod tests {
     fn lists_version_follows_content() {
         let mut state = State {
             countries: Arc::new(vec![n("198.51.100.0/24")]),
+            ipv6_lists: true,
             ..State::default()
         };
         let a = state.lists();
@@ -413,6 +465,71 @@ mod tests {
         state.feeds[0].def.block = false;
         assert_eq!(state.lists().version, a.version);
         assert_eq!(state.listed(ip("203.0.113.5")), vec!["x"]);
+    }
+
+    /// IPv6 is in the lists only when something loads it; the IPv4 version doesn't change with it.
+    #[test]
+    fn lists_have_ipv6_only_when_wanted() {
+        let mut state = State {
+            countries: Arc::new(vec![
+                n("198.51.100.0/25"),
+                n("198.51.100.128/25"),
+                n("2001:db8::/33"),
+            ]),
+            ..State::default()
+        };
+        state.feeds.push(Feed {
+            def: FeedDef {
+                id: 1,
+                name: "x".into(),
+                url: String::new(),
+                enabled: true,
+                block: true,
+                allow: false,
+                refresh_secs: 3_600,
+                username: None,
+                password: None,
+            },
+            loaded: Arc::new(Loaded::from_data(
+                "203.0.113.0/24\n2001:db8:1::/48\n2001:db8:8000::/48\n",
+            )),
+            fetched: None,
+            succeeded: None,
+            changed: None,
+            error: None,
+        });
+        let v4 = state.lists();
+        assert_eq!(*v4.nets, vec![n("198.51.100.0/24"), n("203.0.113.0/24")]);
+        assert!(!v4.ipv6 && v4.version.is_empty());
+        assert_eq!(v4.version_for(true), None);
+        assert_eq!(v4.version_for(false), Some(format!("{}+v4", v4.version_v4)));
+        assert_eq!(v4.reference().version, format!("{}+v4", v4.version_v4));
+
+        state.ipv6_lists = true;
+        let all = state.lists();
+        assert_eq!(
+            *all.nets,
+            vec![
+                n("198.51.100.0/24"),
+                n("203.0.113.0/24"),
+                n("2001:db8::/33"),
+                n("2001:db8:8000::/48")
+            ]
+        );
+        // The same IPv4 version; the whole list's is the hash of all of it, as before families were apart.
+        assert_eq!(all.version_v4, v4.version_v4);
+        let mut hash = fnv(b"barbican".iter().copied(), 0xcbf2_9ce4_8422_2325);
+        for net in aggregate(&all.nets) {
+            hash = fnv(net.to_bytes().into_iter(), hash);
+        }
+        assert_eq!(all.version, format!("{hash:016x}"));
+        assert_eq!(all.version_for(true), Some(all.version.clone()));
+        assert_eq!(all.version_for(false), v4.version_for(false));
+        assert_ne!(all.reference(), v4.reference());
+        // The host's firewall: the version of the family it loads.
+        assert_eq!(state.desired(0, &all, false).lists_version, all.version_v4);
+        assert_eq!(state.desired(0, &all, true).lists_version, all.version);
+        assert_eq!(Lists::default().version_for(false), None);
     }
 
     #[test]

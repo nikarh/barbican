@@ -19,7 +19,7 @@ The kernel's sets don't slow packets down with their size: a lookup costs about 
 
 ## Keeping it small
 
-- **Leave out IPv6 where there is none**: `firewall.ipv6 = false` on the agent, `option ipv6 '0'` on an edge. Its country and blocklist list is as large as IPv4's.
+- **Leave out IPv6 where there is none**: `firewall.ipv6 = false` on the agent, `option ipv6 '0'` on an edge. Its country and blocklist list is as large as IPv4's. With neither the agent nor any edge loading IPv6, the agent doesn't compute it either: with four continents and eight countries blocked its startup peak drops from about 105 MB to about 63 MB.
 - **Country blocks** are what takes the most kernel memory. Settings shows, as you add countries and continents, how many prefixes and addresses they are.
 - **Lists on an edge**: `option lists '0'` gives a router only the bans and the deny list, not the countries and blocking feeds.
 - **Events** are counted per address, rule, source and hour, not stored line by line, and deleted after **Keep events** (a year by default). Addresses are stored as 4 or 16 bytes, and every distinct "what it tried" once.
