@@ -27,6 +27,7 @@ The kernel's sets don't slow packets down with their size: a lookup costs about 
 
 ## Work done
 
+- How much a choice of countries covers (Settings) is counted in one pass over the country database, about a tenth of a second, and nothing of it is kept.
 - Only lines that match a rule, or are logins, reach the engine: parsing and matching happen in each source without allocating.
 - Firewall changes go straight over netlink, one small transaction each whatever the sets hold; only what changed is written. Once a minute (`firewall.check_interval`) the agent asks the kernel for the ruleset's generation, one small request, to notice changes made by other programs.
 - An edge's full state (25 000 bans and 100 000 list prefixes) is 2.4 MB on the wire and decodes in under a millisecond.

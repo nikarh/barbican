@@ -5,10 +5,9 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 
-use barbican_common::net::{Family, Net, aggregate};
+use barbican_common::net::{Family, Net, Range, aggregate};
 use maxminddb::{Reader, WithinOptions, geoip2};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -23,8 +22,6 @@ pub struct Info {
 pub struct Geo {
     country: Option<Reader<Vec<u8>>>,
     asn: Option<Reader<Vec<u8>>>,
-    /// The country database's networks by country, read the first time [`Geo::coverage`] is asked.
-    regions: OnceLock<Regions>,
 }
 
 /// How much a set of prefixes covers.
@@ -40,6 +37,7 @@ pub struct Extent {
 
 impl Extent {
     /// Of merged prefixes.
+    #[cfg(test)]
     fn of(nets: &[Net]) -> Self {
         let mut extent = Self {
             prefixes: nets.len() as u64,
@@ -60,19 +58,84 @@ impl Extent {
     }
 }
 
-/// The networks of one country (and continent) of the database, merged.
-#[derive(Debug)]
-struct Region {
-    country: Option<String>,
-    continent: Option<String>,
-    nets: Vec<Net>,
+/// The extent of networks given in address order, counted as they come: adjacent ones are joined into runs, and
+/// each run counts the fewest prefixes that cover it, as [`aggregate`] would merge them. Nothing is kept but the
+/// run in progress.
+#[derive(Debug, Default)]
+struct Tally {
+    extent: Extent,
+    v6: u128,
+    /// The family, first and last address of the run in progress.
+    run: Option<(Family, u128, u128)>,
 }
 
-#[derive(Debug, Default)]
-struct Regions {
-    regions: Vec<Region>,
-    /// Everything the database places in a country or continent.
-    known: Extent,
+impl Tally {
+    fn add(&mut self, net: &Net) {
+        let (first, last) = Range::of(net).bounds();
+        let family = net.family();
+        if let Some((f, start, end)) = self.run
+            && f == family
+            && first <= end.saturating_add(1)
+            && first >= start
+        {
+            self.run = Some((f, start, end.max(last)));
+            return;
+        }
+        self.close();
+        self.run = Some((family, first, last));
+    }
+
+    fn close(&mut self) {
+        let Some((family, first, last)) = self.run.take() else {
+            return;
+        };
+        self.extent.prefixes += prefixes_between(family, first, last);
+        let size = (last - first).saturating_add(1);
+        match family {
+            Family::V4 => {
+                self.extent.v4_addresses += u64::try_from(size).unwrap_or(u64::MAX);
+            }
+            Family::V6 => self.v6 = self.v6.saturating_add(size),
+        }
+    }
+
+    fn finish(mut self) -> Extent {
+        self.close();
+        self.extent.v6_networks = u64::try_from(self.v6 >> 80).unwrap_or(u64::MAX);
+        self.extent
+    }
+}
+
+/// The fewest prefixes that cover the addresses from `first` to `last` (both included).
+fn prefixes_between(family: Family, mut first: u128, last: u128) -> u64 {
+    // Whether a block of 2^k addresses from `first` goes past `last`.
+    let too_big = |first: u128, k: u32| {
+        if k == 128 {
+            last - first != u128::MAX
+        } else {
+            (1u128 << k) - 1 > last - first
+        }
+    };
+    let mut n = 0;
+    loop {
+        // The largest block that starts at `first`, aligned to its size, and ends by `last`.
+        let mut k = if first == 0 {
+            family.bits()
+        } else {
+            first.trailing_zeros().min(family.bits())
+        };
+        while k > 0 && too_big(first, k) {
+            k -= 1;
+        }
+        n += 1;
+        if k == 128 {
+            return n;
+        }
+        match first.checked_add(1u128 << k) {
+            Some(next) if next <= last => first = next,
+            _ => return n,
+        }
+    }
 }
 
 /// How much blocking some countries and continents takes, each on its own and together.
@@ -115,7 +178,6 @@ impl std::fmt::Debug for Geo {
         f.debug_struct("Geo")
             .field("country", &self.country.is_some())
             .field("asn", &self.asn.is_some())
-            .field("regions", &self.regions.get().is_some())
             .finish()
     }
 }
@@ -146,7 +208,6 @@ impl Geo {
         Ok(Self {
             country: country.map(open).transpose()?.flatten(),
             asn: asn.map(open).transpose()?.flatten(),
-            regions: OnceLock::new(),
         })
     }
 
@@ -238,101 +299,87 @@ impl Geo {
     }
 
     /// How much blocking these countries and continents takes (each, and all together), or `None` without a country
-    /// database. The first call reads the whole database (seconds); the next ones only merge prefixes.
+    /// database. One pass over the database (well under a second), counting as it goes: nothing is kept.
     #[must_use]
     pub fn coverage(&self, countries: &[String], continents: &[String]) -> Option<Coverage> {
+        // A country and a continent.
+        type Place = (Option<String>, Option<String>);
         let reader = self.country.as_ref()?;
-        let regions = self.regions.get_or_init(|| read_regions(reader));
-        let extent = |take: &dyn Fn(&Region) -> bool| {
-            let nets: Vec<Net> = regions
-                .regions
+        let is =
+            |value: Option<&str>, code: &str| value.is_some_and(|v| v.eq_ignore_ascii_case(code));
+        let mut country_tallies: Vec<Tally> = countries.iter().map(|_| Tally::default()).collect();
+        let mut country_continents: Vec<Option<String>> = vec![None; countries.len()];
+        let mut continent_tallies: Vec<Tally> =
+            continents.iter().map(|_| Tally::default()).collect();
+        let (mut total, mut known) = (Tally::default(), Tally::default());
+        // A country and a continent of each record: most networks share a few records.
+        let mut records: HashMap<usize, Option<Place>> = HashMap::new();
+        let within = reader.networks(WithinOptions::default()).ok()?;
+        for item in within.flatten() {
+            let Some(offset) = item.offset() else {
+                continue;
+            };
+            let place = records.entry(offset).or_insert_with(|| {
+                item.decode::<geoip2::Country>()
+                    .ok()
+                    .flatten()
+                    .map(|r| {
+                        (
+                            r.country.iso_code.map(str::to_owned),
+                            r.continent.code.map(str::to_owned),
+                        )
+                    })
+                    .filter(|(country, continent)| country.is_some() || continent.is_some())
+            });
+            let (Some((country, continent)), Ok(network)) = (place.as_ref(), item.network()) else {
+                continue;
+            };
+            let net = Net::prefix(network.ip(), network.prefix());
+            if net.family() == Family::V6 && is_ipv4_alias(&network.ip()) {
+                continue;
+            }
+            known.add(&net);
+            let mut any = false;
+            for ((code, tally), seen) in countries
                 .iter()
-                .filter(|r| take(r))
-                .flat_map(|r| r.nets.iter().copied())
-                .collect();
-            Extent::of(&aggregate(&nets))
-        };
-        let is = |value: Option<&String>, code: &str| {
-            value.is_some_and(|v| v.eq_ignore_ascii_case(code))
-        };
+                .zip(&mut country_tallies)
+                .zip(&mut country_continents)
+            {
+                if is(country.as_deref(), code) {
+                    tally.add(&net);
+                    if seen.is_none() {
+                        seen.clone_from(continent);
+                    }
+                    any = true;
+                }
+            }
+            for (code, tally) in continents.iter().zip(&mut continent_tallies) {
+                if is(continent.as_deref(), code) {
+                    tally.add(&net);
+                    any = true;
+                }
+            }
+            if any {
+                total.add(&net);
+            }
+        }
         Some(Coverage {
             countries: countries
                 .iter()
-                .map(|code| {
-                    let continent = regions
-                        .regions
-                        .iter()
-                        .find(|r| is(r.country.as_ref(), code))
-                        .and_then(|r| r.continent.clone());
-                    (
-                        code.clone(),
-                        continent,
-                        extent(&|r| is(r.country.as_ref(), code)),
-                    )
-                })
+                .cloned()
+                .zip(country_continents)
+                .zip(country_tallies)
+                .map(|((code, continent), tally)| (code, continent, tally.finish()))
                 .collect(),
             continents: continents
                 .iter()
-                .map(|code| (code.clone(), extent(&|r| is(r.continent.as_ref(), code))))
+                .cloned()
+                .zip(continent_tallies)
+                .map(|(code, tally)| (code, tally.finish()))
                 .collect(),
-            total: extent(&|r| {
-                countries.iter().any(|c| is(r.country.as_ref(), c))
-                    || continents.iter().any(|c| is(r.continent.as_ref(), c))
-            }),
-            known: regions.known,
+            total: total.finish(),
+            known: known.finish(),
         })
-    }
-}
-
-/// Every network of the country database, grouped by country and continent (as [`Geo::networks_of`] reads them).
-fn read_regions(reader: &Reader<Vec<u8>>) -> Regions {
-    // A country and a continent.
-    type Place = (Option<String>, Option<String>);
-    let mut records: HashMap<usize, Option<Place>> = HashMap::new();
-    let mut grouped: HashMap<Place, Vec<Net>> = HashMap::new();
-    let Ok(within) = reader.networks(WithinOptions::default()) else {
-        return Regions::default();
-    };
-    for item in within.flatten() {
-        let Some(offset) = item.offset() else {
-            continue;
-        };
-        let place = records.entry(offset).or_insert_with(|| {
-            item.decode::<geoip2::Country>()
-                .ok()
-                .flatten()
-                .map(|r| {
-                    (
-                        r.country.iso_code.map(str::to_owned),
-                        r.continent.code.map(str::to_owned),
-                    )
-                })
-                .filter(|(country, continent)| country.is_some() || continent.is_some())
-        });
-        let (Some(place), Ok(network)) = (place, item.network()) else {
-            continue;
-        };
-        let net = Net::prefix(network.ip(), network.prefix());
-        if net.family() == Family::V6 && is_ipv4_alias(&network.ip()) {
-            continue;
-        }
-        grouped.entry(place.clone()).or_default().push(net);
-    }
-    let regions: Vec<Region> = grouped
-        .into_iter()
-        .map(|((country, continent), nets)| Region {
-            country,
-            continent,
-            nets: aggregate(&nets),
-        })
-        .collect();
-    let all: Vec<Net> = regions
-        .iter()
-        .flat_map(|r| r.nets.iter().copied())
-        .collect();
-    Regions {
-        known: Extent::of(&aggregate(&all)),
-        regions,
     }
 }
 
@@ -509,6 +556,49 @@ mod tests {
         assert_eq!(geo_without().coverage(&["CN".to_owned()], &[]), None);
     }
 
+    /// Counted as networks come, in address order, a tally is the extent of the merged prefixes.
+    #[test]
+    fn tally_is_the_extent_of_merged_prefixes() {
+        let sets: [&[&str]; 4] = [
+            // Two halves of a /24 and the next /24: one /23 (not a prefix boundary: 192.0.2.0 is odd) and so on.
+            &[
+                "192.0.2.0/25",
+                "192.0.2.128/25",
+                "192.0.3.0/24",
+                "198.51.100.7",
+                "198.51.100.8",
+            ],
+            &["10.0.0.0/8", "10.1.0.0/16", "11.0.0.0/8"],
+            &[
+                "0.0.0.0/1",
+                "128.0.0.0/1",
+                "2001:db8::/33",
+                "2001:db8:8000::/33",
+                "2001:db9::/48",
+            ],
+            &[
+                "203.0.113.1",
+                "203.0.113.2",
+                "203.0.113.3",
+                "203.0.113.4",
+                "2001:db8::1",
+                "2001:db8::2",
+            ],
+        ];
+        for set in sets {
+            let nets: Vec<Net> = set.iter().map(|s| s.parse().unwrap()).collect();
+            let mut tally = Tally::default();
+            for net in &nets {
+                tally.add(net);
+            }
+            assert_eq!(tally.finish(), Extent::of(&aggregate(&nets)), "{set:?}");
+        }
+        assert_eq!(prefixes_between(Family::V6, 0, u128::MAX), 1);
+        assert_eq!(prefixes_between(Family::V4, 0, u128::from(u32::MAX)), 1);
+        // 1-6: 1, 2-3, 4-5, 6.
+        assert_eq!(prefixes_between(Family::V4, 1, 6), 4);
+    }
+
     fn geo_without() -> Geo {
         Geo::open(Some(Path::new("/nonexistent/a.mmdb")), None).unwrap()
     }
@@ -531,7 +621,7 @@ mod tests {
         let read = start.elapsed();
         let start = std::time::Instant::now();
         let again = geo.coverage(&countries, &continents).unwrap();
-        let cached = start.elapsed();
+        let read_again = start.elapsed();
         assert_eq!(first, again);
         assert_eq!(
             first.total.prefixes,
@@ -550,8 +640,8 @@ mod tests {
             + first.continents[0].1.v4_addresses;
         assert_eq!(first.total.v4_addresses, sum);
         assert!(
-            cached < Duration::from_secs(1),
-            "read {read:?}, then {cached:?}"
+            read < Duration::from_secs(1) && read_again < Duration::from_secs(1),
+            "read {read:?}, then {read_again:?}"
         );
     }
 

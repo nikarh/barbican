@@ -106,8 +106,8 @@ pub enum Call {
     /// Result: [`Policy`], as saved.
     #[serde(rename = "policy.update")]
     PolicyUpdate(Policy),
-    /// Result: [`BlockCoverage`]: how much blocking these countries and continents takes. Nothing is saved; the
-    /// first call after the agent started (or loaded a new country database) takes a moment longer.
+    /// Result: [`BlockCoverage`]: how much blocking these countries and continents takes. Nothing is saved; each
+    /// call reads the country database once (about a tenth of a second) and keeps nothing of it.
     #[serde(rename = "countries.coverage")]
     CountriesCoverage(CoverageParams),
     /// Result: [`GeoStatus`]: the geolocation databases in use, and their downloads.
