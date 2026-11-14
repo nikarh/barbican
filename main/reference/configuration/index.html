@@ -200,7 +200,7 @@
 <tr>
 <td><code dir="auto">ipv6</code></td>
 <td><code dir="auto">true</code></td>
-<td><code dir="auto">false</code>: nothing of IPv6 goes into nftables. Its country and blocklist ranges take about as much kernel memory as IPv4’s (roughly 140 bytes each on x86-64, about 8 MB for Africa, Asia and South America), for nothing on a host without IPv6</td>
+<td><code dir="auto">false</code>: nothing of IPv6 goes into nftables. Its country and blocklist ranges take about as much kernel memory as IPv4’s (roughly 140 bytes each on x86-64, about 8 MB for Africa, Asia and South America), for nothing on a host without IPv6. The agent then computes IPv6 country and blocklist prefixes only once an edge that loads IPv6 connects</td>
 </tr>
 <tr>
 <td><code dir="auto">check_interval</code></td>
