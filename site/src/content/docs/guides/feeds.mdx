@@ -29,16 +29,28 @@ A feed is a list fetched from a URL and refreshed on a schedule (**Settings → 
 
 A feed can also list:
 
-- **networks**, by AS number (`AS13335`, `13335`, or the first column of a CSV): it stands for every prefix the ASN database gives them, and blocks, allows or is data like a list of addresses. Without an ASN database it stands for nothing. When the database is updated, the prefixes are looked up again.
+- **networks**, by AS number (`AS13335`, `13335`, or the first column of a CSV, with the rest of the line as the network's name): it stands for every prefix the ASN database gives them, and blocks, allows or is data like a list of addresses, or [network by network](#choosing-networks). Without an ASN database it stands for nothing. When the database is updated, the prefixes are looked up again.
 - **user agents**, as a robots.txt's `User-agent:` lines or one per line: for rules only. A rule's **User agent in list** condition matches a request whose user agent names one of them, as a whole word, in any case. Names shorter than three characters, `*` and robots.txt's own tokens (`__usage...`) are left out.
 
 <Screenshot name="settings-feeds" alt="Settings, Feeds: the lists in use, grouped by where they come from, one line each with its state, whether it blocks, allows or is data, how many entries it has and how old its copy is, with filters by use above them." />
 
-The tab has two views: **In use** and **Catalog**. In use, the lists are grouped by where they come from, one line each: a dot for its state (green: fine, yellow: not fetched yet, red: the last fetch failed, grey: off), its use, how many entries it has and how old its copy is; a failing list shows its error under it. A group's header sums it up (`3 allow · 1 data · 1 failing`) and folds it away; a group of more than four lists starts folded unless one fails. The chips above filter by use, or to the failing lists. A list opens with a tap: what it holds (prefixes, networks and the prefixes they stand for, or user agents, and how many addresses), when it was fetched and is fetched next, its last error, what uses it (the rules that ask for it, a ban length the policy gives it), and **Fetch now**, **Edit** and **Remove**.
+The tab has two views: **In use** and **Catalog**. In use, the lists are grouped by where they come from, one line each: a dot for its state (green: fine, yellow: not fetched yet, red: the last fetch failed, grey: off), its use, how many entries it has and how old its copy is; a failing list shows its error under it. A group's header sums it up (`3 allow · 1 data · 1 failing`) and folds it away; a group of more than four lists starts folded unless one fails. The chips above filter by use, or to the failing or [redundant](#overlap) lists. A list opens with a tap: what it holds (prefixes, networks and the prefixes they stand for, or user agents, and how many addresses), when it was fetched and is fetched next, its last error, what uses it (the rules that ask for it, a ban length the policy gives it), its [overlap](#overlap) with the other lists, and **Fetch now**, **Edit** and **Remove**.
+
+### Overlap
+
+Lists overlap: FireHOL's level 1 includes Spamhaus DROP, level 2 includes blocklist.de, and every blocklist shares addresses with the others. A list whose addresses are 95% or more in another list used the same way (both blocking, both allowing or both data) says so under its line, **Almost all of it is in "…" too**, and the **Redundant** filter shows those: with the other list on, it adds little. Lists used differently are not compared that way: Googlebot's addresses being among the hosting networks doesn't make an allowing list redundant.
+
+An opened list shows its **Overlap**: how much of it no other list (that is on) holds, and for each list that shares addresses with it, how many, and which share of each list that is. IPv4 lists are compared by addresses, IPv6 ones by /48 networks.
+
+### Choosing networks
+
+A list of networks can do something else with some of its networks than with the rest (**Choose networks**, on an opened list of networks). Each network, largest first and searchable by number or name, does what the list does, or is blocked, allowed, data, or left out. For example, the hosting networks as data, with a few networks you never want to hear from blocked; or blocked, with the cloud you run your own monitoring from allowed. A network left out is not listed either: rules and ban lengths don't see it. Allowing the rest of a list of hosting networks lets most scanners through, never banned: the dialog warns about it.
 
 ### The catalog
 
 The **Catalog** offers public lists, grouped by where they come from. **Set up** (or **Change**) on a source shows its lists, each with a suggested use, and sets them all at once: a list set to **Off** is removed. **Use the suggestions** goes back to the suggested uses and refresh. Some sources are the same list over different periods (the addresses of the last day, week or month): one of them is used at a time, and the feed keeps its name when the period changes.
+
+<Screenshot name="feeds-source" alt="A source of the catalog, Search engines and SEO crawlers: what it is, its lists (Googlebot, Bingbot, Applebot and others), each with its suggested use and a choice of off, block, allow or data, and how often they are fetched." />
 
 | Source | Lists | Suggested | Fetched |
 | --- | --- | --- | --- |
