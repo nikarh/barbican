@@ -132,6 +132,12 @@ pub enum Call {
     /// Result: `null`, once the feed was fetched (or failed to be).
     #[serde(rename = "feed.refresh")]
     FeedRefresh(IdParams),
+    /// Result: `FeedNetwork[]`: the networks of a list of networks, largest first.
+    #[serde(rename = "feed.networks")]
+    FeedNetworks(IdParams),
+    /// Result: [`FeedOverlap`]: how much of a list the other lists hold too.
+    #[serde(rename = "feed.overlap")]
+    FeedOverlap(IdParams),
     /// Result: `Live[]`, the latest items (oldest first, at most 40, kept since the agent started), then [`Live`]
     /// events. A client that subscribes again (after a reconnect) gets them again: they replace what it showed.
     #[serde(rename = "live.subscribe")]
@@ -717,6 +723,58 @@ pub struct Feed {
     pub error: Option<String>,
     /// Failed attempts in a row; failed fetches are tried again sooner than the refresh.
     pub failures: u32,
+    /// Another list, used the same way, that holds 95% or more of its addresses: with it, this one adds little.
+    pub covered_by: Option<String>,
+}
+
+/// A network of a list of networks.
+#[derive(Debug, Serialize, Clone)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct FeedNetwork {
+    pub asn: u32,
+    /// As the list names it, or else the ASN database.
+    pub name: Option<String>,
+    /// Its prefixes in the ASN database.
+    pub extent: Extent,
+}
+
+/// How much of a list's addresses other lists hold too.
+#[derive(Debug, Serialize, Clone)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct FeedOverlap {
+    /// The list's addresses: IPv4 ones, and IPv6 space in /48 networks.
+    #[cfg_attr(test, ts(type = "number"))]
+    pub v4: u64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub v6: u64,
+    /// Of those, the ones no other list (that is on) holds.
+    #[cfg_attr(test, ts(type = "number"))]
+    pub unique_v4: u64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub unique_v6: u64,
+    /// The other lists that hold some of them, most first.
+    pub others: Vec<OverlapWith>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct OverlapWith {
+    #[cfg_attr(test, ts(type = "number"))]
+    pub id: i64,
+    pub name: String,
+    /// The addresses both hold.
+    #[cfg_attr(test, ts(type = "number"))]
+    pub v4: u64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub v6: u64,
+    /// The other list's own size, to say how much of it this list holds.
+    #[cfg_attr(test, ts(type = "number"))]
+    pub other_v4: u64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub other_v6: u64,
 }
 
 #[derive(Debug, Deserialize, Clone)]

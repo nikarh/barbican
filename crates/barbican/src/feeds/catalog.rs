@@ -11,20 +11,10 @@ use serde::Serialize;
 use ts_rs::TS;
 
 use super::Content;
+pub use super::Use;
 
 const HOUR: u64 = 3_600;
 const DAY: u64 = 24 * HOUR;
-
-/// What a list of the catalog does once added.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
-#[serde(rename_all = "snake_case")]
-pub enum Use {
-    Off,
-    Block,
-    Allow,
-    Data,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]

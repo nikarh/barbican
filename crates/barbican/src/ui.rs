@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
 
-use barbican_common::net::Net;
+use barbican_common::net::{Net, NetSet};
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::{QueryBuilder, Row, Sqlite};
@@ -12,8 +12,9 @@ use sqlx::{QueryBuilder, Row, Sqlite};
 use crate::api::{
     Activity, ActivitySort, BanCreateParams, BansParams, BlockCoverage, Call, Count,
     CoverageParams, DayStat, Entry, EntrySaveParams, ErrorCode, EventRow, EventsParams, Feed,
-    FeedsApplyParams, GeoDatabase, GeoStatus, IpActivityParams, IpDetail, IpFilter, IpRow, IpSort,
-    IpsParams, Live, Meta, Overview, Page, PlaceExtent, RpcError, TrustInfo,
+    FeedNetwork as FeedNetworkRow, FeedOverlap, FeedsApplyParams, GeoDatabase, GeoStatus,
+    IpActivityParams, IpDetail, IpFilter, IpRow, IpSort, IpsParams, Live, Meta, OverlapWith,
+    Overview, Page, PlaceExtent, RpcError, TrustInfo,
 };
 use crate::app::{App, now};
 use crate::db::{self, BanRow, EntryRow};
@@ -100,6 +101,8 @@ pub async fn call(app: &Arc<App>, call: Call) -> Result<Value, RpcError> {
         Call::FeedsCatalog => json(crate::feeds::catalog::catalog()),
         Call::FeedsApply(p) => json(feeds_apply(app, p).await?),
         Call::FeedSave(def) => json(feed_save(app, def).await?),
+        Call::FeedNetworks(p) => json(feed_networks(app, p.id)?),
+        Call::FeedOverlap(p) => json(feed_overlap(app, p.id)?),
         Call::FeedDelete(p) => feed_delete(app, p.id).await.map(|()| Value::Null),
         Call::FeedRefresh(p) => {
             crate::run::fetch_feed(app, p.id).await;
@@ -1119,14 +1122,67 @@ fn feed(f: &StateFeed) -> Feed {
         extent: crate::geo::Extent::of(&f.loaded.nets).into(),
         error: f.error.clone(),
         failures: f.failures,
+        covered_by: None,
     }
 }
 
+/// For each feed, another feed of the same use that holds 95% or more of its addresses (by IPv4 addresses, or IPv6
+/// space for a list without IPv4).
+fn covered_by(feeds: &[(i64, crate::feeds::Use, Arc<NetSet>, String)]) -> Vec<Option<String>> {
+    let sizes: Vec<(u64, u128)> = feeds.iter().map(|(_, _, set, _)| set.size()).collect();
+    feeds
+        .iter()
+        .zip(&sizes)
+        .map(|((id, use_, set, _), &(v4, v6))| {
+            if *use_ == crate::feeds::Use::Off || (v4 == 0 && v6 == 0) {
+                return None;
+            }
+            feeds
+                .iter()
+                .filter(|(other, u, _, _)| other != id && u == use_)
+                .filter_map(|(_, _, other, name)| {
+                    let (s4, s6) = set.shared(other);
+                    let covered = if v4 > 0 {
+                        s4 >= v4 - v4 / 20
+                    } else {
+                        s6 >= v6 - v6 / 20
+                    };
+                    covered.then_some((s4, s6, name))
+                })
+                .max_by_key(|(s4, s6, _)| (*s4, *s6))
+                .map(|(_, _, name)| name.clone())
+        })
+        .collect()
+}
+
 fn feeds(app: &App) -> Vec<Feed> {
-    app.state
-        .read()
-        .map(|s| s.feeds.iter().map(feed).collect())
-        .unwrap_or_default()
+    let Ok((mut shown, sets)) = app.state.read().map(|s| {
+        let shown: Vec<Feed> = s.feeds.iter().map(feed).collect();
+        let sets: Vec<_> = s
+            .feeds
+            .iter()
+            .map(|f| {
+                let use_ = if f.def.content == Content::Agents {
+                    crate::feeds::Use::Off
+                } else {
+                    f.def.use_()
+                };
+                (
+                    f.def.id,
+                    use_,
+                    Arc::clone(&f.effect.listed),
+                    f.def.name.clone(),
+                )
+            })
+            .collect();
+        (shown, sets)
+    }) else {
+        return Vec::new();
+    };
+    for (f, covered) in shown.iter_mut().zip(covered_by(&sets)) {
+        f.covered_by = covered;
+    }
+    shown
 }
 
 async fn feed_save(app: &Arc<App>, def: FeedDef) -> Result<Feed, RpcError> {
@@ -1181,6 +1237,11 @@ async fn save_feed(app: &Arc<App>, mut def: FeedDef) -> Result<Feed, RpcError> {
             "a list of user agents is for rules only: it can't block or allow addresses",
         ));
     }
+    if def.content != Content::Networks {
+        def.networks.clear();
+    }
+    def.networks.sort_by_key(|n| n.asn);
+    def.networks.dedup_by_key(|n| n.asn);
     def.select = def
         .select
         .map(|s| s.trim().to_owned())
@@ -1239,6 +1300,7 @@ async fn save_feed(app: &Arc<App>, mut def: FeedDef) -> Result<Feed, RpcError> {
         } else {
             *existing = StateFeed::new(def);
         }
+        existing.refresh();
         Ok(feed(existing))
     } else {
         let new = StateFeed::new(def);
@@ -1246,6 +1308,94 @@ async fn save_feed(app: &Arc<App>, mut def: FeedDef) -> Result<Feed, RpcError> {
         state.feeds.push(new);
         Ok(shown)
     }
+}
+
+/// The networks of a list of networks, with their size, largest first.
+fn feed_networks(app: &App, id: i64) -> Result<Vec<FeedNetworkRow>, RpcError> {
+    let loaded = app
+        .state
+        .read()
+        .map_err(internal)?
+        .feeds
+        .iter()
+        .find(|f| f.def.id == id)
+        .map(|f| Arc::clone(&f.loaded))
+        .ok_or_else(|| error(ErrorCode::NotFound, "no such feed"))?;
+    let geo = app.geo();
+    let mut rows: Vec<FeedNetworkRow> = loaded
+        .networks
+        .iter()
+        .map(|n| FeedNetworkRow {
+            asn: n.asn,
+            name: n.name.clone().or_else(|| {
+                n.nets
+                    .first()
+                    .and_then(|net| geo.lookup(net.addr()).as_name)
+            }),
+            extent: crate::geo::Extent::of(&n.nets).into(),
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        (b.extent.v4_addresses, b.extent.v6_networks)
+            .cmp(&(a.extent.v4_addresses, a.extent.v6_networks))
+    });
+    Ok(rows)
+}
+
+/// How much of a list the other lists (of addresses or networks, that are on) hold too.
+fn feed_overlap(app: &App, id: i64) -> Result<FeedOverlap, RpcError> {
+    // IPv6 space counted in /48 networks, as extents are.
+    let v6 = |n: u128| u64::try_from(n >> 80).unwrap_or(u64::MAX);
+    let (this, others) = {
+        let state = app.state.read().map_err(internal)?;
+        let this = state
+            .feeds
+            .iter()
+            .find(|f| f.def.id == id)
+            .ok_or_else(|| error(ErrorCode::NotFound, "no such feed"))?;
+        // A list that is off is compared as it would be when on.
+        let this = if this.def.enabled {
+            Arc::clone(&this.effect.listed)
+        } else {
+            Arc::clone(&this.loaded.set)
+        };
+        let others: Vec<(i64, String, Arc<NetSet>)> = state
+            .feeds
+            .iter()
+            .filter(|f| f.def.id != id && f.def.enabled && f.def.content != Content::Agents)
+            .map(|f| (f.def.id, f.def.name.clone(), Arc::clone(&f.effect.listed)))
+            .collect();
+        (this, others)
+    };
+    let (v4, v6_all) = this.size();
+    let mut union = Vec::new();
+    let mut with = Vec::new();
+    for (other_id, name, set) in &others {
+        let (s4, s6) = this.shared(set);
+        if s4 == 0 && s6 == 0 {
+            continue;
+        }
+        let (o4, o6) = set.size();
+        with.push(OverlapWith {
+            id: *other_id,
+            name: name.clone(),
+            v4: s4,
+            v6: v6(s6),
+            other_v4: o4,
+            other_v6: v6(o6),
+        });
+        union.push(Arc::clone(set));
+    }
+    // What none of the others holds: the list less their union.
+    let (covered4, covered6) = this.shared(&NetSet::union(&union));
+    with.sort_by_key(|w| std::cmp::Reverse((w.v4, w.v6)));
+    Ok(FeedOverlap {
+        v4,
+        v6: v6(v6_all),
+        unique_v4: v4 - covered4.min(v4),
+        unique_v6: v6(v6_all.saturating_sub(covered6)),
+        others: with,
+    })
 }
 
 async fn feed_delete(app: &Arc<App>, id: i64) -> Result<(), RpcError> {

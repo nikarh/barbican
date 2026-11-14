@@ -31,6 +31,35 @@ pub enum Content {
     Agents,
 }
 
+/// What a feed (or one network of a list of networks) does with what it lists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "snake_case")]
+pub enum Use {
+    /// Left out.
+    Off,
+    Block,
+    Allow,
+    /// Only listed: for rules, ban lengths and the UI.
+    Data,
+}
+
+/// A network of a list of networks that does something else than the list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+pub struct NetworkUse {
+    pub asn: u32,
+    #[serde(rename = "use")]
+    pub use_: Use,
+}
+
+/// A network of a list of networks: its number and, if the list says, its name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Network {
+    pub asn: u32,
+    pub name: Option<String>,
+}
+
 /// The catalog entry a feed was added from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
@@ -74,13 +103,33 @@ pub struct FeedDef {
     /// The catalog entry it was added from, if it was.
     #[serde(default)]
     pub catalog: Option<CatalogRef>,
+    /// A list of networks: networks that do something else than the list as a whole (blocked out of a list that
+    /// is data, left out, ...). A network the list doesn't have does nothing.
+    #[serde(default)]
+    pub networks: Vec<NetworkUse>,
+}
+
+impl FeedDef {
+    /// What the list as a whole does.
+    #[must_use]
+    pub fn use_(&self) -> Use {
+        if !self.enabled {
+            Use::Off
+        } else if self.block {
+            Use::Block
+        } else if self.allow {
+            Use::Allow
+        } else {
+            Use::Data
+        }
+    }
 }
 
 /// What a list's body holds, as read with its feed's definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Parsed {
     Nets(Vec<Net>),
-    Asns(Vec<u32>),
+    Asns(Vec<Network>),
     Agents(Vec<String>),
 }
 
@@ -105,10 +154,14 @@ impl Parsed {
                     out.push('\n');
                 }
             }
-            Self::Asns(asns) => {
-                for asn in asns {
+            Self::Asns(networks) => {
+                for n in networks {
                     out.push_str("AS");
-                    out.push_str(&asn.to_string());
+                    out.push_str(&n.asn.to_string());
+                    if let Some(name) = &n.name {
+                        out.push(' ');
+                        out.push_str(name);
+                    }
                     out.push('\n');
                 }
             }
@@ -174,30 +227,41 @@ fn collect_nets(value: &serde_json::Value, nets: &mut Vec<Net>) {
     }
 }
 
-/// Networks by number, one per line (`AS13335`, `13335`, or the first column of a CSV), sorted, without repeats.
+/// Networks by number, one per line (`AS13335`, `13335`, or the first column of a CSV), with the rest of the line as
+/// their name (`13335,"Cloudflare, Inc."`, `AS13335 Cloudflare`); sorted, without repeats.
 #[must_use]
-pub fn parse_asns(body: &str) -> Vec<u32> {
-    let mut asns: Vec<u32> = body
+pub fn parse_asns(body: &str) -> Vec<Network> {
+    let mut networks: Vec<Network> = body
         .lines()
         .filter_map(|line| {
-            let line = line.trim();
-            if line.starts_with('#') || line.starts_with(';') {
+            let line = line.split('#').next().unwrap_or("").trim();
+            if line.starts_with(';') {
                 return None;
             }
-            let first = line
-                .split(|c: char| c.is_whitespace() || c == ',' || c == ';' || c == '#')
-                .next()?
-                .trim_matches('"');
+            let end = line
+                .find(|c: char| c.is_whitespace() || c == ',' || c == ';')
+                .unwrap_or(line.len());
+            let (first, rest) = line.split_at(end);
+            let first = first.trim_matches('"');
             let digits = first
                 .strip_prefix("AS")
                 .or_else(|| first.strip_prefix("as"))
                 .unwrap_or(first);
-            digits.parse::<u32>().ok().filter(|asn| *asn != 0)
+            let asn = digits.parse::<u32>().ok().filter(|asn| *asn != 0)?;
+            let name = rest
+                .trim_start_matches([',', ';'])
+                .trim()
+                .trim_matches('"')
+                .trim();
+            Some(Network {
+                asn,
+                name: (!name.is_empty()).then(|| name.to_owned()),
+            })
         })
         .collect();
-    asns.sort_unstable();
-    asns.dedup();
-    asns
+    networks.sort_by_key(|n| n.asn);
+    networks.dedup_by_key(|n| n.asn);
+    networks
 }
 
 /// User agents: the `User-agent:` lines of a robots.txt, or one per line. Wildcards, robots.txt's own tokens
@@ -304,15 +368,25 @@ impl Agents {
     }
 }
 
+/// A network of a list, with its prefixes in the ASN database.
+#[derive(Debug, Clone)]
+pub struct LoadedNetwork {
+    pub asn: u32,
+    pub name: Option<String>,
+    pub nets: Vec<Net>,
+}
+
 /// A feed's contents, ready for lookups.
 #[derive(Debug, Clone, Default)]
 pub struct Loaded {
     /// The addresses it stands for: those it lists, or its networks' prefixes.
-    pub nets: Vec<Net>,
+    pub nets: Arc<Vec<Net>>,
     pub set: Arc<NetSet>,
     /// Entries in the list: prefixes, networks or user agents.
     pub entries: usize,
     pub agents: Option<Arc<Agents>>,
+    /// A list of networks: each network and its prefixes.
+    pub networks: Arc<Vec<LoadedNetwork>>,
 }
 
 impl Loaded {
@@ -330,17 +404,33 @@ impl Loaded {
     #[must_use]
     pub fn from_parsed(parsed: Parsed, geo: &Geo) -> Self {
         let entries = parsed.len();
+        let mut networks = Vec::new();
         let (nets, agents) = match parsed {
             Parsed::Nets(nets) => (nets, None),
-            Parsed::Asns(asns) => (geo.networks_of_asns(&asns), None),
+            Parsed::Asns(list) => {
+                let asns: Vec<u32> = list.iter().map(|n| n.asn).collect();
+                let mut by_asn = geo.networks_by_asn(&asns);
+                let mut all = Vec::new();
+                for n in list {
+                    let nets = by_asn.remove(&n.asn).unwrap_or_default();
+                    all.extend(nets.iter().copied());
+                    networks.push(LoadedNetwork {
+                        asn: n.asn,
+                        name: n.name,
+                        nets,
+                    });
+                }
+                (aggregate(&all), None)
+            }
             Parsed::Agents(names) => (Vec::new(), Agents::new(&names).map(Arc::new)),
         };
         let set = Arc::new(NetSet::new(&nets));
         Self {
-            nets,
+            nets: Arc::new(nets),
             set,
             entries,
             agents,
+            networks: Arc::new(networks),
         }
     }
 
@@ -349,6 +439,67 @@ impl Loaded {
     #[must_use]
     pub fn from_data(data: &str) -> Self {
         Self::from_stored(Content::Addresses, data, &Geo::default())
+    }
+}
+
+/// What a feed does, from its definition and contents: the prefixes it blocks and allows, and the addresses it
+/// lists (for rules, ban lengths and the UI). A list of networks can do something else with some of its networks.
+#[derive(Debug, Clone, Default)]
+pub struct Effect {
+    pub block: Arc<Vec<Net>>,
+    pub allow: Arc<Vec<Net>>,
+    pub allowed: Arc<NetSet>,
+    pub listed: Arc<NetSet>,
+}
+
+impl Effect {
+    #[must_use]
+    pub fn of(def: &FeedDef, loaded: &Loaded) -> Self {
+        let whole = def.use_();
+        if whole == Use::Off {
+            return Self::default();
+        }
+        if def.content != Content::Networks || def.networks.is_empty() {
+            let pick = |u: Use| {
+                if whole == u {
+                    Arc::clone(&loaded.nets)
+                } else {
+                    Arc::default()
+                }
+            };
+            return Self {
+                block: pick(Use::Block),
+                allowed: if whole == Use::Allow {
+                    Arc::clone(&loaded.set)
+                } else {
+                    Arc::default()
+                },
+                allow: pick(Use::Allow),
+                listed: Arc::clone(&loaded.set),
+            };
+        }
+        let (mut block, mut allow, mut listed) = (Vec::new(), Vec::new(), Vec::new());
+        for n in loaded.networks.iter() {
+            let u = def
+                .networks
+                .iter()
+                .find(|x| x.asn == n.asn)
+                .map_or(whole, |x| x.use_);
+            match u {
+                Use::Off => continue,
+                Use::Block => block.extend(n.nets.iter().copied()),
+                Use::Allow => allow.extend(n.nets.iter().copied()),
+                Use::Data => {}
+            }
+            listed.extend(n.nets.iter().copied());
+        }
+        let allow = aggregate(&allow);
+        Self {
+            block: Arc::new(aggregate(&block)),
+            allowed: Arc::new(NetSet::new(&allow)),
+            allow: Arc::new(allow),
+            listed: Arc::new(NetSet::new(&listed)),
+        }
     }
 }
 
@@ -453,6 +604,7 @@ garbage line
             content,
             select: select.map(str::to_owned),
             catalog: None,
+            networks: Vec::new(),
         }
     }
 
@@ -488,11 +640,64 @@ garbage line
     fn networks() {
         let body = "ASN,Entity\n1442,\"Hosting, Inc.\"\nAS64500 # documentation\n\nas64501\n1442,again\nnope\n";
         let parsed = Parsed::of(body, &def(Content::Networks, None)).unwrap();
-        assert_eq!(parsed, Parsed::Asns(vec![1442, 64500, 64501]));
-        assert_eq!(parse_asns(&parsed.render()), vec![1442, 64500, 64501]);
+        let network = |asn, name: Option<&str>| Network {
+            asn,
+            name: name.map(str::to_owned),
+        };
+        let expected = vec![
+            network(1442, Some("Hosting, Inc.")),
+            network(64500, None),
+            network(64501, None),
+        ];
+        assert_eq!(parsed, Parsed::Asns(expected.clone()));
+        assert_eq!(parse_asns(&parsed.render()), expected);
         // Without an ASN database, networks stand for no addresses.
         let loaded = Loaded::from_stored(Content::Networks, &parsed.render(), &Geo::default());
         assert_eq!((loaded.entries, loaded.nets.len()), (3, 0));
+    }
+
+    #[test]
+    fn networks_can_do_otherwise_than_their_list() {
+        let n = |s: &str| s.parse::<Net>().unwrap();
+        let network = |asn, net: &str| LoadedNetwork {
+            asn,
+            name: None,
+            nets: vec![n(net)],
+        };
+        let loaded = Loaded {
+            networks: Arc::new(vec![
+                network(64500, "192.0.2.0/24"),
+                network(64501, "198.51.100.0/24"),
+                network(64502, "203.0.113.0/24"),
+            ]),
+            ..Loaded::default()
+        };
+        let mut def = def(Content::Networks, None);
+        def.allow = true;
+        def.networks = vec![
+            NetworkUse {
+                asn: 64500,
+                use_: Use::Block,
+            },
+            NetworkUse {
+                asn: 64502,
+                use_: Use::Off,
+            },
+            NetworkUse {
+                asn: 1,
+                use_: Use::Block,
+            },
+        ];
+        let effect = Effect::of(&def, &loaded);
+        // One network blocked, the rest of the list allowed, one left out altogether.
+        assert_eq!(*effect.block, vec![n("192.0.2.0/24")]);
+        assert_eq!(*effect.allow, vec![n("198.51.100.0/24")]);
+        assert!(effect.allowed.contains("198.51.100.1".parse().unwrap()));
+        assert!(effect.listed.contains("192.0.2.1".parse().unwrap()));
+        assert!(!effect.listed.contains("203.0.113.1".parse().unwrap()));
+        // A list that is off does nothing, whatever its networks say.
+        def.enabled = false;
+        assert!(Effect::of(&def, &loaded).block.is_empty());
     }
 
     #[test]

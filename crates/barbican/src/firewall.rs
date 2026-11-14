@@ -43,14 +43,14 @@ pub fn rebuild_rules(app: &App) {
                 .filter(|e| e.allow && e.until.is_none_or(|u| u > now))
                 .map(|e| e.net),
         );
-        for feed in state.allowing_feeds() {
-            allowed.extend(feed.loaded.nets.iter().copied());
+        for feed in &state.feeds {
+            allowed.extend(feed.effect.allow.iter().copied());
         }
         let feeds: Vec<(&str, Arc<NetSet>)> = state
             .feeds
             .iter()
             .filter(|f| f.def.enabled && f.def.content != Content::Agents)
-            .map(|f| (f.def.name.as_str(), Arc::clone(&f.loaded.set)))
+            .map(|f| (f.def.name.as_str(), Arc::clone(&f.effect.listed)))
             .collect();
         let agents: Vec<AgentList<'_>> = state
             .feeds

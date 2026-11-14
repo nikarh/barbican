@@ -33,6 +33,7 @@ import {
   addresses,
   catalogOf,
   entries,
+  networksSummary,
   USE_EFFECTS,
   USE_LABELS,
   feedUse,
@@ -41,6 +42,7 @@ import {
 import { ago, count, fromNow, lengthInWords } from '../lib/format'
 import { useNow } from '../lib/useNow'
 import classes from './Feeds.module.css'
+import { NetworksDialog, Overlap } from './FeedDetails'
 
 const USE_COLORS: Record<Use, string> = {
   off: 'gray',
@@ -98,6 +100,7 @@ const NEW_FEED: FeedDef = {
   content: 'addresses',
   select: null,
   catalog: null,
+  networks: [],
 }
 
 function FeedEditor({ feed, onClose }: { feed: FeedDef; onClose: () => void }) {
@@ -323,11 +326,13 @@ function FeedRow({
   now,
   usedBy,
   onEdit,
+  onNetworks,
 }: {
   feed: Feed
   now: number
   usedBy: string[]
   onEdit: () => void
+  onNetworks: () => void
 }) {
   const [open, setOpen] = useState(false)
   const remove = useAction('feed.delete', 'Removed')
@@ -339,7 +344,7 @@ function FeedRow({
       ? 'off'
       : f.changed === null
         ? 'not fetched yet'
-        : `${entries(f)} · ${ago(f.changed, now)}`
+        : `${entries(f)}${f.def.networks.length > 0 ? ` (${networksSummary(f.def.networks)})` : ''} · ${ago(f.changed, now)}`
   return (
     <div className={classes.row}>
       <button
@@ -361,6 +366,11 @@ function FeedRow({
           {f.error}
         </Text>
       )}
+      {f.coveredBy !== null && !open && (
+        <Text fz={12} c="var(--status-warn)" truncate className={classes.rowError}>
+          Almost all of it is in “{f.coveredBy}” too
+        </Text>
+      )}
       {open && (
         <div className={classes.rowBody}>
           <FeedState feed={f} now={now} />
@@ -375,6 +385,17 @@ function FeedRow({
                     : null}
             </Text>
           )}
+          {f.def.content === 'networks' && (
+            <Text fz={12} c="var(--ink-dim)" mt={4}>
+              {f.def.networks.length === 0
+                ? 'Every network does what the list does.'
+                : `${networksSummary(f.def.networks)}; the other networks do what the list does.`}{' '}
+              <Anchor component="button" fz={12} onClick={onNetworks}>
+                Choose networks
+              </Anchor>
+            </Text>
+          )}
+          <Overlap feed={f} />
           <Group gap={6} mt={8}>
             <Button
               size="xs"
@@ -769,7 +790,7 @@ function SourceCard({
   )
 }
 
-type Filter = 'all' | 'block' | 'allow' | 'data' | 'failing'
+type Filter = 'all' | 'block' | 'allow' | 'data' | 'failing' | 'redundant'
 
 const FILTER_LABELS: Record<Filter, string> = {
   all: 'All',
@@ -777,6 +798,7 @@ const FILTER_LABELS: Record<Filter, string> = {
   allow: 'Allowing',
   data: 'Data',
   failing: 'Failing',
+  redundant: 'Redundant',
 }
 
 export function FeedsTab() {
@@ -787,6 +809,7 @@ export function FeedsTab() {
   const phone = !useMediaQuery('(min-width: 48em)', true, { getInitialValueInEffect: false })
   const [editing, setEditing] = useState<FeedDef | null>(null)
   const [opened, setOpened] = useState<Source | null>(null)
+  const [networksOf, setNetworksOf] = useState<number | null>(null)
   const [chosenView, setView] = useState<'used' | 'catalog' | null>(null)
   const [filter, setFilter] = useState<Filter>('all')
   const [explained, setExplained] = useState(false)
@@ -801,6 +824,7 @@ export function FeedsTab() {
     allow: 0,
     data: 0,
     failing: 0,
+    redundant: 0,
   }
   let blocked = 0
   for (const f of list) {
@@ -808,9 +832,15 @@ export function FeedsTab() {
     if (u !== 'off') counts[u] += 1
     if (u === 'block') blocked += f.extent.prefixes
     if (health(f) === 'failing') counts.failing += 1
+    if (f.coveredBy !== null) counts.redundant += 1
   }
   const matches = (f: Feed) =>
-    filter === 'all' || (filter === 'failing' ? health(f) === 'failing' : feedUse(f.def) === filter)
+    filter === 'all' ||
+    (filter === 'failing'
+      ? health(f) === 'failing'
+      : filter === 'redundant'
+        ? f.coveredBy !== null
+        : feedUse(f.def) === filter)
 
   // The feeds in use, by source; the ones added by hand last.
   const bySource = new Map<string, Feed[]>()
@@ -830,6 +860,9 @@ export function FeedsTab() {
       usedBy={usedBy(f.def.name)}
       onEdit={() => {
         setEditing(f.def)
+      }}
+      onNetworks={() => {
+        setNetworksOf(f.def.id)
       }}
     />
   )
@@ -884,10 +917,15 @@ export function FeedsTab() {
                 }}
               >
                 <Group gap={6}>
-                  {(['all', 'block', 'allow', 'data', 'failing'] as const)
-                    .filter((k) => k !== 'failing' || counts.failing > 0)
+                  {(['all', 'block', 'allow', 'data', 'failing', 'redundant'] as const)
+                    .filter((k) => (k !== 'failing' && k !== 'redundant') || counts[k] > 0)
                     .map((k) => (
-                      <Chip key={k} value={k} size="xs" color={k === 'failing' ? 'red' : 'brass'}>
+                      <Chip
+                        key={k}
+                        value={k}
+                        size="xs"
+                        color={k === 'failing' ? 'red' : k === 'redundant' ? 'yellow' : 'brass'}
+                      >
                         {FILTER_LABELS[k]} {counts[k]}
                       </Chip>
                     ))}
@@ -1006,6 +1044,27 @@ export function FeedsTab() {
           )
         })}
 
+      <Modal
+        opened={networksOf !== null}
+        onClose={() => {
+          setNetworksOf(null)
+        }}
+        title={`Networks of “${list.find((f) => f.def.id === networksOf)?.def.name ?? ''}”`}
+        size="lg"
+        fullScreen={phone}
+      >
+        {(() => {
+          const f = list.find((x) => x.def.id === networksOf)
+          return f === undefined ? null : (
+            <NetworksDialog
+              feed={f}
+              onClose={() => {
+                setNetworksOf(null)
+              }}
+            />
+          )
+        })()}
+      </Modal>
       <Modal
         opened={editing !== null}
         onClose={() => {

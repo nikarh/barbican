@@ -83,6 +83,9 @@ pub async fn load_feeds(db: &Db, geo: Arc<Geo>) -> Result<Vec<Feed>, db::Error> 
             error: row.error,
             ..Feed::new(def)
         });
+        if let Some(feed) = feeds.last_mut() {
+            feed.refresh();
+        }
     }
     Ok(feeds)
 }
@@ -119,6 +122,7 @@ pub async fn reload_network_feeds(app: &Arc<App>) {
         for (id, loaded) in reloaded {
             if let Some(feed) = state.feeds.iter_mut().find(|f| f.def.id == id) {
                 feed.loaded = Arc::new(loaded);
+                feed.refresh();
             }
         }
     }
@@ -336,6 +340,7 @@ fn record_outcomes(app: &Arc<App>, now: i64, outcomes: Vec<(i64, Result<Option<L
                     if let Some(loaded) = loaded {
                         feed.loaded = Arc::new(loaded);
                         feed.changed = Some(now);
+                        feed.refresh();
                     }
                 }
                 Err(e) => {
@@ -659,6 +664,7 @@ mod tests {
             content: Content::Addresses,
             select: None,
             catalog: None,
+            networks: Vec::new(),
         });
         assert_eq!(feed_due(&feed), Some(0));
         feed.fetched = Some(1_000);

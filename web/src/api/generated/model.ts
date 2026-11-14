@@ -274,7 +274,11 @@ extent: Extent, error: string | null,
 /**
  * Failed attempts in a row; failed fetches are tried again sooner than the refresh.
  */
-failures: number, };
+failures: number, 
+/**
+ * Another list, used the same way, that holds 95% or more of its addresses: with it, this one adds little.
+ */
+coveredBy: string | null, };
 
 export type FeedDef = { 
 /**
@@ -306,7 +310,42 @@ select: string | null,
 /**
  * The catalog entry it was added from, if it was.
  */
-catalog: CatalogRef | null, };
+catalog: CatalogRef | null, 
+/**
+ * A list of networks: networks that do something else than the list as a whole (blocked out of a list that
+ * is data, left out, ...). A network the list doesn't have does nothing.
+ */
+networks: Array<NetworkUse>, };
+
+/**
+ * A network of a list of networks.
+ */
+export type FeedNetwork = { asn: number, 
+/**
+ * As the list names it, or else the ASN database.
+ */
+name: string | null, 
+/**
+ * Its prefixes in the ASN database.
+ */
+extent: Extent, };
+
+/**
+ * How much of a list's addresses other lists hold too.
+ */
+export type FeedOverlap = { 
+/**
+ * The list's addresses: IPv4 ones, and IPv6 space in /48 networks.
+ */
+v4: number, v6: number, 
+/**
+ * Of those, the ones no other list (that is on) holds.
+ */
+uniqueV4: number, uniqueV6: number, 
+/**
+ * The other lists that hold some of them, most first.
+ */
+others: Array<OverlapWith>, };
 
 export type FeedsApplyParams = { 
 /**
@@ -453,6 +492,21 @@ edgeApi: boolean,
  * SHA-256 of the edge API's TLS certificate, which edges are configured with.
  */
 edgeFingerprint: string | null, };
+
+/**
+ * A network of a list of networks that does something else than the list.
+ */
+export type NetworkUse = { asn: number, use: Use, };
+
+export type OverlapWith = { id: number, name: string, 
+/**
+ * The addresses both hold.
+ */
+v4: number, v6: number, 
+/**
+ * The other list's own size, to say how much of it this list holds.
+ */
+otherV4: number, otherV6: number, };
 
 export type Overview = { bansActive: number, bansToday: number, eventsToday: number, ips: number, trusted: number, firewall: FirewallStatus, sources: Array<SourceStatus>, 
 /**
@@ -608,6 +662,6 @@ input: string, connected: boolean, lines: number, parsed: number, lastLine: numb
 export type TrustInfo = { user: string, until: number, };
 
 /**
- * What a list of the catalog does once added.
+ * What a feed (or one network of a list of networks) does with what it lists.
  */
 export type Use = "off" | "block" | "allow" | "data";

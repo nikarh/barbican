@@ -12,6 +12,8 @@ import type {
   Entry,
   EventRow,
   Feed,
+  FeedNetwork,
+  FeedOverlap,
   GeoStatus,
   IpDetail,
   IpRow,
@@ -60,6 +62,8 @@ interface Results {
   'feed.save': Feed
   'feed.delete': null
   'feed.refresh': null
+  'feed.networks': FeedNetwork[]
+  'feed.overlap': FeedOverlap
   'live.subscribe': Live[]
   'edges.list': EdgeStatus[]
   'edges.subscribe': null

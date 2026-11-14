@@ -127,6 +127,24 @@ export function useFeeds(enabled = true) {
   return useQuery({ ...queries.feeds, enabled })
 }
 
+/** The networks of a list of networks; asked for when shown. */
+export function useFeedNetworks(id: number) {
+  return useQuery({
+    queryKey: ['feedNetworks', id],
+    queryFn: () => rpc.call('feed.networks', { id }),
+    staleTime: FRESH,
+  })
+}
+
+/** How much of a list other lists hold too; asked for when shown. */
+export function useFeedOverlap(id: number) {
+  return useQuery({
+    queryKey: ['feedOverlap', id],
+    queryFn: () => rpc.call('feed.overlap', { id }),
+    staleTime: FRESH,
+  })
+}
+
 export function useFeedCatalog() {
   return useQuery(queries.feedCatalog)
 }

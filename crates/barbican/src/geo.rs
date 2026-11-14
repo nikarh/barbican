@@ -234,45 +234,48 @@ impl Geo {
         aggregate(&nets)
     }
 
-    /// Every prefix the ASN database gives to these networks (autonomous systems), merged; empty without an ASN
-    /// database. Reads the whole database: seconds.
+    /// The prefixes the ASN database gives to each of these networks (autonomous systems), merged; empty without an
+    /// ASN database. Reads the whole database: seconds.
     #[must_use]
-    pub fn networks_of_asns(&self, asns: &[u32]) -> Vec<Net> {
+    pub fn networks_by_asn(&self, asns: &[u32]) -> HashMap<u32, Vec<Net>> {
+        let mut found: HashMap<u32, Vec<Net>> = HashMap::new();
         let Some(reader) = &self.asn else {
-            return Vec::new();
+            return found;
         };
         if asns.is_empty() {
-            return Vec::new();
+            return found;
         }
         let wanted: std::collections::HashSet<u32> = asns.iter().copied().collect();
-        let mut decided: HashMap<usize, bool> = HashMap::new();
-        let mut nets = Vec::new();
+        let mut decided: HashMap<usize, Option<u32>> = HashMap::new();
         let Ok(within) = reader.networks(WithinOptions::default()) else {
-            return Vec::new();
+            return found;
         };
         for item in within.flatten() {
             let Some(offset) = item.offset() else {
                 continue;
             };
-            let take = *decided.entry(offset).or_insert_with(|| {
+            let asn = *decided.entry(offset).or_insert_with(|| {
                 item.decode::<geoip2::Asn>()
                     .ok()
                     .flatten()
                     .and_then(|r| r.autonomous_system_number)
-                    .is_some_and(|asn| wanted.contains(&asn))
+                    .filter(|asn| wanted.contains(asn))
             });
-            if !take {
+            let Some(asn) = asn else {
                 continue;
-            }
+            };
             if let Ok(network) = item.network() {
                 let net = Net::prefix(network.ip(), network.prefix());
                 if net.family() == Family::V6 && is_ipv4_alias(&network.ip()) {
                     continue;
                 }
-                nets.push(net);
+                found.entry(asn).or_default().push(net);
             }
         }
-        aggregate(&nets)
+        for nets in found.values_mut() {
+            *nets = aggregate(nets);
+        }
+        found
     }
 
     /// How much blocking these countries and continents takes (each, and all together), or `None` without a country

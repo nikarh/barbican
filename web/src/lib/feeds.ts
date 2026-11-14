@@ -1,4 +1,4 @@
-import type { Feed, FeedDef, Item, Source, Use } from '../api/generated/model'
+import type { Feed, FeedDef, Item, NetworkUse, Source, Use } from '../api/generated/model'
 import { compact, count } from './format'
 
 /** What a feed does with what it lists. */
@@ -69,4 +69,20 @@ export const USE_EFFECTS: Record<Use, string> = {
   allow:
     'Every address it lists is never banned and is let through before any block, here and on the edges, like the allow list.',
   data: 'Nothing by itself: rules can ask whether an address (or a user agent) is in it, address pages show it, and the policy can give its addresses a ban length of their own.',
+}
+
+/** "3 blocked · 1 off": the networks of a list that do otherwise than the list. */
+export function networksSummary(networks: NetworkUse[]): string {
+  const n: Record<Use, number> = { off: 0, block: 0, allow: 0, data: 0 }
+  for (const x of networks) n[x.use] += 1
+  const words: Record<Use, string> = {
+    block: 'blocked',
+    allow: 'allowed',
+    data: 'data',
+    off: 'left out',
+  }
+  return (['block', 'allow', 'data', 'off'] as const)
+    .filter((u) => n[u] > 0)
+    .map((u) => `${String(n[u])} ${words[u]}`)
+    .join(' · ')
 }
