@@ -52,6 +52,11 @@ export const theme = createTheme({
       defaultProps: { removeScrollProps: { removeScrollBar: false }, radius: 'md', centered: true },
     },
     Drawer: { defaultProps: { removeScrollProps: { removeScrollBar: false } } },
+    // Dropdowns of selects are placed against the viewport instead of the page. Placed on the page, one that opens
+    // for a field in a modal (fixed, not on the page) makes the browser scroll the page under the modal; in Firefox for
+    // Android that slides its toolbar in or out, the viewport the modal is centered in changes size, the dropdown is
+    // placed again, and the page scrolls again, up and down without end.
+    Combobox: { defaultProps: { floatingStrategy: 'fixed' } },
     Notification: { defaultProps: { radius: 'md' }, classNames: { root: 'app-notification' } },
   },
 })
