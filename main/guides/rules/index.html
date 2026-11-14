@@ -125,6 +125,11 @@
 <td>the user agent (Traefik’s JSON log, or a regex source with <code dir="auto">agent</code>)</td>
 </tr>
 <tr>
+<td>User agent in list</td>
+<td>HTTP</td>
+<td>the user agent names one in these <a href="/main/guides/feeds/#feeds">lists of user agents</a></td>
+</tr>
+<tr>
 <td>User</td>
 <td>logins</td>
 <td>the user name</td>
@@ -137,12 +142,12 @@
 <tr>
 <td>Listed in</td>
 <td>any</td>
-<td>the address is in one of these <a href="/main/guides/feeds/#feeds">feeds</a></td>
+<td>the address is in one of these <a href="/main/guides/feeds/#feeds">feeds</a> (of addresses or networks)</td>
 </tr>
 </tbody>
 </table>
 <p>Patterns are regular expressions that match anywhere in the text unless anchored (<code dir="auto">^...$</code>). One that starts with <code dir="auto">!</code> matches what the rest doesn’t: <code dir="auto">!^(GET|POST)$</code> matches every other method.</p>
-<figure class="screenshot astro-pmiqfeva"><img src="/main/_astro/rule-dark.c_5kxTI7_Z1EKb1P.webp" alt="Editing a rule: its name, the kind of event and sources it looks at, conditions on path, method, status, known host and user agent, the threshold and window, and the ban's length and prefix lengths." loading="lazy" decoding="async" width="1600" height="1000" class="light:sl-hidden astro-pmiqfeva"><img src="/main/_astro/rule-light.BAJTkRw0_YyHII.webp" alt="Editing a rule: its name, the kind of event and sources it looks at, conditions on path, method, status, known host and user agent, the threshold and window, and the ban's length and prefix lengths." loading="lazy" decoding="async" width="1600" height="1000" class="dark:sl-hidden astro-pmiqfeva"></figure>
+<figure class="screenshot astro-pmiqfeva"><img src="/main/_astro/rule-dark.GasmCf8a_iLMyD.webp" alt="Editing a rule: its name, the kind of event and sources it looks at, conditions on path, method, status, known host and user agent, the threshold and window, and the ban's length and prefix lengths." loading="lazy" decoding="async" width="1600" height="1000" class="light:sl-hidden astro-pmiqfeva"><img src="/main/_astro/rule-light.CUMpL59x_Z1uQiY6.webp" alt="Editing a rule: its name, the kind of event and sources it looks at, conditions on path, method, status, known host and user agent, the threshold and window, and the ban's length and prefix lengths." loading="lazy" decoding="async" width="1600" height="1000" class="dark:sl-hidden astro-pmiqfeva"></figure>
 <p>A rule that bans has a length: the policy’s default, a length of its own, or until lifted by hand. It can ban a prefix instead of the address: an IPv4 prefix length (32: the address only) and an IPv6 one (64 by default, the usual size of one customer’s network).</p>
 <div class="sl-heading-wrapper level-h2"><h2 id="the-default-rules">The default rules</h2><a class="sl-anchor-link" href="#the-default-rules"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 1 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 0 0-1.42-1.42m8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 1 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 0 0 0 1.42 1 1 0 0 0 1.42 0l3.88-3.89a4.49 4.49 0 0 0 0-6.33M8.83 15.17a1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.92-4.92a1 1 0 1 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42"></path></svg></span><span class="sr-only" data-pagefind-ignore>Section titled “The default rules”</span></a></div>
 <p>A new database starts with these rules. All of them can be changed, turned off or deleted; <strong>Add a default</strong> on the Rules screen brings back one that was deleted.</p>
