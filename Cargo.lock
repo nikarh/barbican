@@ -138,7 +138,7 @@ dependencies = [
 
 [[package]]
 name = "barbican"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "barbican-common",
@@ -170,7 +170,7 @@ dependencies = [
 
 [[package]]
 name = "barbican-common"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ipnet",
  "rustix",
@@ -181,7 +181,7 @@ dependencies = [
 
 [[package]]
 name = "barbican-edge"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "barbican-common",
  "pico-args",
@@ -196,7 +196,7 @@ dependencies = [
 
 [[package]]
 name = "barbican-vlogs"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "barbican-common",
  "futures-util",
