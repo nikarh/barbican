@@ -15,6 +15,8 @@
 # them installs with apt install barbican=<version>; only the newest <builds to keep>
 # are kept if that is set. A version that is in the release already is left as it is.
 #
+# With BUILT_FROM (the tag or commit the package was built from), the release's tag is moved there.
+#
 # Needs gh (GH_REPO, GH_TOKEN), dpkg-deb, apt-ftparchive (apt-utils) and the signing key in
 # gpg's keyring, with its passphrase in GPG_PASSPHRASE.
 set -euo pipefail
@@ -102,3 +104,11 @@ for file in "${removed[@]}"; do
   echo "removing ${file}, more than ${keep} builds old"
   gh release delete-asset "${tag}" "${file}" --yes
 done
+
+# The release's tag points at the build the repository got last: `gh release create` puts it where main was when the
+# repository was first made, and it would stay there.
+if [[ -n "${BUILT_FROM:-}" ]]; then
+  commit=$(gh api "repos/${GH_REPO}/commits/${BUILT_FROM}" --jq .sha)
+  gh api -X PATCH "repos/${GH_REPO}/git/refs/tags/${tag}" -f sha="${commit}" -F force=true >/dev/null
+  echo "${tag} now points at ${commit} (${BUILT_FROM})"
+fi

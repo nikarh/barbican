@@ -10,6 +10,8 @@
 # unless <builds to keep> is set. A version that is in the release already is left as it
 # is: a package must not change under a name pacman may have cached.
 #
+# With BUILT_FROM (the tag or commit the package was built from), the release's tag is moved there.
+#
 # Needs gh (GH_REPO, GH_TOKEN), repo-add and bsdtar from pacman, and the signing key in
 # gpg's keyring, with its passphrase in GPG_PASSPHRASE.
 set -euo pipefail
@@ -71,4 +73,12 @@ if ((keep > 0)); then
       gh release delete-asset "${tag}" "${name}.sig" --yes
     fi
   done
+fi
+
+# The release's tag points at the build the repository got last: `gh release create` puts it where main was when the
+# repository was first made, and it would stay there.
+if [[ -n "${BUILT_FROM:-}" ]]; then
+  commit=$(gh api "repos/${GH_REPO}/commits/${BUILT_FROM}" --jq .sha)
+  gh api -X PATCH "repos/${GH_REPO}/git/refs/tags/${tag}" -f sha="${commit}" -F force=true >/dev/null
+  echo "${tag} now points at ${commit} (${BUILT_FROM})"
 fi
