@@ -82,6 +82,11 @@
   background: var(--ink-faint);
 }
 
+/* Not failing, only waiting (a list not fetched yet). */
+.state[data-warn='true'] {
+  background: var(--status-warn);
+}
+
 .parser {
   font-weight: 400;
   font-size: 12px;
