@@ -71,9 +71,9 @@ export const queries = {
     refetchInterval: 30_000,
     staleTime: FRESH,
   }),
-  feedPresets: queryOptions({
-    queryKey: ['feedPresets'],
-    queryFn: () => rpc.call('feeds.presets'),
+  feedCatalog: queryOptions({
+    queryKey: ['feedCatalog'],
+    queryFn: () => rpc.call('feeds.catalog'),
     staleTime: Infinity,
   }),
   /** Kept current by a subscription while shown (see useEdges). */
@@ -127,8 +127,8 @@ export function useFeeds(enabled = true) {
   return useQuery({ ...queries.feeds, enabled })
 }
 
-export function useFeedPresets() {
-  return useQuery(queries.feedPresets)
+export function useFeedCatalog() {
+  return useQuery(queries.feedCatalog)
 }
 
 type Mutating =
@@ -142,6 +142,7 @@ type Mutating =
   | 'rules.order'
   | 'policy.update'
   | 'feed.save'
+  | 'feeds.apply'
   | 'feed.delete'
   | 'feed.refresh'
 

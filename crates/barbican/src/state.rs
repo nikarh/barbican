@@ -24,6 +24,24 @@ pub struct Feed {
     /// When its list last changed.
     pub changed: Option<i64>,
     pub error: Option<String>,
+    /// Failed attempts in a row (since the agent started): failed fetches are tried again sooner than the refresh.
+    pub failures: u32,
+}
+
+impl Feed {
+    /// A feed not fetched yet.
+    #[must_use]
+    pub fn new(def: FeedDef) -> Self {
+        Self {
+            def,
+            loaded: Arc::default(),
+            fetched: None,
+            succeeded: None,
+            changed: None,
+            error: None,
+            failures: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -357,6 +375,7 @@ impl Lists {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::feeds::Content;
 
     fn n(s: &str) -> Net {
         s.parse().unwrap()
@@ -451,12 +470,16 @@ mod tests {
                 refresh_secs: 3_600,
                 username: None,
                 password: None,
+                content: Content::Addresses,
+                select: None,
+                catalog: None,
             },
             loaded: Arc::new(Loaded::from_data("203.0.113.0/24\n")),
             fetched: None,
             succeeded: None,
             changed: None,
             error: None,
+            failures: 0,
         });
         let b = state.lists();
         assert_ne!(a.version, b.version);
@@ -546,6 +569,9 @@ mod tests {
                 refresh_secs: 3_600,
                 username: None,
                 password: None,
+                content: Content::Addresses,
+                select: None,
+                catalog: None,
             },
             loaded: Arc::new(Loaded::from_data(
                 "162.158.0.0/15
@@ -555,6 +581,7 @@ mod tests {
             succeeded: None,
             changed: None,
             error: None,
+            failures: 0,
         });
         // Never banned, allowed on the firewall and the edges, and not in the list sets.
         assert!(state.allowed(ip("162.158.1.2"), 0));

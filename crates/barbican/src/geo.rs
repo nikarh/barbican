@@ -47,8 +47,7 @@ pub struct Extent {
 
 impl Extent {
     /// Of merged prefixes.
-    #[cfg(test)]
-    fn of(nets: &[Net]) -> Self {
+    pub fn of(nets: &[Net]) -> Self {
         let mut extent = Self {
             prefixes: nets.len() as u64,
             ..Self::default()
@@ -226,6 +225,47 @@ impl Geo {
                 let net = Net::prefix(network.ip(), network.prefix());
                 // IPv4 also appears inside IPv6 databases as ::ffff:0:0/96 and ::/96; the IPv4 networks are listed
                 // on their own.
+                if net.family() == Family::V6 && is_ipv4_alias(&network.ip()) {
+                    continue;
+                }
+                nets.push(net);
+            }
+        }
+        aggregate(&nets)
+    }
+
+    /// Every prefix the ASN database gives to these networks (autonomous systems), merged; empty without an ASN
+    /// database. Reads the whole database: seconds.
+    #[must_use]
+    pub fn networks_of_asns(&self, asns: &[u32]) -> Vec<Net> {
+        let Some(reader) = &self.asn else {
+            return Vec::new();
+        };
+        if asns.is_empty() {
+            return Vec::new();
+        }
+        let wanted: std::collections::HashSet<u32> = asns.iter().copied().collect();
+        let mut decided: HashMap<usize, bool> = HashMap::new();
+        let mut nets = Vec::new();
+        let Ok(within) = reader.networks(WithinOptions::default()) else {
+            return Vec::new();
+        };
+        for item in within.flatten() {
+            let Some(offset) = item.offset() else {
+                continue;
+            };
+            let take = *decided.entry(offset).or_insert_with(|| {
+                item.decode::<geoip2::Asn>()
+                    .ok()
+                    .flatten()
+                    .and_then(|r| r.autonomous_system_number)
+                    .is_some_and(|asn| wanted.contains(&asn))
+            });
+            if !take {
+                continue;
+            }
+            if let Ok(network) = item.network() {
+                let net = Net::prefix(network.ip(), network.prefix());
                 if net.family() == Family::V6 && is_ipv4_alias(&network.ip()) {
                     continue;
                 }

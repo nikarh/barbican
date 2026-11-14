@@ -10,7 +10,8 @@ use barbican_common::nft::{Firewall, NftCommand};
 
 use crate::api::FirewallStatus;
 use crate::app::{App, now};
-use crate::rules::RuleSet;
+use crate::feeds::Content;
+use crate::rules::{AgentList, RuleSet};
 
 /// Changes coming in a burst are applied together.
 const DEBOUNCE: Duration = Duration::from_millis(200);
@@ -48,14 +49,21 @@ pub fn rebuild_rules(app: &App) {
         let feeds: Vec<(&str, Arc<NetSet>)> = state
             .feeds
             .iter()
-            .filter(|f| f.def.enabled)
+            .filter(|f| f.def.enabled && f.def.content != Content::Agents)
             .map(|f| (f.def.name.as_str(), Arc::clone(&f.loaded.set)))
+            .collect();
+        let agents: Vec<AgentList<'_>> = state
+            .feeds
+            .iter()
+            .filter(|f| f.def.enabled)
+            .filter_map(|f| Some((f.def.name.as_str(), Arc::clone(f.loaded.agents.as_ref()?))))
             .collect();
         RuleSet::new(
             generation,
             state.rules.clone(),
             &names,
             &feeds,
+            &agents,
             NetSet::new(&allowed),
         )
     };

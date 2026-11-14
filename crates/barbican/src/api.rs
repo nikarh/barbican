@@ -116,9 +116,13 @@ pub enum Call {
     /// Result: `Feed[]`.
     #[serde(rename = "feeds.list")]
     FeedsList,
-    /// Result: `FeedDef[]`, well-known lists to add.
-    #[serde(rename = "feeds.presets")]
-    FeedsPresets,
+    /// Result: `Source[]`, public lists to add, by where they come from.
+    #[serde(rename = "feeds.catalog")]
+    FeedsCatalog,
+    /// Result: `Feed[]`, every feed, after the changes: removes some feeds and saves (adds or changes) others at once,
+    /// e.g. the lists of a catalog source.
+    #[serde(rename = "feeds.apply")]
+    FeedsApply(FeedsApplyParams),
     /// Result: [`Feed`], as saved.
     #[serde(rename = "feed.save")]
     FeedSave(FeedDef),
@@ -702,13 +706,30 @@ pub struct Feed {
     /// When its list last changed: the copy in use is from then.
     #[cfg_attr(test, ts(type = "number | null"))]
     pub changed: Option<i64>,
-    /// When it is fetched next (the agent looks for due feeds every 5 minutes); `null`: it is off.
+    /// When it is fetched next; `null`: it is off.
     #[cfg_attr(test, ts(type = "number | null"))]
     pub next: Option<i64>,
-    /// Prefixes in the last good copy.
+    /// Entries in the last good copy: prefixes, networks or user agents.
     #[cfg_attr(test, ts(type = "number"))]
     pub count: i64,
+    /// The addresses it stands for (a list of networks: their prefixes in the ASN database), merged.
+    pub extent: Extent,
     pub error: Option<String>,
+    /// Failed attempts in a row; failed fetches are tried again sooner than the refresh.
+    pub failures: u32,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct FeedsApplyParams {
+    /// Feeds to remove, by id.
+    #[cfg_attr(test, ts(type = "number[]"))]
+    #[serde(default)]
+    pub delete: Vec<i64>,
+    /// Feeds to add (id 0) or change.
+    #[serde(default)]
+    pub save: Vec<FeedDef>,
 }
 
 /// The geolocation databases, and how they are kept up to date.

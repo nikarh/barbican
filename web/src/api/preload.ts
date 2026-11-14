@@ -33,7 +33,7 @@ function own(route: Route, ask: Ask): Promise<unknown>[] {
         case 'lists':
           return [ask(queries.entries)]
         case 'feeds':
-          return [ask(queries.feeds), ask(queries.feedPresets)]
+          return [ask(queries.feeds), ask(queries.feedCatalog)]
         case 'geoip':
           return [ask(queries.geoip)]
         case 'edges':
@@ -67,7 +67,7 @@ export async function preloadAll(client: QueryClient): Promise<void> {
     ask(queries.entries),
     ask(queries.geoip),
     ask(queries.feeds),
-    ask(queries.feedPresets),
+    ask(queries.feedCatalog),
     edgeApi ? ask(queries.edges) : undefined,
   ])
   // The policy's blocked countries are only known now.

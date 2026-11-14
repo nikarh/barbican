@@ -12,12 +12,12 @@ use sqlx::{QueryBuilder, Row, Sqlite};
 use crate::api::{
     Activity, ActivitySort, BanCreateParams, BansParams, BlockCoverage, Call, Count,
     CoverageParams, DayStat, Entry, EntrySaveParams, ErrorCode, EventRow, EventsParams, Feed,
-    GeoDatabase, GeoStatus, IpActivityParams, IpDetail, IpFilter, IpRow, IpSort, IpsParams, Live,
-    Meta, Overview, Page, PlaceExtent, RpcError, TrustInfo,
+    FeedsApplyParams, GeoDatabase, GeoStatus, IpActivityParams, IpDetail, IpFilter, IpRow, IpSort,
+    IpsParams, Live, Meta, Overview, Page, PlaceExtent, RpcError, TrustInfo,
 };
 use crate::app::{App, now};
 use crate::db::{self, BanRow, EntryRow};
-use crate::feeds::FeedDef;
+use crate::feeds::{Content, FeedDef};
 use crate::firewall::{rebuild_rules, refresh_lists};
 use crate::rules::{Compiled, Policy, Rule};
 use crate::signal::Kind;
@@ -97,7 +97,8 @@ pub async fn call(app: &Arc<App>, call: Call) -> Result<Value, RpcError> {
         Call::CountriesCoverage(p) => json(coverage(app, p).await?),
         Call::GeoipStatus => json(geo_status(app)),
         Call::FeedsList => json(feeds(app)),
-        Call::FeedsPresets => json(crate::feeds::presets()),
+        Call::FeedsCatalog => json(crate::feeds::catalog::catalog()),
+        Call::FeedsApply(p) => json(feeds_apply(app, p).await?),
         Call::FeedSave(def) => json(feed_save(app, def).await?),
         Call::FeedDelete(p) => feed_delete(app, p.id).await.map(|()| Value::Null),
         Call::FeedRefresh(p) => {
@@ -894,7 +895,7 @@ fn validate(rule: &Rule) -> Result<(), RpcError> {
     if rule.name.trim().is_empty() {
         return Err(bad("a rule needs a name"));
     }
-    Compiled::new(rule.clone(), &[])
+    Compiled::new(rule.clone(), &[], &[])
         .map(|_| ())
         .map_err(|e| bad(e.to_string()))
 }
@@ -1114,8 +1115,10 @@ fn feed(f: &StateFeed) -> Feed {
         succeeded: f.succeeded,
         changed: f.changed,
         next: crate::run::feed_due(f).map(|due| due.max(now())),
-        count: i64::try_from(f.loaded.nets.len()).unwrap_or(0),
+        count: i64::try_from(f.loaded.entries).unwrap_or(0),
+        extent: crate::geo::Extent::of(&f.loaded.nets).into(),
         error: f.error.clone(),
+        failures: f.failures,
     }
 }
 
@@ -1126,7 +1129,39 @@ fn feeds(app: &App) -> Vec<Feed> {
         .unwrap_or_default()
 }
 
-async fn feed_save(app: &Arc<App>, mut def: FeedDef) -> Result<Feed, RpcError> {
+async fn feed_save(app: &Arc<App>, def: FeedDef) -> Result<Feed, RpcError> {
+    let saved = save_feed(app, def).await?;
+    rebuild_rules(app);
+    refresh_lists(app);
+    app.feeds_wake.notify_one();
+    Ok(saved)
+}
+
+/// Removes, then saves, feeds; the rules and lists are rebuilt once, after all of them.
+async fn feeds_apply(app: &Arc<App>, p: FeedsApplyParams) -> Result<Vec<Feed>, RpcError> {
+    let mut result = Ok(());
+    for id in p.delete {
+        if let Err(e) = delete_feed(app, id).await {
+            result = Err(e);
+            break;
+        }
+    }
+    if result.is_ok() {
+        for def in p.save {
+            if let Err(e) = save_feed(app, def).await {
+                result = Err(e);
+                break;
+            }
+        }
+    }
+    rebuild_rules(app);
+    refresh_lists(app);
+    app.feeds_wake.notify_one();
+    result.map(|()| feeds(app))
+}
+
+/// Saves a feed, without rebuilding the rules and lists.
+async fn save_feed(app: &Arc<App>, mut def: FeedDef) -> Result<Feed, RpcError> {
     def.name = def.name.trim().to_owned();
     if def.name.is_empty() {
         return Err(bad("a feed needs a name"));
@@ -1139,6 +1174,20 @@ async fn feed_save(app: &Arc<App>, mut def: FeedDef) -> Result<Feed, RpcError> {
     if def.block && def.allow {
         return Err(bad(
             "a feed either blocks or allows what it lists, not both",
+        ));
+    }
+    if def.content == Content::Agents && (def.block || def.allow) {
+        return Err(bad(
+            "a list of user agents is for rules only: it can't block or allow addresses",
+        ));
+    }
+    def.select = def
+        .select
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty());
+    if def.select.as_deref().is_some_and(|s| !s.starts_with('/')) {
+        return Err(bad(
+            "a JSON pointer starts with /, e.g. /services/Googlebot",
         ));
     }
     def.refresh_secs = def.refresh_secs.max(crate::run::FEED_MIN_REFRESH);
@@ -1162,9 +1211,13 @@ async fn feed_save(app: &Arc<App>, mut def: FeedDef) -> Result<Feed, RpcError> {
     let id = def.id;
     def.id = 0;
     let definition = serde_json::to_string(&def).map_err(internal)?;
-    let same_source = previous
-        .as_ref()
-        .is_some_and(|p| p.url == def.url && p.username == def.username);
+    // The same list read the same way: its copy stays.
+    let same_source = previous.as_ref().is_some_and(|p| {
+        p.url == def.url
+            && p.username == def.username
+            && p.content == def.content
+            && p.select == def.select
+    });
     if id == 0 {
         def.id = db::feed_insert(&app.db.pool, &definition)
             .await
@@ -1179,47 +1232,36 @@ async fn feed_save(app: &Arc<App>, mut def: FeedDef) -> Result<Feed, RpcError> {
         }
         def.id = id;
     }
-    let saved = {
-        let mut state = app.state.write().map_err(internal)?;
-        if let Some(existing) = state.feeds.iter_mut().find(|f| f.def.id == def.id) {
-            existing.def = def.clone();
-            if !same_source {
-                existing.loaded = Arc::default();
-                existing.fetched = None;
-                existing.succeeded = None;
-                existing.changed = None;
-                existing.error = None;
-            }
-            feed(existing)
+    let mut state = app.state.write().map_err(internal)?;
+    if let Some(existing) = state.feeds.iter_mut().find(|f| f.def.id == def.id) {
+        if same_source {
+            existing.def = def;
         } else {
-            let new = StateFeed {
-                def: def.clone(),
-                loaded: Arc::default(),
-                fetched: None,
-                succeeded: None,
-                changed: None,
-                error: None,
-            };
-            let shown = feed(&new);
-            state.feeds.push(new);
-            shown
+            *existing = StateFeed::new(def);
         }
-    };
-    rebuild_rules(app);
-    refresh_lists(app);
-    app.feeds_wake.notify_one();
-    Ok(saved)
+        Ok(feed(existing))
+    } else {
+        let new = StateFeed::new(def);
+        let shown = feed(&new);
+        state.feeds.push(new);
+        Ok(shown)
+    }
 }
 
 async fn feed_delete(app: &Arc<App>, id: i64) -> Result<(), RpcError> {
+    delete_feed(app, id).await?;
+    rebuild_rules(app);
+    refresh_lists(app);
+    Ok(())
+}
+
+async fn delete_feed(app: &Arc<App>, id: i64) -> Result<(), RpcError> {
     if !db::feed_delete(&app.db.pool, id).await.map_err(internal)? {
         return Err(error(ErrorCode::NotFound, "no such feed"));
     }
     if let Ok(mut state) = app.state.write() {
         state.feeds.retain(|f| f.def.id != id);
     }
-    rebuild_rules(app);
-    refresh_lists(app);
     Ok(())
 }
 

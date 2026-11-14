@@ -12,7 +12,6 @@ import type {
   Entry,
   EventRow,
   Feed,
-  FeedDef,
   GeoStatus,
   IpDetail,
   IpRow,
@@ -22,6 +21,7 @@ import type {
   Page,
   Policy,
   Rule,
+  Source,
 } from './generated/model'
 import type { Call, ErrorCode, ServerMessage } from './generated/rpc'
 
@@ -55,7 +55,8 @@ interface Results {
   'countries.coverage': BlockCoverage
   'geoip.status': GeoStatus
   'feeds.list': Feed[]
-  'feeds.presets': FeedDef[]
+  'feeds.catalog': Source[]
+  'feeds.apply': Feed[]
   'feed.save': Feed
   'feed.delete': null
   'feed.refresh': null
