@@ -130,11 +130,11 @@ impl Edge {
         found
     }
 
-    /// The list's frames and their version, written when the list is new: whole, or without IPv6 for an edge that
-    /// doesn't load it (a version of its own, so that an edge switching IPv6 on gets the whole list).
-    fn list_frames(&self, ipv6: bool) -> (String, Arc<Vec<u8>>) {
+    /// The list's frames and their version (see [`crate::state::Lists::version_for`]), written when the list is new: whole, or
+    /// without IPv6 for an edge that doesn't load it. `None` while that list isn't computed.
+    fn list_frames(&self, ipv6: bool) -> Option<(String, Arc<Vec<u8>>)> {
         let lists = self.app.lists.read().map(|l| l.clone()).unwrap_or_default();
-        let version = list_version(&lists.version, ipv6);
+        let version = lists.version_for(ipv6)?;
         let encode = || {
             let mut out = Vec::new();
             if ipv6 {
@@ -152,25 +152,17 @@ impl Edge {
         };
         let Ok(mut cached) = self.list.lock() else {
             let frames = encode();
-            return (version, frames);
+            return Some((version, frames));
         };
         // Only frames of the current list are kept: one whole, one without IPv6.
-        cached.retain(|(v, _)| *v == lists.version || *v == list_version(&lists.version, false));
+        let current = [lists.version_for(true), lists.version_for(false)];
+        cached.retain(|(v, _)| current.iter().flatten().any(|c| c == v));
         if let Some((_, frames)) = cached.iter().find(|(v, _)| *v == version) {
-            return (version, Arc::clone(frames));
+            return Some((version, Arc::clone(frames)));
         }
         let frames = encode();
         cached.push((version.clone(), Arc::clone(&frames)));
-        (version, frames)
-    }
-}
-
-/// The version of the list an edge gets: without IPv6, another one.
-fn list_version(version: &str, ipv6: bool) -> String {
-    if ipv6 {
-        version.to_owned()
-    } else {
-        format!("{version}+v4")
+        Some((version, frames))
     }
 }
 
@@ -290,11 +282,13 @@ async fn push<W: AsyncWrite + Unpin>(
             let version = app
                 .lists
                 .read()
-                .map(|l| l.version.clone())
-                .unwrap_or_default();
-            // An empty version: not computed yet since the agent started; the edge keeps what it has meanwhile.
-            if !version.is_empty() && list_version(&version, start.ipv6) != list_version_held {
-                let (version, frames) = edge.list_frames(start.ipv6);
+                .ok()
+                .and_then(|l| l.version_for(start.ipv6));
+            // None: not computed yet (since the agent started, or for IPv6 since this edge asked for it); the edge
+            // keeps what it has meanwhile.
+            if version.is_some_and(|v| v != list_version_held)
+                && let Some((version, frames)) = edge.list_frames(start.ipv6)
+            {
                 write(w, &frames).await?;
                 list_version_held = version;
             }
@@ -403,6 +397,9 @@ async fn connection<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     let connection = edge.connections.fetch_add(1, Ordering::Relaxed) + 1;
     if let Ok(mut current) = edge.current.lock() {
         current.insert(client.clone(), connection);
+    }
+    if hello.lists && hello.ipv6 {
+        edge.app.want_ipv6_lists();
     }
     let start = Start {
         client: client.clone(),
@@ -558,7 +555,6 @@ mod tests {
         assert_eq!(v4.block.len(), 1);
         assert_eq!(v4.unblock, vec![net("198.51.100.8")]);
         assert!(v4.allow.is_empty() && v4.seq == 3 && v4.full);
-        assert_ne!(list_version("abc", false), list_version("abc", true));
     }
 
     #[test]

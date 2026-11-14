@@ -28,7 +28,7 @@ So the worst a compromised edge can do is lie about its own counters, or stop bl
 5. The edge sends status reports when it connects, when something changes, and at least once a minute: what it holds, its drop counters, whether it enforces, errors, memory and uptime, and the other agents it follows.
 6. Each side pings after 20 seconds of silence and drops the connection after 60. The edge reconnects with a growing pause (2 to 60 seconds) and resumes from where it was.
 
-An edge that doesn't load IPv6, or doesn't want the lists, gets none of them, which saves both bandwidth and the router's memory.
+An edge that doesn't load IPv6, or doesn't want the lists, gets none of them, which saves both bandwidth and the router's memory. An agent that doesn't load IPv6 itself computes the IPv6 lists only once an edge that wants them connects.
 
 ## Offline behaviour
 

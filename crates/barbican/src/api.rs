@@ -106,8 +106,8 @@ pub enum Call {
     /// Result: [`Policy`], as saved.
     #[serde(rename = "policy.update")]
     PolicyUpdate(Policy),
-    /// Result: [`BlockCoverage`]: how much blocking these countries and continents takes. Nothing is saved; the
-    /// first call after the agent started (or loaded a new country database) takes a moment longer.
+    /// Result: [`BlockCoverage`]: how much blocking these countries and continents takes. Nothing is saved; each
+    /// call reads the country database once (about a tenth of a second) and keeps nothing of it.
     #[serde(rename = "countries.coverage")]
     CountriesCoverage(CoverageParams),
     /// Result: [`GeoStatus`]: the geolocation databases in use, and their downloads.
@@ -880,6 +880,8 @@ pub struct PlaceExtent {
 pub struct BlockCoverage {
     /// `false`: there is no country database, and the rest is empty.
     pub available: bool,
+    /// Whether IPv6 is counted: only when this host or an edge blocks it (an edge that loads IPv6 connected).
+    pub ipv6: bool,
     pub countries: Vec<PlaceExtent>,
     pub continents: Vec<PlaceExtent>,
     /// All of them together, overlaps counted once: what is blocked.

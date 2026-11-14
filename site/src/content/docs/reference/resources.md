@@ -9,7 +9,7 @@ Measured with 25 000 bans, Africa, Asia and South America blocked (about 100 000
 
 | | Memory | Notes |
 | --- | --- | --- |
-| Agent (`barbican`) | about 70 MB resident | Much of it the geolocation databases (mapped) and SQLite's cache; idle CPU near zero |
+| Agent (`barbican`) | about 70 MB resident, about 110 MB while the UI is in use | Much of it the geolocation databases and SQLite's cache; idle CPU near zero. The UI's overview and lists sort the month's events (a million of them in that measure) |
 | UI container (`barbican ui-proxy`) | about 4 MB | |
 | Edge agent (`barbican-edge`) | 6–10 MB resident, about 20 MB at a full resync | Idle: about 10 ms of CPU per 100 s |
 | Kernel: list sets | about 140 B an element on x86-64, about 250 B on 32-bit ARM | The prefixes are loaded merged into ranges: the IPv4 list above is 55 000 elements instead of 102 000, about 8 MB on x86-64, 14 MB on ARM (IPv6 another 57 000 elements, unless off) |
@@ -19,13 +19,15 @@ The kernel's sets don't slow packets down with their size: a lookup costs about 
 
 ## Keeping it small
 
-- **Leave out IPv6 where there is none**: `firewall.ipv6 = false` on the agent, `option ipv6 '0'` on an edge. Its country and blocklist list is as large as IPv4's.
+- **Leave out IPv6 where there is none**: `firewall.ipv6 = false` on the agent, `option ipv6 '0'` on an edge. Its country and blocklist list is as large as IPv4's. With neither the agent nor any edge loading IPv6, the agent doesn't compute it either: with four continents and eight countries blocked its startup peak drops from about 105 MB to about 70 MB.
 - **Country blocks** are what takes the most kernel memory. Settings shows, as you add countries and continents, how many prefixes and addresses they are.
 - **Lists on an edge**: `option lists '0'` gives a router only the bans and the deny list, not the countries and blocking feeds.
 - **Events** are counted per address, rule, source and hour, not stored line by line, and deleted after **Keep events** (a year by default). Addresses are stored as 4 or 16 bytes, and every distinct "what it tried" once.
+- **The overview** reads events summed per hour and rule, a table kept up to date as events are written (a few hundred KB), rather than the month's events, and the lists of events and addresses read indexes in their order: none of them sorts. A page of the overview takes under a millisecond with a million events.
 
 ## Work done
 
+- How much a choice of countries covers (Settings) is answered in about a millisecond (two with IPv6) from a summary of the country database made once it is opened: each country's and continent's extent, and the database as runs of one country, about 2 MB (6 MB once IPv6 is counted).
 - Only lines that match a rule, or are logins, reach the engine: parsing and matching happen in each source without allocating.
 - Firewall changes go straight over netlink, one small transaction each whatever the sets hold; only what changed is written. Once a minute (`firewall.check_interval`) the agent asks the kernel for the ruleset's generation, one small request, to notice changes made by other programs.
 - An edge's full state (25 000 bans and 100 000 list prefixes) is 2.4 MB on the wire and decodes in under a millisecond.

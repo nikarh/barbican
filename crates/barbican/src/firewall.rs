@@ -81,13 +81,16 @@ pub async fn refresh_countries(app: &Arc<App>) {
     };
     let geo = app.geo();
     let wanted = (countries.clone(), continents.clone());
-    let nets = tokio::task::spawn_blocking(move || geo.networks_of(&countries, &continents))
+    // IPv6 only when the host or an edge loads it.
+    let ipv6 = app.ipv6_lists.load(Ordering::SeqCst);
+    let nets = tokio::task::spawn_blocking(move || geo.networks_of(&countries, &continents, ipv6))
         .await
         .unwrap_or_default();
-    tracing::info!(prefixes = nets.len(), countries = ?wanted.0, continents = ?wanted.1, "Country blocks computed");
+    tracing::info!(prefixes = nets.len(), ipv6, countries = ?wanted.0, continents = ?wanted.1, "Country blocks computed");
     if let Ok(mut state) = app.state.write() {
         state.countries = Arc::new(nets);
         state.countries_of = wanted;
+        state.ipv6_lists = ipv6;
     }
     refresh_lists(app);
 }
@@ -114,7 +117,10 @@ pub async fn apply(app: &Arc<App>, nft: Option<&Nft>) {
         };
         let entries = state.entries.len();
         state.expire(now);
-        (state.desired(now, &lists), entries != state.entries.len())
+        (
+            state.desired(now, &lists, app.config.firewall.ipv6),
+            entries != state.entries.len(),
+        )
     };
     if expired_rules {
         // An allow entry that ran out no longer exempts its addresses.

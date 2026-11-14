@@ -336,6 +336,8 @@ function PlaceLabel({ place, sub }: { place: Place; sub?: ReactNode }) {
 }
 
 const V6_HINT = 'IPv6 space counted in /48 networks, the usual allocation of one site'
+const V4_ONLY_HINT =
+  'Neither this host nor a connected edge blocks IPv6 (firewall.ipv6 = false), so only IPv4 is counted'
 
 /** "1,234 prefixes · 343M IPv4 addresses (9.2%) · 12K IPv6 /48s" */
 function ExtentLine({ extent, known }: { extent: Extent; known: Extent }) {
@@ -421,6 +423,16 @@ function CoverageTotal({
             <Tooltip label={V6_HINT} openDelay={300}>
               <span style={{ textDecoration: 'underline dotted', textUnderlineOffset: 3 }}>
                 IPv6 /48s
+              </span>
+            </Tooltip>
+          </>
+        )}
+        {!coverage.ipv6 && (
+          <>
+            {' · '}
+            <Tooltip label={V4_ONLY_HINT} openDelay={300}>
+              <span style={{ textDecoration: 'underline dotted', textUnderlineOffset: 3 }}>
+                IPv4 only
               </span>
             </Tooltip>
           </>
