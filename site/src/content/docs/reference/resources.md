@@ -9,7 +9,7 @@ Measured with 25 000 bans, Africa, Asia and South America blocked (about 100 000
 
 | | Memory | Notes |
 | --- | --- | --- |
-| Agent (`barbican`) | about 70 MB resident | Much of it the geolocation databases (mapped) and SQLite's cache; idle CPU near zero |
+| Agent (`barbican`) | about 70 MB resident, about 110 MB while the UI is in use | Much of it the geolocation databases and SQLite's cache; idle CPU near zero. The UI's overview and lists sort the month's events (a million of them in that measure) |
 | UI container (`barbican ui-proxy`) | about 4 MB | |
 | Edge agent (`barbican-edge`) | 6–10 MB resident, about 20 MB at a full resync | Idle: about 10 ms of CPU per 100 s |
 | Kernel: list sets | about 140 B an element on x86-64, about 250 B on 32-bit ARM | The prefixes are loaded merged into ranges: the IPv4 list above is 55 000 elements instead of 102 000, about 8 MB on x86-64, 14 MB on ARM (IPv6 another 57 000 elements, unless off) |

@@ -98,8 +98,10 @@ impl Db {
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
             .foreign_keys(true)
-            .busy_timeout(Duration::from_secs(10))
-            .pragma("temp_store", "MEMORY");
+            .busy_timeout(Duration::from_secs(10));
+        // temp_store stays the default: the sorts of GROUP BY and ORDER BY over many events spill to temporary
+        // files. Kept in memory (temp_store = MEMORY), the memory SQLite frees after them stays with the process:
+        // hundreds of MB with a million events and the overview refreshed every 15 seconds.
         let pool = SqlitePoolOptions::new()
             .max_connections(4)
             .connect_with(options)
@@ -722,6 +724,20 @@ pub async fn drops_save(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn temporary_data_is_not_kept_in_memory() {
+        let dir = std::env::temp_dir().join(format!("barbican-db-{}", std::process::id()));
+        let db = Db::open(&dir.join("barbican.db")).await.unwrap();
+        let temp_store: i64 = sqlx::query_scalar("PRAGMA temp_store")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        db.pool.close().await;
+        let _ = std::fs::remove_dir_all(&dir);
+        // 0: the default (files); 2 would be memory.
+        assert_eq!(temp_store, 0);
+    }
 
     #[tokio::test]
     async fn drop_totals_round_trip() {
