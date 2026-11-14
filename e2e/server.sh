@@ -387,6 +387,34 @@ if wait_until 30 blocked by 198.51.100.10 198.51.100.1; then pass "a blocking li
 if att; then pass "others still get through"; else fail "a blocking list blocked more than it lists"; fi
 ${RPC} feed.delete "{\"id\": ${feed}}" >/dev/null
 if wait_until 10 by; then pass "removing the list unblocks"; else fail "still blocked after removing the list"; fi
+# Lists of one JSON document (fetched together), of networks and of user agents, added at once as the catalog does.
+cat >/tmp/feed/bots.json <<'EOF2'
+{"services": {"A": {"ipv4": ["198.51.100.0/25"], "ipv6": []}, "B (b)": {"ipv4": ["203.0.113.7"], "ipv6": ["2001:db8::/48"]}}}
+EOF2
+printf 'ASN,Entity\n13335,"Cloudflare, Inc."\n' >/tmp/feed/asns.csv
+printf 'User-agent: GPTBot\nUser-agent: CCBot\nDisallow: /\n' >/tmp/feed/robots.txt
+feed_def() { # <name> <file> <content> <select or null>
+  printf '{"id": 0, "name": "%s", "url": "http://127.0.0.1:8099/%s", "enabled": true, "block": false, "refreshSecs": 3600, "username": null, "password": null, "content": "%s", "select": %s, "catalog": null}' "$@"
+}
+${RPC} feeds.apply "{\"delete\": [], \"save\": [$(feed_def bots-a bots.json addresses '"/services/A"'), $(feed_def bots-b bots.json addresses '"/services/B (b)"'), $(feed_def asns asns.csv networks null), $(feed_def agents robots.txt agents null)]}" >/dev/null
+feeds_are() { # <python condition on f, the feeds by name>
+  ${RPC} feeds.list | python3 -c 'import json,sys; f={x["def"]["name"]: x for x in json.load(sys.stdin)}; sys.exit(not eval(sys.argv[1]))' "$1"
+}
+if wait_until 60 feeds_are 'f["bots-a"]["count"] == 1 and f["bots-b"]["count"] == 2 and f["agents"]["count"] == 2'; then
+  pass "services of one JSON document and a list of user agents are read"
+else
+  fail "lists: $(${RPC} feeds.list)"
+fi
+listed_in() { ${RPC} ip.get "{\"ip\": \"$1\"}" | python3 -c 'import json,sys; sys.exit(sys.argv[1] not in json.load(sys.stdin)["listed"])' "$2"; }
+if listed_in 203.0.113.7 bots-b && ! listed_in 203.0.113.7 bots-a; then pass "an address is listed in its service's list only"; else fail "listed: $(${RPC} ip.get '{"ip": "203.0.113.7"}')"; fi
+if wait_until 30 feeds_are 'f["asns"]["count"] == 1 and f["asns"]["extent"]["prefixes"] > 10' && listed_in 1.1.1.1 asns; then
+  pass "a list of networks stands for their prefixes in the ASN database"
+else
+  fail "networks: $(${RPC} ip.get '{"ip": "1.1.1.1"}')"
+fi
+for id in $(${RPC} feeds.list | python3 -c 'import json,sys; print(" ".join(str(f["def"]["id"]) for f in json.load(sys.stdin) if f["def"]["url"].startswith("http://127.0.0.1:8099/")))'); do
+  ${RPC} feed.delete "{\"id\": ${id}}" >/dev/null
+done
 pkill -f 'http.server 8099' || true
 
 say "an ipset edge (iptables, as on Asuswrt-Merlin)"

@@ -245,6 +245,12 @@ fn find<T: Copy + Ord>(ranges: &[(T, T)], x: T) -> bool {
     i > 0 && ranges.get(i - 1).is_some_and(|(_, end)| x <= *end)
 }
 
+impl AsRef<Self> for NetSet {
+    fn as_ref(&self) -> &Self {
+        self
+    }
+}
+
 impl NetSet {
     #[must_use]
     pub fn new(nets: &[Net]) -> Self {
@@ -274,6 +280,62 @@ impl NetSet {
     pub fn is_empty(&self) -> bool {
         self.v4.is_empty() && self.v6.is_empty()
     }
+
+    /// The addresses any of these sets holds.
+    #[must_use]
+    pub fn union<S: AsRef<Self>>(sets: &[S]) -> Self {
+        let mut v4 = Vec::new();
+        let mut v6 = Vec::new();
+        for set in sets {
+            v4.extend_from_slice(&set.as_ref().v4);
+            v6.extend_from_slice(&set.as_ref().v6);
+        }
+        Self {
+            v4: merged(v4, |x: u32| x.checked_add(1)),
+            v6: merged(v6, |x: u128| x.checked_add(1)),
+        }
+    }
+
+    /// How many addresses the set holds: IPv4 ones, and IPv6 ones (saturating).
+    #[must_use]
+    pub fn size(&self) -> (u64, u128) {
+        let v4 = self.v4.iter().map(|(a, b)| u64::from(b - a) + 1).sum();
+        let v6 = self.v6.iter().fold(0u128, |n, (a, b)| {
+            n.saturating_add((b - a).saturating_add(1))
+        });
+        (v4, v6)
+    }
+
+    /// How many addresses both sets hold, as [`NetSet::size`] counts them.
+    #[must_use]
+    pub fn shared(&self, other: &Self) -> (u64, u128) {
+        let v4 = intersection(&self.v4, &other.v4, |a, b| u64::from(b - a) + 1)
+            .into_iter()
+            .sum();
+        let v6 = intersection(&self.v6, &other.v6, |a, b| (b - a).saturating_add(1))
+            .into_iter()
+            .fold(0u128, u128::saturating_add);
+        (v4, v6)
+    }
+}
+
+/// The sizes of the overlaps of two lists of sorted, disjoint ranges.
+fn intersection<T: Copy + Ord, N>(a: &[(T, T)], b: &[(T, T)], size: impl Fn(T, T) -> N) -> Vec<N> {
+    let (mut i, mut j) = (0, 0);
+    let mut out = Vec::new();
+    while let (Some(&(a0, a1)), Some(&(b0, b1))) = (a.get(i), b.get(j)) {
+        let start = a0.max(b0);
+        let end = a1.min(b1);
+        if start <= end {
+            out.push(size(start, end));
+        }
+        if a1 < b1 {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    out
 }
 
 /// Merges prefixes into the fewest that cover the same addresses (adjacent ones joined, contained ones dropped).
@@ -492,6 +554,31 @@ fn join(out: &mut Vec<Range>, range: Range) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlaps() {
+        let set = |nets: &[&str]| {
+            NetSet::new(
+                &nets
+                    .iter()
+                    .map(|n| n.parse().unwrap())
+                    .collect::<Vec<Net>>(),
+            )
+        };
+        let a = set(&["192.0.2.0/24", "198.51.100.0/25", "2001:db8::/64"]);
+        let b = set(&[
+            "192.0.2.128/25",
+            "198.51.100.0/24",
+            "203.0.113.1",
+            "2001:db8::/120",
+        ]);
+        assert_eq!(a.size(), (384, 1 << 64));
+        assert_eq!(a.shared(&b), (128 + 128, 256));
+        assert_eq!(b.shared(&a), a.shared(&b));
+        assert_eq!(a.shared(&NetSet::default()), (0, 0));
+        let both = NetSet::union(&[a.clone(), b.clone()]);
+        assert_eq!(both.size().0, 384 + 128 + 1);
+    }
 
     fn net(s: &str) -> Net {
         s.parse().unwrap()

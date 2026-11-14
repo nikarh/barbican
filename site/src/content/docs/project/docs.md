@@ -37,7 +37,7 @@ Every change to behaviour updates the docs in the same commit:
 - A new or changed setting: `reference/configuration.md` and `dist/config.toml`.
 - A new or changed source, parser or event: `guides/sources.md`, and `guides/rules.mdx` if rules can match it.
 - A change to the default rules or the policy: `guides/rules.mdx`.
-- A new or changed feed preset: `guides/feeds.mdx`.
+- A new or changed source of the feed catalog: `guides/feeds.mdx`.
 - A new or changed edge option: `edge/configuration.md`, `dist/openwrt/barbican.config`, `dist/merlin/barbican.conf` and the LuCI settings page.
 - A change to the edge protocol: `internals/edge-link.md`.
 - A new command or option: `reference/cli.md`.

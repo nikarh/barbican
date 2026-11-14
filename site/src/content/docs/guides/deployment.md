@@ -32,7 +32,7 @@ Several independent agents work, but each counts only what it sees. A scanner th
 
 With a CDN proxying your site, every request reaches you from the CDN's addresses. Banning those would block your own visitors, and geolocation databases place some of Cloudflare's addresses in whatever country, so blocking a continent can drop your visitors at random.
 
-- Add the **Allow Cloudflare** feeds (both of them, IPv4 and IPv6). Cloudflare's ranges are then never banned and always let through.
+- Set up the **Cloudflare** source of the feed catalog (both lists, IPv4 and IPv6, allow). Cloudflare's ranges are then never banned and always let through.
 - Configure your reverse proxy to log the visitor's address from the header the CDN sets, trusting that header only from the CDN's ranges. Barbican then records and bans the visitor, which helps for anything that reaches you without the CDN, and keeps your data meaningful.
 - Blocking visitors behind a CDN by address has to happen at the CDN itself (its firewall rules), not on your network.
 

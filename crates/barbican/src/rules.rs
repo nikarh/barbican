@@ -1,8 +1,12 @@
 //! Rules (what counts as abuse, and what to do about it) and the ban policy (for how long). Both are edited in the
 //! UI and stored in the database; the defaults below are what a new database starts with.
 
+use std::sync::Arc;
+
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+
+use crate::feeds::Agents;
 
 #[cfg(test)]
 use ts_rs::TS;
@@ -61,6 +65,8 @@ pub struct Conditions {
     pub what: Option<String>,
     /// The address is in one of these blocklists (feeds), by name.
     pub listed: Vec<String>,
+    /// HTTP: the user agent is in one of these lists of user agents (feeds), by name.
+    pub agents: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -335,6 +341,9 @@ pub fn defaults() -> Vec<Rule> {
     ]
 }
 
+/// A list of user agents: its name and its matcher.
+pub type AgentList<'a> = (&'a str, Arc<Agents>);
+
 /// The most rules a rule set holds: which ones matched a line is a 64-bit mask.
 pub const MAX_RULES: usize = 64;
 
@@ -373,6 +382,8 @@ pub struct Compiled {
     what: Option<Matcher>,
     /// Bits of the rule set's feeds the `listed` condition names; 0 without the condition.
     listed: u64,
+    /// The lists of user agents the `agents` condition names (those that exist).
+    agents: Vec<Arc<Agents>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -384,8 +395,8 @@ pub struct InvalidRule {
 }
 
 impl Compiled {
-    /// `feeds` are the names of the rule set's feeds, in bit order.
-    pub fn new(rule: Rule, feeds: &[&str]) -> Result<Self, InvalidRule> {
+    /// `feeds` are the names of the rule set's feeds, in bit order; `agents` its lists of user agents.
+    pub fn new(rule: Rule, feeds: &[&str], agents: &[AgentList<'_>]) -> Result<Self, InvalidRule> {
         let invalid = |field: &'static str, message: String| InvalidRule {
             rule: rule.name.clone(),
             field,
@@ -413,11 +424,12 @@ impl Compiled {
             || c.method.is_some()
             || c.user_agent.is_some()
             || !c.status.is_empty()
-            || c.routed.is_some();
+            || c.routed.is_some()
+            || !c.agents.is_empty();
         if http_only && rule.kind != Kind::Http {
             return Err(invalid(
                 "conditions",
-                "path, method, status, route and user agent are for HTTP rules".to_owned(),
+                "path, method, status, route and user agents are for HTTP rules".to_owned(),
             ));
         }
         // A feed that doesn't exist (any more) matches nothing; the rule then never fires.
@@ -427,7 +439,14 @@ impl Compiled {
                 listed |= 1u64 << i.min(63);
             }
         }
+        // As with feeds: a list that doesn't exist (any more) matches nothing.
+        let agents = agents
+            .iter()
+            .filter(|(name, _)| c.agents.iter().any(|a| a == name))
+            .map(|(_, list)| Arc::clone(list))
+            .collect();
         Ok(Self {
+            agents,
             path: compile("path", &c.path)?,
             method: compile("method", &c.method)?,
             user_agent: compile("userAgent", &c.user_agent)?,
@@ -459,6 +478,13 @@ impl Compiled {
             if !test(&self.path, Some(h.path))
                 || !test(&self.method, Some(h.method))
                 || !test(&self.user_agent, h.user_agent)
+            {
+                return false;
+            }
+            if !c.agents.is_empty()
+                && !h
+                    .user_agent
+                    .is_some_and(|ua| self.agents.iter().any(|a| a.matches(ua)))
             {
                 return false;
             }
@@ -496,19 +522,21 @@ pub struct RuleSet {
 }
 
 impl RuleSet {
-    /// `sources` are the configured sources' names in index order; `feeds` the enabled feeds' names and contents.
+    /// `sources` are the configured sources' names in index order; `feeds` the enabled feeds' names and contents;
+    /// `agents` the enabled lists of user agents.
     pub fn new(
         generation: u64,
         rules: Vec<Rule>,
         sources: &[&str],
         feeds: &[(&str, std::sync::Arc<barbican_common::net::NetSet>)],
+        agents: &[AgentList<'_>],
         allowed: barbican_common::net::NetSet,
     ) -> Result<Self, InvalidRule> {
         let feed_names: Vec<&str> = feeds.iter().take(MAX_RULES).map(|(n, _)| *n).collect();
         let compiled = rules
             .into_iter()
             .take(MAX_RULES)
-            .map(|r| Compiled::new(r, &feed_names))
+            .map(|r| Compiled::new(r, &feed_names, agents))
             .collect::<Result<Vec<_>, _>>()?;
         let mut by_source = vec![0u64; sources.len()];
         let mut by_kind = [0u64; 6];
@@ -631,7 +659,7 @@ mod tests {
             Arc::new(NetSet::new(&["203.0.113.0/24".parse().unwrap()])),
         )];
         let allowed = NetSet::new(&["10.0.0.0/8".parse().unwrap()]);
-        RuleSet::new(1, vec![rule], &["web", "ssh"], &feeds, allowed).unwrap()
+        RuleSet::new(1, vec![rule], &["web", "ssh"], &feeds, &[], allowed).unwrap()
     }
 
     fn hit(set: &RuleSet, source: u16, ip: &str, event: &Event<'_>) -> bool {
@@ -644,8 +672,58 @@ mod tests {
     const IP: &str = "198.51.100.1";
 
     #[test]
+    fn user_agents_in_lists() {
+        let mut rule = default_rule("Exploit probes");
+        rule.conditions = Conditions {
+            agents: vec!["ai".into(), "gone".into()],
+            ..Conditions::default()
+        };
+        let lists = [(
+            "ai",
+            Arc::new(crate::feeds::Agents::new(&["GPTBot".to_owned()]).unwrap()),
+        )];
+        let set = RuleSet::new(
+            1,
+            vec![rule.clone()],
+            &["web"],
+            &[],
+            &lists,
+            NetSet::default(),
+        )
+        .unwrap();
+        let request = |user_agent| {
+            Event::Http(Http {
+                method: "GET",
+                path: "/",
+                status: 200,
+                user_agent,
+                ..Http::default()
+            })
+        };
+        assert!(hit(
+            &set,
+            WEB,
+            IP,
+            &request(Some("Mozilla/5.0 (compatible; GPTBot/1.2)"))
+        ));
+        assert!(!hit(
+            &set,
+            WEB,
+            IP,
+            &request(Some("Mozilla/5.0 Firefox/140.0"))
+        ));
+        assert!(!hit(&set, WEB, IP, &request(None)));
+        // Without the list, the condition matches nothing; and it is for HTTP rules only.
+        let set =
+            RuleSet::new(1, vec![rule.clone()], &["web"], &[], &[], NetSet::default()).unwrap();
+        assert!(!hit(&set, WEB, IP, &request(Some("GPTBot/1.2"))));
+        rule.kind = Kind::AuthFailure;
+        assert!(Compiled::new(rule, &[], &[]).is_err());
+    }
+
+    #[test]
     fn defaults_compile() {
-        let set = RuleSet::new(1, defaults(), &["a"], &[], NetSet::default()).unwrap();
+        let set = RuleSet::new(1, defaults(), &["a"], &[], &[], NetSet::default()).unwrap();
         assert_eq!(set.rules.len(), defaults().len());
     }
 
@@ -793,7 +871,7 @@ mod tests {
     fn masks() {
         let mut rules = defaults();
         rules[1].sources = vec!["ssh".into()];
-        let set = RuleSet::new(1, rules, &["web", "ssh"], &[], NetSet::default()).unwrap();
+        let set = RuleSet::new(1, rules, &["web", "ssh"], &[], &[], NetSet::default()).unwrap();
         let mut what = String::new();
         let ip = IP.parse().unwrap();
         // "/.env" without a route: exploit probes (bit 0); "no known host" (bit 1) only looks at ssh.
@@ -810,7 +888,7 @@ mod tests {
 
     #[test]
     fn invalid_rules() {
-        let compile = |rule| Compiled::new(rule, &[]);
+        let compile = |rule| Compiled::new(rule, &[], &[]);
         let mut rule = default_rule("Exploit probes");
         rule.conditions.path = Some("(".into());
         assert_eq!(compile(rule).unwrap_err().field, "path");

@@ -42,6 +42,7 @@ const NEW_RULE: Rule = {
     user: null,
     what: null,
     listed: [],
+    agents: [],
   },
   threshold: 1,
   windowSecs: 3_600,
@@ -89,6 +90,12 @@ function Editor({ rule, onClose }: { rule: Rule; onClose: () => void }) {
     setR((x) => ({ ...x, conditions: { ...x.conditions, ...patch } }))
   }
   const http = r.kind === 'http'
+  const addressLists = (feeds.data ?? [])
+    .filter((f) => f.def.content !== 'agents')
+    .map((f) => f.def.name)
+  const agentLists = (feeds.data ?? [])
+    .filter((f) => f.def.content === 'agents')
+    .map((f) => f.def.name)
   const login = r.kind === 'auth_failure' || r.kind === 'auth_success' || r.kind === 'invalid_user'
   return (
     <form
@@ -105,6 +112,7 @@ function Editor({ rule, onClose }: { rule: Rule; onClose: () => void }) {
                 status: [],
                 routed: null,
                 userAgent: null,
+                agents: [],
               },
             }
         save.mutate(rule, { onSuccess: onClose })
@@ -209,6 +217,19 @@ function Editor({ rule, onClose }: { rule: Rule; onClose: () => void }) {
               }}
               classNames={{ input: 'mono' }}
             />
+            <MultiSelect
+              label="User agent in list"
+              description={
+                agentLists.length === 0
+                  ? 'No lists of user agents yet (Settings → Feeds: AI user agents)'
+                  : 'Only requests whose user agent names one in these lists'
+              }
+              data={agentLists}
+              value={c.agents}
+              onChange={(v) => {
+                cond({ agents: v })
+              }}
+            />
           </>
         )}
         {login && (
@@ -233,7 +254,7 @@ function Editor({ rule, onClose }: { rule: Rule; onClose: () => void }) {
         <MultiSelect
           label="Listed in"
           description="Only addresses in one of these blocklists"
-          data={(feeds.data ?? []).map((f) => f.def.name)}
+          data={addressLists}
           value={c.listed}
           onChange={(v) => {
             cond({ listed: v })

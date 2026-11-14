@@ -10,7 +10,7 @@ use barbican_common::net::{Family, Net, aggregate};
 use barbican_common::nft::{Block, Desired};
 
 use crate::db::{BanRow, EntryRow};
-use crate::feeds::{FeedDef, Loaded};
+use crate::feeds::{Effect, FeedDef, Loaded};
 use crate::rules::{Policy, Rule};
 
 #[derive(Debug, Clone)]
@@ -24,6 +24,34 @@ pub struct Feed {
     /// When its list last changed.
     pub changed: Option<i64>,
     pub error: Option<String>,
+    /// Failed attempts in a row (since the agent started): failed fetches are tried again sooner than the refresh.
+    pub failures: u32,
+    /// What it does, from `def` and `loaded`: [`Feed::refresh`] makes it again after either changed.
+    pub effect: Arc<Effect>,
+}
+
+impl Feed {
+    /// A feed not fetched yet.
+    #[must_use]
+    pub fn new(def: FeedDef) -> Self {
+        let mut feed = Self {
+            def,
+            loaded: Arc::default(),
+            fetched: None,
+            succeeded: None,
+            changed: None,
+            error: None,
+            failures: 0,
+            effect: Arc::default(),
+        };
+        feed.refresh();
+        feed
+    }
+
+    /// Works out what it does again, after its definition or contents changed.
+    pub fn refresh(&mut self) {
+        self.effect = Arc::new(Effect::of(&self.def, &self.loaded));
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,12 +202,7 @@ impl State {
                 .entries
                 .iter()
                 .any(|e| e.allow && e.until.is_none_or(|u| u > now) && e.net.contains_ip(ip))
-            || self.allowing_feeds().any(|f| f.loaded.set.contains(ip))
-    }
-
-    /// The enabled feeds whose addresses are allowed.
-    pub fn allowing_feeds(&self) -> impl Iterator<Item = &Feed> {
-        self.feeds.iter().filter(|f| f.def.enabled && f.def.allow)
+            || self.feeds.iter().any(|f| f.effect.allowed.contains(ip))
     }
 
     /// The active ban that covers the address, if any.
@@ -206,7 +229,7 @@ impl State {
     pub fn listed(&self, ip: IpAddr) -> Vec<&str> {
         self.feeds
             .iter()
-            .filter(|f| f.def.enabled && f.loaded.set.contains(ip))
+            .filter(|f| f.effect.listed.contains(ip))
             .map(|f| f.def.name.as_str())
             .collect()
     }
@@ -250,8 +273,8 @@ impl State {
             })
             .collect();
         let mut allows = self.exempt.clone();
-        for feed in self.allowing_feeds() {
-            allows.extend(feed.loaded.nets.iter().copied());
+        for feed in &self.feeds {
+            allows.extend(feed.effect.allow.iter().copied());
         }
         for e in &self.entries {
             if e.until.is_some_and(|u| u <= now) {
@@ -275,11 +298,7 @@ impl State {
     #[must_use]
     pub fn lists(&self) -> Lists {
         let (mut v4, mut v6) = (Vec::new(), Vec::new());
-        let feeds = self
-            .feeds
-            .iter()
-            .filter(|f| f.def.enabled && f.def.block)
-            .flat_map(|f| f.loaded.nets.iter());
+        let feeds = self.feeds.iter().flat_map(|f| f.effect.block.iter());
         for net in self.countries.iter().chain(feeds) {
             match net.family() {
                 Family::V4 => v4.push(*net),
@@ -357,6 +376,7 @@ impl Lists {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::feeds::Content;
 
     fn n(s: &str) -> Net {
         s.parse().unwrap()
@@ -451,18 +471,26 @@ mod tests {
                 refresh_secs: 3_600,
                 username: None,
                 password: None,
+                content: Content::Addresses,
+                select: None,
+                catalog: None,
+                networks: Vec::new(),
             },
             loaded: Arc::new(Loaded::from_data("203.0.113.0/24\n")),
             fetched: None,
             succeeded: None,
             changed: None,
             error: None,
+            failures: 0,
+            effect: Arc::default(),
         });
+        state.feeds[0].refresh();
         let b = state.lists();
         assert_ne!(a.version, b.version);
         assert_eq!(b.nets.len(), 2);
         assert_eq!(state.listed(ip("203.0.113.5")), vec!["x"]);
         state.feeds[0].def.block = false;
+        state.feeds[0].refresh();
         assert_eq!(state.lists().version, a.version);
         assert_eq!(state.listed(ip("203.0.113.5")), vec!["x"]);
     }
@@ -489,6 +517,10 @@ mod tests {
                 refresh_secs: 3_600,
                 username: None,
                 password: None,
+                content: Content::Addresses,
+                select: None,
+                catalog: None,
+                networks: Vec::new(),
             },
             loaded: Arc::new(Loaded::from_data(
                 "203.0.113.0/24\n2001:db8:1::/48\n2001:db8:8000::/48\n",
@@ -497,7 +529,10 @@ mod tests {
             succeeded: None,
             changed: None,
             error: None,
+            failures: 0,
+            effect: Arc::default(),
         });
+        state.feeds[0].refresh();
         let v4 = state.lists();
         assert_eq!(*v4.nets, vec![n("198.51.100.0/24"), n("203.0.113.0/24")]);
         assert!(!v4.ipv6 && v4.version.is_empty());
@@ -546,6 +581,10 @@ mod tests {
                 refresh_secs: 3_600,
                 username: None,
                 password: None,
+                content: Content::Addresses,
+                select: None,
+                catalog: None,
+                networks: Vec::new(),
             },
             loaded: Arc::new(Loaded::from_data(
                 "162.158.0.0/15
@@ -555,13 +594,17 @@ mod tests {
             succeeded: None,
             changed: None,
             error: None,
+            failures: 0,
+            effect: Arc::default(),
         });
+        state.feeds[0].refresh();
         // Never banned, allowed on the firewall and the edges, and not in the list sets.
         assert!(state.allowed(ip("162.158.1.2"), 0));
         assert!(!state.allowed(ip("203.0.113.1"), 0));
         assert!(state.blocks_and_allows(0).1.contains(&n("162.158.0.0/15")));
         assert_eq!(state.lists().nets.len(), 0);
         state.feeds[0].def.enabled = false;
+        state.feeds[0].refresh();
         assert!(!state.allowed(ip("162.158.1.2"), 0));
         assert_eq!(state.blocks_and_allows(0).1.len(), 0);
     }

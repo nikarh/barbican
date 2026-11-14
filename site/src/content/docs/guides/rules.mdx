@@ -36,9 +36,10 @@ A rule looks at one kind of event (HTTP requests, failed logins, successful logi
 | Status | HTTP | one of these statuses |
 | Known host | HTTP | whether the proxy had a route for the request (with Traefik: a router) |
 | User agent | HTTP | the user agent (Traefik's JSON log, or a regex source with `agent`) |
+| User agent in list | HTTP | the user agent names one in these [lists of user agents](/guides/feeds/#feeds) |
 | User | logins | the user name |
 | What happened | any | the event as the UI shows it: `GET example.com/x → 404`, a user name, a probe's description |
-| Listed in | any | the address is in one of these [feeds](/guides/feeds/#feeds) |
+| Listed in | any | the address is in one of these [feeds](/guides/feeds/#feeds) (of addresses or networks) |
 
 Patterns are regular expressions that match anywhere in the text unless anchored (`^...$`). One that starts with `!` matches what the rest doesn't: `!^(GET|POST)$` matches every other method.
 

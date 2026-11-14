@@ -71,9 +71,9 @@ export const queries = {
     refetchInterval: 30_000,
     staleTime: FRESH,
   }),
-  feedPresets: queryOptions({
-    queryKey: ['feedPresets'],
-    queryFn: () => rpc.call('feeds.presets'),
+  feedCatalog: queryOptions({
+    queryKey: ['feedCatalog'],
+    queryFn: () => rpc.call('feeds.catalog'),
     staleTime: Infinity,
   }),
   /** Kept current by a subscription while shown (see useEdges). */
@@ -127,8 +127,26 @@ export function useFeeds(enabled = true) {
   return useQuery({ ...queries.feeds, enabled })
 }
 
-export function useFeedPresets() {
-  return useQuery(queries.feedPresets)
+/** The networks of a list of networks; asked for when shown. */
+export function useFeedNetworks(id: number) {
+  return useQuery({
+    queryKey: ['feedNetworks', id],
+    queryFn: () => rpc.call('feed.networks', { id }),
+    staleTime: FRESH,
+  })
+}
+
+/** How much of a list other lists hold too; asked for when shown. */
+export function useFeedOverlap(id: number) {
+  return useQuery({
+    queryKey: ['feedOverlap', id],
+    queryFn: () => rpc.call('feed.overlap', { id }),
+    staleTime: FRESH,
+  })
+}
+
+export function useFeedCatalog() {
+  return useQuery(queries.feedCatalog)
 }
 
 type Mutating =
@@ -142,6 +160,7 @@ type Mutating =
   | 'rules.order'
   | 'policy.update'
   | 'feed.save'
+  | 'feeds.apply'
   | 'feed.delete'
   | 'feed.refresh'
 

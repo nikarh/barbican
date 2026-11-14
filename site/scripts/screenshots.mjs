@@ -140,6 +140,16 @@ const DESKTOP = [
 	{ name: 'settings-policy', hash: '#/settings?tab=policy' },
 	{ name: 'settings-lists', hash: '#/settings?tab=lists' },
 	{ name: 'settings-feeds', hash: '#/settings?tab=feeds' },
+	{
+		name: 'feeds-source',
+		hash: '#/settings?tab=feeds',
+		act: async (page) => {
+			await page.locator('label', { hasText: /^Catalog/ }).click();
+			await page.locator('.panel').filter({ has: page.getByText('Search engines and SEO crawlers', { exact: true }) })
+				.getByRole('button', { name: /Set up|Change/ }).click();
+			await page.locator('.mantine-Modal-content').waitFor();
+		},
+	},
 	{ name: 'settings-geoip', hash: '#/settings?tab=geoip' },
 	{ name: 'settings-edges', hash: '#/settings?tab=edges' },
 	{ name: 'settings-about', hash: '#/settings?tab=about' },

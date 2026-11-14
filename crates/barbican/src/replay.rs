@@ -88,7 +88,7 @@ pub async fn run(inputs: &[ReplayInput], geo: Option<PathBuf>) -> Result<Summary
         state.rules.clone_from(&rules);
     }
     let names: Vec<&str> = app.config.sources.iter().map(|s| s.name.as_str()).collect();
-    let set = RuleSet::new(1, rules, &names, &[], allowed).map_err(|e| e.to_string())?;
+    let set = RuleSet::new(1, rules, &names, &[], &[], allowed).map_err(|e| e.to_string())?;
     let (_keep, rx) = watch::channel(Arc::new(set));
 
     let mut summary = Summary::default();

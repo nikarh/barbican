@@ -260,13 +260,28 @@ const before = [
 		retentionDays: 365,
 	}],
 	...[
-		['Spamhaus DROP', 'https://www.spamhaus.org/drop/drop_v4.json', true, false, 12],
-		['FireHOL level 1', 'https://iplists.firehol.org/files/firehol_level1.netset', true, false, 6],
-		['blocklist.de', 'https://lists.blocklist.de/lists/all.txt', false, false, 6],
-		['Tor exit nodes', 'https://check.torproject.org/torbulkexitlist', false, false, 6],
-		['Cloudflare', 'https://www.cloudflare.com/ips-v4', false, true, 24],
-		['Cloudflare (IPv6)', 'https://www.cloudflare.com/ips-v6', false, true, 24],
-	].map(([name, url, block, allow, hours]) => ['feed.save', { id: 0, name, url, enabled: true, block, allow, refreshSecs: hours * H }]),
+		['Spamhaus DROP', 'https://www.spamhaus.org/drop/drop_v4.json', 'block', 12, ['spamhaus', 'drop_v4']],
+		['FireHOL level 1', 'https://iplists.firehol.org/files/firehol_level1.netset', 'block', 1, ['firehol', 'firehol_level1']],
+		['AbuseIPDB', 'https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/main/abuseipdb-s100-7d.ipv4', 'block', 3, ['abuseipdb', '7d']],
+		['blocklist.de', 'https://lists.blocklist.de/lists/all.txt', 'data', 6, ['blocklist.de', 'all']],
+		['Tor exit nodes', 'https://check.torproject.org/torbulkexitlist', 'data', 1, ['tor', 'exits']],
+		['Googlebot', 'https://raw.githubusercontent.com/ipverse/bot-ip-blocks/master/crawlers.json', 'allow', 24, ['ipverse-crawlers', 'Googlebot'], '/services/Googlebot'],
+		['Bingbot', 'https://raw.githubusercontent.com/ipverse/bot-ip-blocks/master/crawlers.json', 'allow', 24, ['ipverse-crawlers', 'Bingbot'], '/services/Bingbot'],
+		['AI user agents', 'https://raw.githubusercontent.com/ai-robots-txt/ai.robots.txt/main/robots.txt', 'data', 24, ['ai-agents', 'robots'], null, 'agents'],
+		['Cloudflare', 'https://www.cloudflare.com/ips-v4', 'allow', 24, ['cloudflare', 'ips-v4']],
+		['Cloudflare (IPv6)', 'https://www.cloudflare.com/ips-v6', 'allow', 24, ['cloudflare', 'ips-v6']],
+	].map(([name, url, use, hours, [source, item], select = null, content = 'addresses']) => [
+		'feed.save',
+		{
+			id: 0, name, url, enabled: true, block: use === 'block', allow: use === 'allow', refreshSecs: hours * H,
+			content, select, catalog: { source, item },
+		},
+	]),
+	['rule.save', {
+		id: 0, name: 'AI crawlers', description: 'Requests whose user agent says they come from an AI crawler',
+		enabled: true, kind: 'http', sources: [], conditions: { agents: ['AI user agents'] }, threshold: 1, windowSecs: 60,
+		action: 'ban', ban: { type: 'secs', secs: 7 * DAY }, prefixV4: 32, prefixV6: 64,
+	}],
 	['entry.save', { net: '192.0.2.0/28', allow: true, note: 'Monitoring probes', secs: null }],
 	['entry.save', { net: '198.51.100.64/26', allow: true, note: 'Partner office', secs: 30 * DAY }],
 	['entry.save', { net: '203.0.113.128/25', allow: false, note: 'Abuse report', secs: 90 * DAY }],
@@ -282,6 +297,7 @@ const allow = {
 	domains: [
 		'example.com', 'example.org', 'example.net',
 		'spamhaus.org', 'firehol.org', 'blocklist.de', 'torproject.org', 'cloudflare.com', 'db-ip.com', 'github.com',
+		'githubusercontent.com', 'sekuripy.hr', 'updown.io',
 	],
 };
 for (const ip of allow.addresses) if (!isIP(ip)) throw new Error(`not an address: ${ip}`);

@@ -31,7 +31,7 @@ Each stage has a small interface, and the pieces below are the implementations t
 | --- | --- | --- |
 | Log sources | Read lines and remember where they stopped | Docker containers (through the Docker API), files (followed across rotation), the systemd journal, VictoriaLogs queries |
 | Parsers | Turn a line into an event: an HTTP request, a login, an unknown user, a protocol probe | Traefik access logs, OpenSSH (and SFTP servers built on it), Authelia, and a regular expression for any other log |
-| Feeds | Lists of addresses fetched on a schedule, used to block, to allow, or as data for rules | Any URL with addresses or prefixes, one per line, CSV or JSON lines. Presets: Spamhaus DROP, FireHOL level 1, blocklist.de, Tor exit nodes, Cloudflare's ranges |
+| Feeds | Lists fetched on a schedule, used to block, to allow, or as data for rules | Any URL with addresses or prefixes (one per line, CSV, JSON lines or a JSON document), networks by AS number, or user agents. A catalog of public lists: Spamhaus DROP, FireHOL, AbuseIPDB, IPnoise, ShadowWhisperer, blocklist.de, AI crawlers and AI user agents, search engines, uptime monitors, Cloudflare, Tor, hosting networks |
 | Geolocation | Country and network of each address, for display, rules and country blocking | DB-IP Lite (downloaded monthly) or MaxMind GeoLite2 |
 | Firewall backends | Keep the kernel's sets equal to what should be blocked | nftables (servers and OpenWrt), iptables with ipset (routers whose kernel has no nftables) |
 | Edge platforms | Packaging and service integration on routers | OpenWrt packages with LuCI pages, a tarball with an init script for Asuswrt-Merlin and similar firmware |

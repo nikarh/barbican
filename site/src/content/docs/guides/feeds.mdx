@@ -1,6 +1,6 @@
 ---
 title: Countries, blocklists and allow lists
-description: Blocking countries and continents, public blocklists as blocks, allow lists or data for rules, Cloudflare's ranges, shared addresses, and the allow and deny lists.
+description: Blocking countries and continents, public blocklists, crawler and network lists as blocks, allow lists or data for rules, lists of user agents, Cloudflare's ranges, shared addresses, and the allow and deny lists.
 sidebar:
   order: 3
 ---
@@ -19,7 +19,7 @@ Countries come from the geolocation database: DB-IP's free *IP to Country Lite* 
 
 ## Feeds
 
-A feed is a list of addresses fetched from a URL and refreshed on a schedule (**Settings → Feeds**). Each feed does one of three things:
+A feed is a list fetched from a URL and refreshed on a schedule (**Settings → Feeds**). Most list addresses and prefixes; a feed of addresses does one of three things:
 
 | As | Effect |
 | --- | --- |
@@ -27,27 +27,66 @@ A feed is a list of addresses fetched from a URL and refreshed on a schedule (**
 | **Allows** | every address it lists is never banned and is let through before any drop rule, here and on the edges, like the allow list |
 | **Data** | nothing by itself: rules can ask whether an address is **listed in** it, address pages show it, and the policy can give its addresses [a ban length of their own](/guides/rules/#the-policy) |
 
-<Screenshot name="settings-feeds" alt="Settings, Feeds: the lists added, each marked as blocking, allowing or data, with its URL, how many prefixes it has, when it was fetched and its next refresh, and buttons to add well-known lists." />
+A feed can also list:
 
-Well-known lists can be added with one click:
+- **networks**, by AS number (`AS13335`, `13335`, or the first column of a CSV, with the rest of the line as the network's name): it stands for every prefix the ASN database gives them, and blocks, allows or is data like a list of addresses, or [network by network](#choosing-networks). Without an ASN database it stands for nothing. When the database is updated, the prefixes are looked up again.
+- **user agents**, as a robots.txt's `User-agent:` lines or one per line: for rules only. A rule's **User agent in list** condition matches a request whose user agent names one of them, as a whole word, in any case. Names shorter than three characters, `*` and robots.txt's own tokens (`__usage...`) are left out.
 
-| Preset | URL | As | Refreshed |
+<Screenshot name="settings-feeds" alt="Settings, Feeds: the lists in use, grouped by where they come from, one line each with its state, whether it blocks, allows or is data, how many entries it has and how old its copy is, with filters by use above them." />
+
+The tab has two views: **In use** and **Catalog**. In use, the lists are grouped by where they come from, one line each: a dot for its state (green: fine, yellow: not fetched yet, red: the last fetch failed, grey: off), its use, how many entries it has and how old its copy is; a failing list shows its error under it. A group's header sums it up (`3 allow · 1 data · 1 failing`) and folds it away; a group of more than four lists starts folded unless one fails. The chips above filter by use, or to the failing or [redundant](#overlap) lists. A list opens with a tap: what it holds (prefixes, networks and the prefixes they stand for, or user agents, and how many addresses), when it was fetched and is fetched next, its last error, what uses it (the rules that ask for it, a ban length the policy gives it), its [overlap](#overlap) with the other lists, and **Fetch now**, **Edit** and **Remove**.
+
+### Overlap
+
+Lists overlap: FireHOL's level 1 includes Spamhaus DROP, level 2 includes blocklist.de, and every blocklist shares addresses with the others. A list whose addresses are 95% or more in another list used the same way (both blocking, both allowing or both data) says so under its line, **Almost all of it is in "…" too**, and the **Redundant** filter shows those: with the other list on, it adds little. Lists used differently are not compared that way: Googlebot's addresses being among the hosting networks doesn't make an allowing list redundant.
+
+An opened list shows its **Overlap**: how much of it no other list (that is on) holds, and for each list that shares addresses with it, how many, and which share of each list that is. IPv4 lists are compared by addresses, IPv6 ones by /48 networks.
+
+### Choosing networks
+
+A list of networks can do something else with some of its networks than with the rest (**Choose networks**, on an opened list of networks). Each network, largest first and searchable by number or name, does what the list does, or is blocked, allowed, data, or left out. For example, the hosting networks as data, with a few networks you never want to hear from blocked; or blocked, with the cloud you run your own monitoring from allowed. A network left out is not listed either: rules and ban lengths don't see it. Allowing the rest of a list of hosting networks lets most scanners through, never banned: the dialog warns about it.
+
+### The catalog
+
+The **Catalog** offers public lists, grouped by where they come from. **Set up** (or **Change**) on a source shows its lists, each with a suggested use, and sets them all at once: a list set to **Off** is removed. **Use the suggestions** goes back to the suggested uses and refresh. Some sources are the same list over different periods (the addresses of the last day, week or month): one of them is used at a time, and the feed keeps its name when the period changes.
+
+<Screenshot name="feeds-source" alt="A source of the catalog, Search engines and SEO crawlers: what it is, its lists (Googlebot, Bingbot, Applebot and others), each with its suggested use and a choice of off, block, allow or data, and how often they are fetched." />
+
+| Source | Lists | Suggested | Fetched |
 | --- | --- | --- | --- |
-| Spamhaus DROP, and its IPv6 list | `https://www.spamhaus.org/drop/drop_v4.json`, `drop_v6.json` | blocks | every 12 hours |
-| FireHOL level 1 | `https://iplists.firehol.org/files/firehol_level1.netset` | blocks | every 6 hours |
-| blocklist.de | `https://lists.blocklist.de/lists/all.txt` | data | every 6 hours |
-| Tor exit nodes | `https://check.torproject.org/torbulkexitlist` | data | every 6 hours |
-| Allow Cloudflare, and its IPv6 list | `https://www.cloudflare.com/ips-v4`, `ips-v6` | allows | daily |
+| [Spamhaus DROP](https://www.spamhaus.org/blocklists/do-not-route-or-peer/) | IPv4 and IPv6 networks hijacked or leased by criminals | block | every 12 hours |
+| [FireHOL](https://iplists.firehol.org/) | levels 1 to 4, web server attackers, abusers of the last day and 30 days | levels 1 and 2 block, level 3 data | hourly |
+| [AbuseIPDB](https://github.com/borestad/blocklist-abuseipdb) | the most reported addresses (about 100% confidence), of the last 1, 3, 7, 14, 30, 60 or 90 days; IPv4 only | 7 days, block | every 3 hours |
+| [IPnoise](https://ipnoise.sekuripy.hr/) | addresses caught by honeypots, of the last 1, 7, 14 or 30 days | 7 days, block | every 2 hours |
+| [ShadowWhisperer](https://github.com/ShadowWhisperer/IPs) | threats, scanners, probes, unclassified, tunnels (proxies and VPNs) | threats and scanners block, probes data | hourly |
+| [blocklist.de](https://www.blocklist.de/en/export.html) | all, and by service: SSH, mail, web, IMAP, forum bots, logins, persistent | all: data | every 6 hours |
+| [AI crawlers](https://github.com/tbeachill/ai-crawler-ip-ranges) | the published addresses of OpenAI, Anthropic, Amazon, Common Crawl, Meta, Perplexity, Mistral, Google's and DuckDuckGo's AI fetchers, by purpose: training, search, user fetches | training crawlers block, the others data | daily |
+| [AI user agents](https://github.com/ai-robots-txt/ai.robots.txt) | the user agents of AI crawlers, assistants and agents | for rules | daily |
+| [Search engines and SEO crawlers](https://github.com/ipverse/bot-ip-blocks) | Googlebot, Google's special crawlers and user fetches, Bingbot, Applebot, DuckDuckBot, Kagibot, Yandex, AhrefsBot, SE Ranking | search engines allow, the others data | daily |
+| [Uptime monitors](https://github.com/ipverse/bot-ip-blocks) | UptimeRobot, Better Stack, Pingdom, StatusCake, Datadog, New Relic, Checkly, HetrixTools, Oh Dear, updown.io | none: allow yours | daily |
+| [Cloudflare](https://www.cloudflare.com/ips/) | IPv4 and IPv6 ranges | allow | daily |
+| [Tor](https://check.torproject.org/) | exit relays | data | hourly |
+| [Hosting and cloud networks](https://github.com/brianhama/bad-asn-list) | networks (ASNs) of hosting, cloud and colocation providers | data | weekly |
 
-**Add a list** takes any other URL, with HTTP basic authentication if it needs it. A list is understood when its lines are addresses or prefixes, with comments after `#` or `;`, CSV or whitespace-separated columns (the first address in the line counts), or JSON objects with a `cidr` or `ip` field. Private, loopback and other addresses that are never blocked are left out. The prefixes are merged before they are used.
+Lists that repeat others are left out: the AI companies' crawlers come from one source, by company and purpose, and search engines and SEO crawlers from another. FireHOL's level 2 includes blocklist.de's whole list.
+
+Allowing the search engines' crawlers keeps them from being banned when they trip a rule (a crawler following old links collects 404s). The hosting networks are hundreds of networks, the big clouds among them, where most bots, scanners and VPNs run from: use them in rules and ban lengths rather than as a block. The AI user agents catch crawlers that publish no addresses, as long as they admit what they are: a rule such as "HTTP, user agent in list *AI user agents*, at once, ban for a week".
+
+### Your own lists
+
+**Add**, on **Your own lists**, takes any other URL, with HTTP basic authentication if it needs it. A list of addresses is understood when its lines are addresses or prefixes, with comments after `#` or `;`, CSV or whitespace-separated columns (the first address in the line counts), or JSON objects with a `cidr` or `ip` field. A JSON document (such as the ranges Google and OpenAI publish for their crawlers) is understood too: every string in it that is an address or a prefix counts, or only those under a [JSON pointer](https://datatracker.ietf.org/doc/html/rfc6901) (`/services/Googlebot`). Loopback, link-local, multicast and other addresses that are never blocked are left out. The prefixes are merged before they are used.
 
 **CrowdSec**'s blocklists are added through a "blocklist integration" of a CrowdSec console account: its URL, user and password.
 
-A feed is fetched again when its refresh is due (conditionally, so an unchanged list costs one small request), and with **Fetch now**. When a fetch fails, the feed keeps the list it had, and its error is shown.
+### Fetching
+
+A feed is fetched when it is added and when its refresh is due (each feed has its own, ten minutes at least), and with **Fetch now**. Fetches are conditional when the server gives an `ETag`, so an unchanged list costs one small request. Feeds of the same URL (and credentials), such as several services of one JSON document, are fetched together, with one download.
+
+When a fetch fails, the feed keeps the list it had, shows the error, and is tried again after 5 minutes, then 10, 20 and so on, doubling up to its refresh. After a restart, a feed whose last fetch failed is tried again 5 minutes after that attempt, or at once if it was longer ago.
 
 ## Behind Cloudflare's proxy
 
-A site behind Cloudflare's proxy is reached from Cloudflare's addresses, not its visitors'. Geolocation databases place some of Cloudflare's addresses in Asia, Africa or South America, whichever data centre uses them: blocking those continents would then drop your own visitors now and then. Add the **Allow Cloudflare** feeds: Cloudflare's ranges are then always let through, before the country blocks.
+A site behind Cloudflare's proxy is reached from Cloudflare's addresses, not its visitors'. Geolocation databases place some of Cloudflare's addresses in Asia, Africa or South America, whichever data centre uses them: blocking those continents would then drop your own visitors now and then. Set up the **Cloudflare** source of the catalog (both lists allow): Cloudflare's ranges are then always let through, before the country blocks.
 
 ## Shared addresses
 

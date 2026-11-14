@@ -22,7 +22,7 @@ The screenshots on this site show synthetic data.
 - **Recent bans**, with their address or prefix, country, reason, when they started and how long they have left.
 - **Live**: what rules matched (and logins), new bans and lifted bans, newest first, as they happen. It opens with the latest 40 since the agent started, so it isn't empty until the next one comes.
 - **Firewall**: whether it is applied (or in dry run, or failing, with the error), how many addresses and prefixes are blocked, and how many country and list prefixes are loaded.
-- **Geolocation** and **Feeds**: the databases and lists in use, when they were last fetched, and their errors; for each list, how many prefixes it has and whether it blocks, allows or is only data for rules.
+- **Geolocation** and **Feeds**: the databases and lists in use, when they were last fetched, and their errors; for each list, how many entries it has (prefixes, networks or user agents) and whether it blocks, allows or is only data for rules.
 - **Sources**: each source's input, how many lines it read and matched, when the last came, and its error.
 - **Edges**: each edge that follows the agent, connected or not, enforcing or in dry run, what it holds and dropped.
 - **Banned, by country** and **Events, by rule**, over the last 30 days.
@@ -63,7 +63,7 @@ The rules in the order they are tried, each with a switch, what it looks at, its
 
 - **Lengths and countries**: the [policy](/guides/rules/#the-policy): ban lengths, repeat offenders, lengths per country, network and blocklist, countries and continents blocked as a whole, trust and event retention.
 - **Allow and deny**: the [allow and deny lists](/guides/feeds/#allow-and-deny-lists).
-- **Feeds**: [lists fetched from the internet](/guides/feeds/#feeds).
+- **Feeds**: [lists fetched from the internet](/guides/feeds/#feeds), how they [overlap](/guides/feeds/#overlap), and [the catalog](/guides/feeds/#the-catalog) of public lists to add.
 - **Geolocation**: the country and network databases: which ones are in use, from when, when they were downloaded, whether downloads are on and when the agent looks for new ones next, and download errors.
 - **Edges** (with the edge API on): every configured edge client and what it reports: see [Edge agents](/edge/overview/).
 - **About**: the version, the sources, whether the firewall is on or in dry run, whether the edge API is on, and its certificate's fingerprint, which edges are configured with.
