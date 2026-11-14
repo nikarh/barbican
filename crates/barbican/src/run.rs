@@ -11,7 +11,8 @@ use tokio::sync::mpsc;
 use crate::app::{App, now};
 use crate::config::Config;
 use crate::db::{self, Db};
-use crate::feeds::{FeedDef, Loaded};
+use crate::feeds::{Content, FeedDef, Loaded, Parsed};
+use crate::geo::Geo;
 use crate::rules::{Policy, Rule};
 use crate::state::{Bans, Feed, Trusted};
 use crate::{engine, firewall, geo, source};
@@ -59,7 +60,7 @@ pub async fn load_rules(db: &Db) -> Result<Vec<Rule>, db::Error> {
     Ok(rules)
 }
 
-pub async fn load_feeds(db: &Db) -> Result<Vec<Feed>, db::Error> {
+pub async fn load_feeds(db: &Db, geo: Arc<Geo>) -> Result<Vec<Feed>, db::Error> {
     let mut feeds = Vec::new();
     for row in db::feeds(&db.pool).await? {
         let Ok(mut def) = serde_json::from_str::<FeedDef>(&row.definition) else {
@@ -67,19 +68,66 @@ pub async fn load_feeds(db: &Db) -> Result<Vec<Feed>, db::Error> {
         };
         def.id = row.id;
         let data = row.data.clone().unwrap_or_default();
-        let loaded = tokio::task::spawn_blocking(move || Loaded::from_data(&data))
+        let content = def.content;
+        let geo = Arc::clone(&geo);
+        let loaded = tokio::task::spawn_blocking(move || Loaded::from_stored(content, &data, &geo))
             .await
             .unwrap_or_default();
         feeds.push(Feed {
-            def,
             loaded: Arc::new(loaded),
             fetched: row.fetched,
             succeeded: row.succeeded,
             changed: row.changed,
+            // A list whose last fetch failed is tried again soon, not a whole interval later.
+            failures: u32::from(row.error.is_some()),
             error: row.error,
+            ..Feed::new(def)
         });
+        if let Some(feed) = feeds.last_mut() {
+            feed.refresh();
+        }
     }
     Ok(feeds)
+}
+
+/// Looks the networks of the lists of networks up again (after the ASN database changed).
+pub async fn reload_network_feeds(app: &Arc<App>) {
+    let Ok(rows) = db::feeds(&app.db.pool).await else {
+        return;
+    };
+    let geo = app.geo();
+    let mut reloaded = Vec::new();
+    for row in rows {
+        let Some(feed) = app.state.read().ok().and_then(|s| {
+            s.feeds
+                .iter()
+                .find(|f| f.def.id == row.id && f.def.content == Content::Networks)
+                .map(|f| f.def.id)
+        }) else {
+            continue;
+        };
+        let data = row.data.unwrap_or_default();
+        let geo = Arc::clone(&geo);
+        let loaded = tokio::task::spawn_blocking(move || {
+            Loaded::from_stored(Content::Networks, &data, &geo)
+        })
+        .await
+        .unwrap_or_default();
+        reloaded.push((feed, loaded));
+    }
+    if reloaded.is_empty() {
+        return;
+    }
+    if let Ok(mut state) = app.state.write() {
+        for (id, loaded) in reloaded {
+            if let Some(feed) = state.feeds.iter_mut().find(|f| f.def.id == id) {
+                feed.loaded = Arc::new(loaded);
+                feed.refresh();
+            }
+        }
+    }
+    firewall::rebuild_rules(app);
+    firewall::refresh_lists(app);
 }
 
 pub async fn load(app: &Arc<App>) -> Result<(), String> {
@@ -98,7 +146,7 @@ pub async fn load(app: &Arc<App>) -> Result<(), String> {
     let trust = db::trusted(&db.pool, now)
         .await
         .map_err(|e| e.to_string())?;
-    let feeds = load_feeds(db).await.map_err(|e| e.to_string())?;
+    let feeds = load_feeds(db, app.geo()).await.map_err(|e| e.to_string())?;
     if let Ok(mut state) = app.state.write() {
         state.rules = rules;
         state.policy = policy;
@@ -184,115 +232,227 @@ async fn geo_updates(app: Arc<App>) {
             }
             prepare_coverage(&app);
             firewall::refresh_countries(&app).await;
+            reload_network_feeds(&app).await;
         }
         tokio::time::sleep(geo::CHECK_EVERY).await;
     }
 }
 
-/// Fetches one feed and puts its new content in force.
+/// Fetches a feed and puts its new content in force; with it, the other feeds of the same URL (lists of one
+/// document, such as services of a JSON file), so that it is downloaded once.
 pub async fn fetch_feed(app: &Arc<App>, id: i64) {
-    let Some(def) = app.state.read().ok().and_then(|s| {
-        s.feeds
-            .iter()
-            .find(|f| f.def.id == id)
-            .map(|f| f.def.clone())
-    }) else {
+    let group = feed_group(app, id);
+    let Some(def) = group.iter().find(|d| d.id == id).cloned() else {
         return;
     };
-    let etag = db::feeds(&app.db.pool)
+    // A conditional request only when every feed of the group has the copy the etag names.
+    let etags: Vec<Option<String>> = db::feeds(&app.db.pool)
         .await
-        .ok()
-        .and_then(|rows| rows.into_iter().find(|r| r.id == id))
-        .and_then(|r| r.etag);
+        .map(|rows| {
+            group
+                .iter()
+                .map(|d| {
+                    rows.iter()
+                        .find(|r| r.id == d.id)
+                        .and_then(|r| r.etag.clone())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let etag = etags
+        .first()
+        .cloned()
+        .flatten()
+        .filter(|e| etags.iter().all(|x| x.as_ref() == Some(e)));
     let now = now();
     let result = crate::feeds::fetch(&app.http, &def, etag.as_deref()).await;
-    let (loaded, error) = match result {
+    let geo = app.geo();
+    // Per feed: its new contents (or none: unchanged), or the error.
+    let mut outcomes: Vec<(i64, Result<Option<Loaded>, String>)> = Vec::new();
+    match result {
         Ok(crate::feeds::Fetched::NotModified) => {
-            let _ = db::feed_fetched(&app.db.pool, id, now, Ok((None, etag.as_deref()))).await;
-            (None, None)
+            for d in &group {
+                let _ =
+                    db::feed_fetched(&app.db.pool, d.id, now, Ok((None, etag.as_deref()))).await;
+                outcomes.push((d.id, Ok(None)));
+            }
         }
         Ok(crate::feeds::Fetched::New { body, etag }) => {
-            let (body, loaded) = tokio::task::spawn_blocking(move || {
-                let loaded = Loaded::from_data(&body);
-                // Stored merged, one prefix per line: smaller, and read back quickly.
-                let data = barbican_common::edge::render_list("", &loaded.nets);
-                (data, loaded)
-            })
-            .await
-            .unwrap_or_default();
-            let count = i64::try_from(loaded.nets.len()).unwrap_or(i64::MAX);
-            let _ = db::feed_fetched(
-                &app.db.pool,
-                id,
-                now,
-                Ok((Some((&body, count)), etag.as_deref())),
-            )
-            .await;
-            tracing::info!(feed = %def.name, prefixes = count, "Feed fetched");
-            (Some(loaded), None)
+            let body = Arc::new(body);
+            for d in &group {
+                let parsed = {
+                    let (body, d, geo) = (Arc::clone(&body), d.clone(), Arc::clone(&geo));
+                    tokio::task::spawn_blocking(move || {
+                        Parsed::of(&body, &d).map(|parsed| {
+                            // Stored one entry per line, merged: smaller, and read back quickly.
+                            let data = parsed.render();
+                            (data, Loaded::from_parsed(parsed, &geo))
+                        })
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string()))
+                };
+                match parsed {
+                    Ok((data, loaded)) => {
+                        let count = i64::try_from(loaded.entries).unwrap_or(i64::MAX);
+                        let _ = db::feed_fetched(
+                            &app.db.pool,
+                            d.id,
+                            now,
+                            Ok((Some((&data, count)), etag.as_deref())),
+                        )
+                        .await;
+                        tracing::info!(feed = %d.name, entries = count, "Feed fetched");
+                        outcomes.push((d.id, Ok(Some(loaded))));
+                    }
+                    Err(e) => {
+                        tracing::warn!(feed = %d.name, error = %e, "A fetched feed can't be read");
+                        let _ = db::feed_fetched(&app.db.pool, d.id, now, Err(&e)).await;
+                        outcomes.push((d.id, Err(e)));
+                    }
+                }
+            }
         }
         Err(e) => {
             tracing::warn!(feed = %def.name, error = %e, "Fetching a feed failed");
-            let _ = db::feed_fetched(&app.db.pool, id, now, Err(&e)).await;
-            (None, Some(e))
+            for d in &group {
+                let _ = db::feed_fetched(&app.db.pool, d.id, now, Err(&e)).await;
+                outcomes.push((d.id, Err(e.clone())));
+            }
         }
-    };
-    if let Ok(mut state) = app.state.write()
-        && let Some(feed) = state.feeds.iter_mut().find(|f| f.def.id == id)
-    {
-        feed.fetched = Some(now);
-        if error.is_none() {
-            feed.succeeded = Some(now);
-        }
-        feed.error = error;
-        if let Some(loaded) = loaded {
-            feed.loaded = Arc::new(loaded);
-            feed.changed = Some(now);
+    }
+    record_outcomes(app, now, outcomes);
+}
+
+/// Puts what fetches brought in force.
+fn record_outcomes(app: &Arc<App>, now: i64, outcomes: Vec<(i64, Result<Option<Loaded>, String>)>) {
+    if let Ok(mut state) = app.state.write() {
+        for (id, outcome) in outcomes {
+            let Some(feed) = state.feeds.iter_mut().find(|f| f.def.id == id) else {
+                continue;
+            };
+            feed.fetched = Some(now);
+            match outcome {
+                Ok(loaded) => {
+                    feed.succeeded = Some(now);
+                    feed.error = None;
+                    feed.failures = 0;
+                    if let Some(loaded) = loaded {
+                        feed.loaded = Arc::new(loaded);
+                        feed.changed = Some(now);
+                        feed.refresh();
+                    }
+                }
+                Err(e) => {
+                    feed.error = Some(e);
+                    feed.failures = feed.failures.saturating_add(1);
+                }
+            }
         }
     }
     firewall::rebuild_rules(app);
     firewall::refresh_lists(app);
 }
 
+/// The feed and the other enabled feeds of the same URL (and credentials).
+fn feed_group(app: &App, id: i64) -> Vec<FeedDef> {
+    app.state
+        .read()
+        .ok()
+        .and_then(|s| {
+            let def = &s.feeds.iter().find(|f| f.def.id == id)?.def;
+            Some(
+                s.feeds
+                    .iter()
+                    .filter(|f| {
+                        f.def.id == id
+                            || (f.def.enabled
+                                && f.def.url == def.url
+                                && f.def.username == def.username
+                                && f.def.password == def.password)
+                    })
+                    .map(|f| f.def.clone())
+                    .collect(),
+            )
+        })
+        .unwrap_or_default()
+}
+
 /// The shortest time between two fetches of a feed.
 pub const FEED_MIN_REFRESH: u64 = 600;
 
-/// How often the agent looks for feeds due a fetch (it also does when one is added or changed).
-pub const FEED_CHECK_EVERY: Duration = Duration::from_mins(5);
+/// After a failed fetch, the first retry; each failure in a row doubles it, up to the feed's refresh.
+pub const FEED_RETRY: u64 = 300;
 
-/// When a feed is due its next fetch (`None`: it is off): its refresh interval after its last attempt, failed or
-/// not, and right away when it was never fetched. The fetch happens at the next look for due feeds.
+/// When a feed is due its next fetch (`None`: it is off): right away when it was never fetched; its refresh
+/// interval after its last attempt; after a failed one, sooner (5 minutes, doubled with each failure in a row, up to
+/// the interval).
 #[must_use]
 pub fn feed_due(feed: &Feed) -> Option<i64> {
     if !feed.def.enabled {
         return None;
     }
-    let every = i64::try_from(feed.def.refresh_secs.max(FEED_MIN_REFRESH)).unwrap_or(i64::MAX);
-    Some(feed.fetched.map_or(0, |t| t.saturating_add(every)))
+    let every = feed.def.refresh_secs.max(FEED_MIN_REFRESH);
+    let wait = if feed.failures > 0 {
+        FEED_RETRY
+            .saturating_mul(1u64 << (feed.failures - 1).min(20))
+            .min(every)
+    } else {
+        every
+    };
+    let wait = i64::try_from(wait).unwrap_or(i64::MAX);
+    Some(feed.fetched.map_or(0, |t| t.saturating_add(wait)))
 }
 
 /// Fetches feeds when they are due (and when one is added or changed).
 async fn feed_updates(app: Arc<App>) {
     loop {
         let now = now();
-        let due: Vec<i64> = app
+        let (due, next): (Vec<i64>, Option<i64>) = app
             .state
             .read()
             .map(|s| {
-                s.feeds
+                let due = s
+                    .feeds
                     .iter()
-                    .filter(|f| f.def.enabled)
                     .filter(|f| feed_due(f).is_some_and(|due| now >= due))
                     .map(|f| f.def.id)
-                    .collect()
+                    .collect();
+                let next = s
+                    .feeds
+                    .iter()
+                    .filter_map(feed_due)
+                    .filter(|d| *d > now)
+                    .min();
+                (due, next)
             })
             .unwrap_or_default();
+        let mut done: Vec<i64> = Vec::new();
         for id in due {
+            // Fetched already with another feed of its URL.
+            if done.contains(&id) {
+                continue;
+            }
             fetch_feed(&app, id).await;
+            done.extend(app.state.read().map_or_else(
+                |_| Vec::new(),
+                |s| {
+                    s.feeds
+                        .iter()
+                        .filter(|f| f.fetched.is_some_and(|t| t >= now))
+                        .map(|f| f.def.id)
+                        .collect()
+                },
+            ));
         }
+        if !done.is_empty() {
+            continue;
+        }
+        // Until the next feed is due (at least a second, at most an hour), or one is added or changed.
+        let wait = next.map_or(3_600, |n| (n - now).clamp(1, 3_600));
         tokio::select! {
             () = app.feeds_wake.notified() => {}
-            () = tokio::time::sleep(FEED_CHECK_EVERY) => {}
+            () = tokio::time::sleep(Duration::from_secs(wait.unsigned_abs())) => {}
         }
     }
 }
@@ -482,5 +642,44 @@ pub async fn run(config: Config, dry_run: bool) -> Result<(), String> {
         Some(result) = servers.join_next(), if !servers.is_empty() => {
             result.map_err(|e| e.to_string())?
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_fetches_are_tried_again_sooner() {
+        let mut feed = Feed::new(FeedDef {
+            id: 1,
+            name: "x".to_owned(),
+            url: "https://example.com/".to_owned(),
+            enabled: true,
+            block: false,
+            allow: false,
+            refresh_secs: 6 * 3_600,
+            username: None,
+            password: None,
+            content: Content::Addresses,
+            select: None,
+            catalog: None,
+            networks: Vec::new(),
+        });
+        assert_eq!(feed_due(&feed), Some(0));
+        feed.fetched = Some(1_000);
+        assert_eq!(feed_due(&feed), Some(1_000 + 6 * 3_600));
+        let retries: Vec<i64> = (1..=8)
+            .map(|failures| {
+                feed.failures = failures;
+                feed_due(&feed).unwrap() - 1_000
+            })
+            .collect();
+        assert_eq!(
+            retries,
+            vec![300, 600, 1_200, 2_400, 4_800, 9_600, 19_200, 21_600]
+        );
+        feed.def.enabled = false;
+        assert_eq!(feed_due(&feed), None);
     }
 }

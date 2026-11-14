@@ -53,6 +53,13 @@ total: Extent,
 known: Extent, };
 
 /**
+ * The catalog entry a feed was added from.
+ */
+export type CatalogRef = { source: string, item: string, };
+
+export type Category = "threats" | "bots" | "networks";
+
+/**
  * What an event must look like for a rule to count it. Unset conditions match anything; regular expressions match
  * anywhere in the text unless anchored, and one starting with `!` matches what the rest doesn't match.
  */
@@ -88,7 +95,16 @@ what: string | null,
 /**
  * The address is in one of these blocklists (feeds), by name.
  */
-listed: Array<string>, };
+listed: Array<string>, 
+/**
+ * HTTP: the user agent is in one of these lists of user agents (feeds), by name.
+ */
+agents: Array<string>, };
+
+/**
+ * What a feed lists.
+ */
+export type Content = "addresses" | "networks" | "agents";
 
 export type Count = { key: string, count: number, };
 
@@ -244,13 +260,25 @@ succeeded: number | null,
  */
 changed: number | null, 
 /**
- * When it is fetched next (the agent looks for due feeds every 5 minutes); `null`: it is off.
+ * When it is fetched next; `null`: it is off.
  */
 next: number | null, 
 /**
- * Prefixes in the last good copy.
+ * Entries in the last good copy: prefixes, networks or user agents.
  */
-count: number, error: string | null, };
+count: number, 
+/**
+ * The addresses it stands for (a list of networks: their prefixes in the ASN database), merged.
+ */
+extent: Extent, error: string | null, 
+/**
+ * Failed attempts in a row; failed fetches are tried again sooner than the refresh.
+ */
+failures: number, 
+/**
+ * Another list, used the same way, that holds 95% or more of its addresses: with it, this one adds little.
+ */
+coveredBy: string | null, };
 
 export type FeedDef = { 
 /**
@@ -258,7 +286,7 @@ export type FeedDef = {
  */
 id: number, 
 /**
- * What rules' `listed` condition and the UI call it.
+ * What rules' `listed` and `agents` conditions and the UI call it.
  */
 name: string, url: string, enabled: boolean, 
 /**
@@ -273,7 +301,61 @@ allow: boolean, refreshSecs: number,
 /**
  * HTTP basic authentication, for lists behind an account (e.g. a CrowdSec blocklist integration).
  */
-username: string | null, password: string | null, };
+username: string | null, password: string | null, content: Content, 
+/**
+ * In a JSON document, where the list is: a JSON pointer (`/services/Googlebot`). Every address in the strings
+ * under it counts. Unset: the whole document.
+ */
+select: string | null, 
+/**
+ * The catalog entry it was added from, if it was.
+ */
+catalog: CatalogRef | null, 
+/**
+ * A list of networks: networks that do something else than the list as a whole (blocked out of a list that
+ * is data, left out, ...). A network the list doesn't have does nothing.
+ */
+networks: Array<NetworkUse>, };
+
+/**
+ * A network of a list of networks.
+ */
+export type FeedNetwork = { asn: number, 
+/**
+ * As the list names it, or else the ASN database.
+ */
+name: string | null, 
+/**
+ * Its prefixes in the ASN database.
+ */
+extent: Extent, };
+
+/**
+ * How much of a list's addresses other lists hold too.
+ */
+export type FeedOverlap = { 
+/**
+ * The list's addresses: IPv4 ones, and IPv6 space in /48 networks.
+ */
+v4: number, v6: number, 
+/**
+ * Of those, the ones no other list (that is on) holds.
+ */
+uniqueV4: number, uniqueV6: number, 
+/**
+ * The other lists that hold some of them, most first.
+ */
+others: Array<OverlapWith>, };
+
+export type FeedsApplyParams = { 
+/**
+ * Feeds to remove, by id.
+ */
+delete: number[], 
+/**
+ * Feeds to add (id 0) or change.
+ */
+save: Array<FeedDef>, };
 
 export type FirewallStatus = { 
 /**
@@ -376,6 +458,16 @@ export type IpRow = { ip: string, country: string | null, asn: number | null, as
  */
 banned: boolean, banUntil: number | null, trusted: boolean, };
 
+export type Item = { key: string, 
+/**
+ * The feed's name once added.
+ */
+name: string, 
+/**
+ * What the UI calls the choice (for `one`: the period).
+ */
+label: string, description: string, url: string, select: string | null, content: Content, suggested: Use, };
+
 /**
  * The kinds of events, as rules and the UI name them.
  */
@@ -401,6 +493,21 @@ edgeApi: boolean,
  */
 edgeFingerprint: string | null, };
 
+/**
+ * A network of a list of networks that does something else than the list.
+ */
+export type NetworkUse = { asn: number, use: Use, };
+
+export type OverlapWith = { id: number, name: string, 
+/**
+ * The addresses both hold.
+ */
+v4: number, v6: number, 
+/**
+ * The other list's own size, to say how much of it this list holds.
+ */
+otherV4: number, otherV6: number, };
+
 export type Overview = { bansActive: number, bansToday: number, eventsToday: number, ips: number, trusted: number, firewall: FirewallStatus, sources: Array<SourceStatus>, 
 /**
  * The last 30 days, oldest first.
@@ -423,6 +530,11 @@ export type Page<T> = { rows: Array<T>,
  * How many rows match in all.
  */
 total: number, };
+
+/**
+ * How a source's lists are picked.
+ */
+export type Pick = "one" | "many";
 
 /**
  * A blocked country or continent, and how much of the address space it is.
@@ -527,6 +639,20 @@ prefixV4: number,
  */
 prefixV6: number, };
 
+export type Source = { id: string, name: string, description: string, homepage: string, category: Category, pick: Pick, 
+/**
+ * How often the lists change upstream, as their maintainers say; `null`: not said.
+ */
+updates: string | null, 
+/**
+ * The suggested time between fetches.
+ */
+refreshSecs: number, 
+/**
+ * What to know before using it.
+ */
+note: string | null, items: Array<Item>, };
+
 export type SourceStatus = { name: string, parser: string, 
 /**
  * Where it reads from, e.g. `docker: traefik`.
@@ -534,3 +660,8 @@ export type SourceStatus = { name: string, parser: string,
 input: string, connected: boolean, lines: number, parsed: number, lastLine: number | null, error: string | null, };
 
 export type TrustInfo = { user: string, until: number, };
+
+/**
+ * What a feed (or one network of a list of networks) does with what it lists.
+ */
+export type Use = "off" | "block" | "allow" | "data";

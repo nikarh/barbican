@@ -6,6 +6,7 @@ import { Bars } from '../components/Bars'
 import { EdgeLines } from '../components/Edges'
 import { GeoSummary } from '../components/Geo'
 import { Country, Panel, Stat } from '../components/ui'
+import { entries } from '../lib/feeds'
 import { edgeDropped } from '../lib/edges'
 import { ago, compact, count, day, KIND_LABELS, remaining } from '../lib/format'
 import { href, ipHref } from '../lib/router'
@@ -64,7 +65,7 @@ function FeedLine({ feed: f, now }: { feed: Feed; now: number }) {
   const failing = f.def.enabled && f.error !== null
   let role = 'blocked'
   if (f.def.allow) role = 'allowed'
-  else if (!f.def.block) role = 'data'
+  else if (!f.def.block) role = f.def.content === 'agents' ? 'for rules' : 'data'
   let when = f.succeeded === null ? 'not yet checked' : `checked ${ago(f.succeeded, now)}`
   if (!f.def.enabled) when = 'off'
   return (
@@ -84,7 +85,7 @@ function FeedLine({ feed: f, now }: { feed: Feed; now: number }) {
           </Text>
         )}
         <Text fz={12} c="var(--ink-faint)">
-          {count(f.count)} prefixes · {when}
+          {entries(f)} · {when}
         </Text>
       </div>
     </div>

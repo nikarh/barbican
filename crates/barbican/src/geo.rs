@@ -47,8 +47,7 @@ pub struct Extent {
 
 impl Extent {
     /// Of merged prefixes.
-    #[cfg(test)]
-    fn of(nets: &[Net]) -> Self {
+    pub fn of(nets: &[Net]) -> Self {
         let mut extent = Self {
             prefixes: nets.len() as u64,
             ..Self::default()
@@ -233,6 +232,50 @@ impl Geo {
             }
         }
         aggregate(&nets)
+    }
+
+    /// The prefixes the ASN database gives to each of these networks (autonomous systems), merged; empty without an
+    /// ASN database. Reads the whole database: seconds.
+    #[must_use]
+    pub fn networks_by_asn(&self, asns: &[u32]) -> HashMap<u32, Vec<Net>> {
+        let mut found: HashMap<u32, Vec<Net>> = HashMap::new();
+        let Some(reader) = &self.asn else {
+            return found;
+        };
+        if asns.is_empty() {
+            return found;
+        }
+        let wanted: std::collections::HashSet<u32> = asns.iter().copied().collect();
+        let mut decided: HashMap<usize, Option<u32>> = HashMap::new();
+        let Ok(within) = reader.networks(WithinOptions::default()) else {
+            return found;
+        };
+        for item in within.flatten() {
+            let Some(offset) = item.offset() else {
+                continue;
+            };
+            let asn = *decided.entry(offset).or_insert_with(|| {
+                item.decode::<geoip2::Asn>()
+                    .ok()
+                    .flatten()
+                    .and_then(|r| r.autonomous_system_number)
+                    .filter(|asn| wanted.contains(asn))
+            });
+            let Some(asn) = asn else {
+                continue;
+            };
+            if let Ok(network) = item.network() {
+                let net = Net::prefix(network.ip(), network.prefix());
+                if net.family() == Family::V6 && is_ipv4_alias(&network.ip()) {
+                    continue;
+                }
+                found.entry(asn).or_default().push(net);
+            }
+        }
+        for nets in found.values_mut() {
+            *nets = aggregate(nets);
+        }
+        found
     }
 
     /// How much blocking these countries and continents takes (each, and all together), or `None` without a country

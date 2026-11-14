@@ -1,14 +1,11 @@
 import {
-  ActionIcon,
   Alert,
   Anchor,
   Badge,
   Box,
   Button,
   Group,
-  Modal,
   NumberInput,
-  SegmentedControl,
   Select,
   SimpleGrid,
   Stack,
@@ -17,7 +14,7 @@ import {
   TextInput,
   Tooltip,
 } from '@mantine/core'
-import { IconPlus, IconRefresh, IconTrash, IconWorld } from '@tabler/icons-react'
+import { IconPlus, IconWorld } from '@tabler/icons-react'
 import { useState, type ReactNode } from 'react'
 
 import {
@@ -25,30 +22,18 @@ import {
   useCoverage,
   useEdges,
   useEntries,
-  useFeedPresets,
   useFeeds,
   useMeta,
   usePolicy,
 } from '../api/hooks'
-import type { BlockCoverage, Extent, Feed, FeedDef, Policy } from '../api/generated/model'
-import { ActionCard } from '../components/ActionCard'
+import type { BlockCoverage, Extent, Policy } from '../api/generated/model'
 import { EdgeCard } from '../components/Edges'
 import { AddPicker, EditableList } from '../components/EditableList'
 import { COUNTRY_SELECT } from '../components/countrySelect'
 import { GeoDatabases } from '../components/Geo'
+import { FeedsTab } from './Feeds'
 import { CountryLabel, LengthInput, LengthSelect, Panel } from '../components/ui'
-import {
-  ago,
-  compact,
-  CONTINENTS,
-  count,
-  COUNTRIES,
-  countryName,
-  fromNow,
-  lengthInWords,
-  remaining,
-  share,
-} from '../lib/format'
+import { compact, CONTINENTS, count, COUNTRIES, countryName, remaining, share } from '../lib/format'
 import { navigate } from '../lib/router'
 import { useNow } from '../lib/useNow'
 
@@ -125,7 +110,9 @@ function AsnAdder({ taken, onAdd }: { taken: number[]; onAdd: (asn: number) => v
 
 function LengthsPanel({ p, set }: { p: Policy; set: (patch: Partial<Policy>) => void }) {
   const feeds = useFeeds()
-  const feedNames = (feeds.data ?? []).map((f) => f.def.name)
+  const feedNames = (feeds.data ?? [])
+    .filter((f) => f.def.content !== 'agents')
+    .map((f) => f.def.name)
   const freeFeeds = feedNames.filter((n) => !p.listLengths.some((l) => l.list === n))
   return (
     <Panel title="Ban lengths">
@@ -721,276 +708,6 @@ function EntriesTab() {
           </form>
         }
       />
-    </Stack>
-  )
-}
-
-const NEW_FEED: FeedDef = {
-  id: 0,
-  name: '',
-  url: '',
-  enabled: true,
-  block: false,
-  allow: false,
-  refreshSecs: 6 * 3_600,
-  username: null,
-  password: null,
-}
-
-function FeedEditor({ feed, onClose }: { feed: FeedDef; onClose: () => void }) {
-  const [f, setF] = useState(feed)
-  const save = useAction('feed.save', 'Saved; fetching it now')
-  const set = (patch: Partial<FeedDef>) => {
-    setF((x) => ({ ...x, ...patch }))
-  }
-  return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault()
-        save.mutate(f, { onSuccess: onClose })
-      }}
-    >
-      <Stack gap="sm">
-        <TextInput
-          label="Name"
-          description="Rules' “listed in” condition refers to it"
-          value={f.name}
-          onChange={(e) => {
-            set({ name: e.currentTarget.value })
-          }}
-          required
-        />
-        <TextInput
-          label="URL"
-          description="A list with an address or prefix per line (comments, CSV and JSON lines are understood)"
-          value={f.url}
-          onChange={(e) => {
-            set({ url: e.currentTarget.value })
-          }}
-          required
-          classNames={{ input: 'mono' }}
-        />
-        <Stack gap={4}>
-          <Text fz={14} fw={500}>
-            What it does
-          </Text>
-          <SegmentedControl
-            fullWidth
-            value={f.block ? 'block' : f.allow ? 'allow' : 'data'}
-            onChange={(v) => {
-              set({ block: v === 'block', allow: v === 'allow' })
-            }}
-            data={[
-              { value: 'block', label: 'Block' },
-              { value: 'allow', label: 'Allow' },
-              { value: 'data', label: 'Data only' },
-            ]}
-          />
-          <Text fz={12} c="var(--ink-dim)">
-            {f.block
-              ? 'Every address it lists is dropped, here and on the edges, like a blocked country.'
-              : f.allow
-                ? 'Every address it lists is never banned and is let through before any block, here and on the edges, like the allow list: for a proxy in front of your sites (Cloudflare), whose addresses carry everyone’s traffic.'
-                : 'Only data: for rules (“listed in”) and for the address pages.'}
-          </Text>
-        </Stack>
-        <LengthInput
-          label="Fetch every"
-          value={f.refreshSecs}
-          onChange={(refreshSecs) => {
-            set({ refreshSecs })
-          }}
-        />
-        <SimpleGrid cols={{ base: 1, sm: 2 }} style={{ alignItems: 'end' }}>
-          <TextInput
-            label="User"
-            description="For lists behind an account"
-            value={f.username ?? ''}
-            onChange={(e) => {
-              set({ username: e.currentTarget.value === '' ? null : e.currentTarget.value })
-            }}
-          />
-          <TextInput
-            label="Password"
-            type="password"
-            placeholder={feed.password === null ? '' : 'unchanged'}
-            value={f.password ?? ''}
-            onChange={(e) => {
-              set({ password: e.currentTarget.value })
-            }}
-          />
-        </SimpleGrid>
-        <Group justify="flex-end">
-          <Button variant="default" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" loading={save.isPending}>
-            Save
-          </Button>
-        </Group>
-      </Stack>
-    </form>
-  )
-}
-
-/** What a feed holds and how its fetches go: the list in use and from when, the last check, the next one, and
- * the last attempt's error. */
-function FeedState({ feed: f, now }: { feed: Feed; now: number }) {
-  const every = `every ${lengthInWords(f.def.refreshSecs)}`
-  return (
-    <Stack gap={0} fz={12} mt={2}>
-      <Text fz={12} c="var(--ink-dim)">
-        {f.changed === null ? (
-          !f.def.enabled ? (
-            'Off: not fetched'
-          ) : f.error === null ? (
-            'Not fetched yet'
-          ) : (
-            'No list yet'
-          )
-        ) : (
-          <>
-            {count(f.count)} prefixes · list from {ago(f.changed, now)}
-            {f.succeeded !== null && f.succeeded !== f.changed && (
-              <>, unchanged when checked {ago(f.succeeded, now)}</>
-            )}
-          </>
-        )}
-      </Text>
-      <Text fz={12} c="var(--ink-faint)">
-        {f.next === null ? (
-          `Off (${every} when on)`
-        ) : (
-          <>
-            Fetched {every} · next {fromNow(f.next, now)}
-          </>
-        )}
-      </Text>
-      {f.error !== null && (
-        <Text fz={12} c="var(--status-bad)" style={{ overflowWrap: 'anywhere' }}>
-          Last attempt {ago(f.fetched, now)} failed: {f.error}
-          {f.changed !== null && ' · the list from before stays in use'}
-        </Text>
-      )}
-    </Stack>
-  )
-}
-
-function FeedsTab() {
-  const feeds = useFeeds()
-  const presets = useFeedPresets()
-  const now = useNow(30_000)
-  const [editing, setEditing] = useState<FeedDef | null>(null)
-  const remove = useAction('feed.delete', 'Removed')
-  const refresh = useAction('feed.refresh')
-  const save = useAction('feed.save', 'Added; fetching it now')
-  const list = feeds.data ?? []
-  const available = (presets.data ?? []).filter((p) => !list.some((f) => f.def.url === p.url))
-  return (
-    <Stack gap="md">
-      <Text fz={13} c="var(--ink-dim)" maw={700}>
-        Lists of addresses fetched from the internet. A list that blocks is applied as a whole, like
-        a blocked country; one that allows is never banned and is let through first, like the allow
-        list (Cloudflare’s, when a site is behind its proxy: visitors then arrive from its
-        addresses); the others are data for rules (“listed in”) and for the address pages.
-        CrowdSec’s blocklists can be added through a “blocklist integration” of a CrowdSec console
-        account: its URL, user and password.
-      </Text>
-      <Group gap="xs">
-        <Button
-          leftSection={<IconPlus size={16} />}
-          onClick={() => {
-            setEditing(NEW_FEED)
-          }}
-        >
-          Add a list
-        </Button>
-        {available.map((p) => (
-          <Button
-            key={p.url}
-            variant="default"
-            onClick={() => {
-              save.mutate(p)
-            }}
-          >
-            {p.allow ? `Allow ${p.name}` : p.name}
-          </Button>
-        ))}
-      </Group>
-      {list.map((f) => (
-        <ActionCard
-          key={f.def.id}
-          count={2}
-          actions={
-            <>
-              <Tooltip label="Fetch now" openDelay={300}>
-                <ActionIcon
-                  loading={refresh.isPending && refresh.variables.id === f.def.id}
-                  onClick={() => {
-                    refresh.mutate({ id: f.def.id })
-                  }}
-                  aria-label="Fetch now"
-                >
-                  <IconRefresh size={16} />
-                </ActionIcon>
-              </Tooltip>
-              <ActionIcon
-                color="red"
-                onClick={() => {
-                  if (window.confirm(`Remove the list “${f.def.name}”?`))
-                    remove.mutate({ id: f.def.id })
-                }}
-                aria-label="Remove"
-              >
-                <IconTrash size={16} />
-              </ActionIcon>
-            </>
-          }
-        >
-          <Group gap={8} mih={28} align="center">
-            <Anchor
-              component="button"
-              fw={620}
-              fz={14}
-              c="inherit"
-              onClick={() => {
-                setEditing(f.def)
-              }}
-            >
-              {f.def.name}
-            </Anchor>
-            {f.def.block ? (
-              <Badge color="brass">Blocks</Badge>
-            ) : f.def.allow ? (
-              <Badge color="green">Allows</Badge>
-            ) : (
-              <Badge color="gray">Data</Badge>
-            )}
-            {!f.def.enabled && <Badge color="gray">Off</Badge>}
-          </Group>
-          <Text fz={12} c="var(--ink-faint)" className="mono" truncate>
-            {f.def.url}
-          </Text>
-          <FeedState feed={f} now={now} />
-        </ActionCard>
-      ))}
-      <Modal
-        opened={editing !== null}
-        onClose={() => {
-          setEditing(null)
-        }}
-        title={editing?.id === 0 ? 'Add a list' : 'Edit list'}
-      >
-        {editing !== null && (
-          <FeedEditor
-            key={editing.id}
-            feed={editing}
-            onClose={() => {
-              setEditing(null)
-            }}
-          />
-        )}
-      </Modal>
     </Stack>
   )
 }

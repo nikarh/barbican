@@ -506,7 +506,7 @@ mod tests {
             state.exempt.clone_from(&app.config.exempt.nets);
             state.rules.clone_from(&rules);
         }
-        let set = RuleSet::new(1, rules, &["web", "ssh", "auth"], &[], allowed).unwrap();
+        let set = RuleSet::new(1, rules, &["web", "ssh", "auth"], &[], &[], allowed).unwrap();
         let (tx, rx) = watch::channel(Arc::new(set));
         let prefilters = [ParserKind::Traefik, ParserKind::Sshd, ParserKind::Authelia]
             .into_iter()

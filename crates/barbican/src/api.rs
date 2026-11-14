@@ -116,9 +116,13 @@ pub enum Call {
     /// Result: `Feed[]`.
     #[serde(rename = "feeds.list")]
     FeedsList,
-    /// Result: `FeedDef[]`, well-known lists to add.
-    #[serde(rename = "feeds.presets")]
-    FeedsPresets,
+    /// Result: `Source[]`, public lists to add, by where they come from.
+    #[serde(rename = "feeds.catalog")]
+    FeedsCatalog,
+    /// Result: `Feed[]`, every feed, after the changes: removes some feeds and saves (adds or changes) others at once,
+    /// e.g. the lists of a catalog source.
+    #[serde(rename = "feeds.apply")]
+    FeedsApply(FeedsApplyParams),
     /// Result: [`Feed`], as saved.
     #[serde(rename = "feed.save")]
     FeedSave(FeedDef),
@@ -128,6 +132,12 @@ pub enum Call {
     /// Result: `null`, once the feed was fetched (or failed to be).
     #[serde(rename = "feed.refresh")]
     FeedRefresh(IdParams),
+    /// Result: `FeedNetwork[]`: the networks of a list of networks, largest first.
+    #[serde(rename = "feed.networks")]
+    FeedNetworks(IdParams),
+    /// Result: [`FeedOverlap`]: how much of a list the other lists hold too.
+    #[serde(rename = "feed.overlap")]
+    FeedOverlap(IdParams),
     /// Result: `Live[]`, the latest items (oldest first, at most 40, kept since the agent started), then [`Live`]
     /// events. A client that subscribes again (after a reconnect) gets them again: they replace what it showed.
     #[serde(rename = "live.subscribe")]
@@ -702,13 +712,82 @@ pub struct Feed {
     /// When its list last changed: the copy in use is from then.
     #[cfg_attr(test, ts(type = "number | null"))]
     pub changed: Option<i64>,
-    /// When it is fetched next (the agent looks for due feeds every 5 minutes); `null`: it is off.
+    /// When it is fetched next; `null`: it is off.
     #[cfg_attr(test, ts(type = "number | null"))]
     pub next: Option<i64>,
-    /// Prefixes in the last good copy.
+    /// Entries in the last good copy: prefixes, networks or user agents.
     #[cfg_attr(test, ts(type = "number"))]
     pub count: i64,
+    /// The addresses it stands for (a list of networks: their prefixes in the ASN database), merged.
+    pub extent: Extent,
     pub error: Option<String>,
+    /// Failed attempts in a row; failed fetches are tried again sooner than the refresh.
+    pub failures: u32,
+    /// Another list, used the same way, that holds 95% or more of its addresses: with it, this one adds little.
+    pub covered_by: Option<String>,
+}
+
+/// A network of a list of networks.
+#[derive(Debug, Serialize, Clone)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct FeedNetwork {
+    pub asn: u32,
+    /// As the list names it, or else the ASN database.
+    pub name: Option<String>,
+    /// Its prefixes in the ASN database.
+    pub extent: Extent,
+}
+
+/// How much of a list's addresses other lists hold too.
+#[derive(Debug, Serialize, Clone)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct FeedOverlap {
+    /// The list's addresses: IPv4 ones, and IPv6 space in /48 networks.
+    #[cfg_attr(test, ts(type = "number"))]
+    pub v4: u64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub v6: u64,
+    /// Of those, the ones no other list (that is on) holds.
+    #[cfg_attr(test, ts(type = "number"))]
+    pub unique_v4: u64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub unique_v6: u64,
+    /// The other lists that hold some of them, most first.
+    pub others: Vec<OverlapWith>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct OverlapWith {
+    #[cfg_attr(test, ts(type = "number"))]
+    pub id: i64,
+    pub name: String,
+    /// The addresses both hold.
+    #[cfg_attr(test, ts(type = "number"))]
+    pub v4: u64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub v6: u64,
+    /// The other list's own size, to say how much of it this list holds.
+    #[cfg_attr(test, ts(type = "number"))]
+    pub other_v4: u64,
+    #[cfg_attr(test, ts(type = "number"))]
+    pub other_v6: u64,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct FeedsApplyParams {
+    /// Feeds to remove, by id.
+    #[cfg_attr(test, ts(type = "number[]"))]
+    #[serde(default)]
+    pub delete: Vec<i64>,
+    /// Feeds to add (id 0) or change.
+    #[serde(default)]
+    pub save: Vec<FeedDef>,
 }
 
 /// The geolocation databases, and how they are kept up to date.

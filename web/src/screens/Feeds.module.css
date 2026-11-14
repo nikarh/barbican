@@ -1,0 +1,199 @@
+/* A source's lists in its dialog: the name and description, then the choice of use. Side by side from the tablet
+ * width up; on a phone the text gets the whole width and the choice goes under it, full width. */
+.items {
+  border-top: 1px solid var(--mantine-color-default-border);
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--mantine-color-default-border);
+}
+
+.itemText {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.itemUse {
+  flex-shrink: 0;
+}
+
+@media (max-width: 48em) {
+  .item {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+
+  .itemUse {
+    width: 100%;
+  }
+}
+
+/* A source of the catalog: its text, then a line with how many lists it has and its button, at the bottom of cards
+ * of one row alike. */
+.source {
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px;
+  min-width: 0;
+}
+
+/* The buttons of a source's dialog stay in sight while its lists scroll (on a phone, the dialog is the screen). */
+.footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+  margin: 0 calc(-1 * var(--mantine-spacing-md)) calc(-1 * var(--mantine-spacing-md));
+  padding: 10px var(--mantine-spacing-md);
+  background: var(--mantine-color-body);
+  border-top: 1px solid var(--mantine-color-default-border);
+}
+
+/* A group of lists: a header that folds them away, then a row per list. */
+.group {
+  padding: 0;
+  overflow: hidden;
+}
+
+.groupHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 4px;
+}
+
+.groupToggle,
+.rowHead {
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.groupToggle {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: baseline;
+  flex-wrap: wrap;
+  column-gap: 8px;
+  padding: 4px;
+}
+
+.groupToggle > .chevron {
+  align-self: center;
+}
+
+.groupTitle {
+  font-weight: 650;
+  font-size: 14px;
+}
+
+.groupSummary {
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+
+.groupActions {
+  flex-shrink: 0;
+}
+
+.chevron {
+  flex-shrink: 0;
+  color: var(--ink-faint);
+  transition: transform 120ms ease;
+  transform: rotate(-90deg);
+}
+
+.chevron[data-open='true'] {
+  transform: none;
+}
+
+/* A list in one line: its state, name, use, then its size and age at the right; on a phone, those go to a second
+ * line under the name rather than squeezing it. */
+.row {
+  border-top: 1px solid var(--mantine-color-default-border);
+}
+
+.rowHead {
+  display: grid;
+  grid-template-columns: 8px minmax(0, max-content) auto minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 2px 8px;
+  width: 100%;
+  min-height: 40px;
+  padding: 6px 12px;
+}
+
+.rowHead:hover {
+  background: var(--mantine-color-default-hover);
+}
+
+.rowName {
+  font-weight: 600;
+  font-size: 13.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowMeta {
+  justify-self: end;
+  font-size: 12px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rowError {
+  padding: 0 12px 6px 28px;
+  margin-top: -4px;
+}
+
+.rowBody {
+  padding: 0 12px 10px 28px;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--status-good);
+}
+
+.dot[data-state='failing'] {
+  background: var(--status-bad);
+}
+
+.dot[data-state='waiting'] {
+  background: var(--status-warn);
+}
+
+.dot[data-state='off'] {
+  background: var(--ink-faint);
+}
+
+@media (max-width: 48em) {
+  .rowHead {
+    grid-template-columns: 8px minmax(0, 1fr) auto 16px;
+  }
+
+  .rowMeta {
+    grid-column: 2 / -1;
+    grid-row: 2;
+    justify-self: start;
+  }
+
+  .rowHead > .chevron {
+    grid-column: 4;
+    grid-row: 1;
+  }
+}
