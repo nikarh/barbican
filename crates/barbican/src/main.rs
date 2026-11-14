@@ -6,6 +6,7 @@ use std::process::ExitCode;
 mod api;
 mod app;
 mod config;
+mod coverage;
 mod db;
 mod drops;
 mod edge_api;

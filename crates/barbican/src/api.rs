@@ -880,6 +880,8 @@ pub struct PlaceExtent {
 pub struct BlockCoverage {
     /// `false`: there is no country database, and the rest is empty.
     pub available: bool,
+    /// Whether IPv6 is counted: only when this host or an edge blocks it (an edge that loads IPv6 connected).
+    pub ipv6: bool,
     pub countries: Vec<PlaceExtent>,
     pub continents: Vec<PlaceExtent>,
     /// All of them together, overlaps counted once: what is blocked.

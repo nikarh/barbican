@@ -19,7 +19,7 @@ The kernel's sets don't slow packets down with their size: a lookup costs about 
 
 ## Keeping it small
 
-- **Leave out IPv6 where there is none**: `firewall.ipv6 = false` on the agent, `option ipv6 '0'` on an edge. Its country and blocklist list is as large as IPv4's. With neither the agent nor any edge loading IPv6, the agent doesn't compute it either: with four continents and eight countries blocked its startup peak drops from about 105 MB to about 63 MB.
+- **Leave out IPv6 where there is none**: `firewall.ipv6 = false` on the agent, `option ipv6 '0'` on an edge. Its country and blocklist list is as large as IPv4's. With neither the agent nor any edge loading IPv6, the agent doesn't compute it either: with four continents and eight countries blocked its startup peak drops from about 105 MB to about 70 MB.
 - **Country blocks** are what takes the most kernel memory. Settings shows, as you add countries and continents, how many prefixes and addresses they are.
 - **Lists on an edge**: `option lists '0'` gives a router only the bans and the deny list, not the countries and blocking feeds.
 - **Events** are counted per address, rule, source and hour, not stored line by line, and deleted after **Keep events** (a year by default). Addresses are stored as 4 or 16 bytes, and every distinct "what it tried" once.
@@ -27,7 +27,7 @@ The kernel's sets don't slow packets down with their size: a lookup costs about 
 
 ## Work done
 
-- How much a choice of countries covers (Settings) is counted in one pass over the country database, about a tenth of a second, and nothing of it is kept.
+- How much a choice of countries covers (Settings) is answered in about a millisecond (two with IPv6) from a summary of the country database made once it is opened: each country's and continent's extent, and the database as runs of one country, about 2 MB (6 MB once IPv6 is counted).
 - Only lines that match a rule, or are logins, reach the engine: parsing and matching happen in each source without allocating.
 - Firewall changes go straight over netlink, one small transaction each whatever the sets hold; only what changed is written. Once a minute (`firewall.check_interval`) the agent asks the kernel for the ruleset's generation, one small request, to notice changes made by other programs.
 - An edge's full state (25 000 bans and 100 000 list prefixes) is 2.4 MB on the wire and decodes in under a millisecond.

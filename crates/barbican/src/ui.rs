@@ -1018,13 +1018,18 @@ async fn coverage(app: &App, p: CoverageParams) -> Result<BlockCoverage, RpcErro
     if p.countries.len() + p.continents.len() > 300 {
         return Err(bad("too many countries and continents"));
     }
+    // IPv6 counts only when the host or an edge blocks it.
+    let ipv6 = app.ipv6_lists.load(std::sync::atomic::Ordering::SeqCst);
     let geo = app.geo();
-    let coverage = tokio::task::spawn_blocking(move || geo.coverage(&p.countries, &p.continents))
-        .await
-        .map_err(internal)?;
+    // The first question may make the summary it is answered from (a fifth of a second).
+    let coverage =
+        tokio::task::spawn_blocking(move || geo.coverage(&p.countries, &p.continents, ipv6))
+            .await
+            .map_err(internal)?;
     let Some(c) = coverage else {
         return Ok(BlockCoverage {
             available: false,
+            ipv6,
             countries: Vec::new(),
             continents: Vec::new(),
             total: crate::api::Extent::default(),
@@ -1033,6 +1038,7 @@ async fn coverage(app: &App, p: CoverageParams) -> Result<BlockCoverage, RpcErro
     };
     Ok(BlockCoverage {
         available: true,
+        ipv6,
         countries: c
             .countries
             .into_iter()

@@ -38,7 +38,11 @@ export type BlockCoverage = {
 /**
  * `false`: there is no country database, and the rest is empty.
  */
-available: boolean, countries: Array<PlaceExtent>, continents: Array<PlaceExtent>, 
+available: boolean, 
+/**
+ * Whether IPv6 is counted: only when this host or an edge blocks it (an edge that loads IPv6 connected).
+ */
+ipv6: boolean, countries: Array<PlaceExtent>, continents: Array<PlaceExtent>, 
 /**
  * All of them together, overlaps counted once: what is blocked.
  */

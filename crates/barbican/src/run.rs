@@ -122,6 +122,15 @@ pub async fn load(app: &Arc<App>) -> Result<(), String> {
     Ok(())
 }
 
+/// Makes the summary the Settings' country coverage is answered from, in the background.
+fn prepare_coverage(app: &Arc<App>) {
+    let geo = app.geo();
+    let ipv6 = app.ipv6_lists.load(std::sync::atomic::Ordering::SeqCst);
+    tokio::task::spawn_blocking(move || {
+        geo.prepare_coverage(ipv6);
+    });
+}
+
 pub fn open_geo(config: &Config) -> geo::Geo {
     match geo::Geo::open(config.geoip.country.as_deref(), config.geoip.asn.as_deref()) {
         Ok(geo) => geo,
@@ -173,6 +182,7 @@ async fn geo_updates(app: Arc<App>) {
             if let Ok(mut current) = app.geo.write() {
                 *current = Arc::new(geo);
             }
+            prepare_coverage(&app);
             firewall::refresh_countries(&app).await;
         }
         tokio::time::sleep(geo::CHECK_EVERY).await;
@@ -393,6 +403,7 @@ pub async fn run(config: Config, dry_run: bool) -> Result<(), String> {
     if let Ok(mut current) = app.geo.write() {
         *current = Arc::new(geo);
     }
+    prepare_coverage(&app);
     load(&app).await?;
     match crate::db::drops_load(&app.db.pool).await {
         Ok(drops) => {
