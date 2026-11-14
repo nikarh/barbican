@@ -177,7 +177,7 @@ pub async fn fetch(
     if let Some(etag) = etag {
         request = request.header(reqwest::header::IF_NONE_MATCH, etag);
     }
-    let response = request.send().await.map_err(|e| e.to_string())?;
+    let response = request.send().await.map_err(|e| chain(&e))?;
     if response.status() == reqwest::StatusCode::NOT_MODIFIED {
         return Ok(Fetched::NotModified);
     }
@@ -189,8 +189,23 @@ pub async fn fetch(
         .get(reqwest::header::ETAG)
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
-    let body = response.text().await.map_err(|e| e.to_string())?;
+    let body = response.text().await.map_err(|e| chain(&e))?;
     Ok(Fetched::New { body, etag })
+}
+
+/// An error with its causes ("error sending request: …: connection refused"): reqwest's own message says little.
+fn chain(e: &dyn std::error::Error) -> String {
+    let mut text = e.to_string();
+    let mut source = e.source();
+    while let Some(cause) = source {
+        let cause_text = cause.to_string();
+        if !text.contains(&cause_text) {
+            text.push_str(": ");
+            text.push_str(&cause_text);
+        }
+        source = cause.source();
+    }
+    text
 }
 
 #[cfg(test)]
