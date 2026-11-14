@@ -29,11 +29,15 @@ pub fn new(app: &App) -> Option<Nft> {
 }
 
 /// Compiles the rules again (after rules, feeds, or the allow list changed) and hands them to the sources.
+///
+/// The rule set is handed over while the state is still read: compiling takes a while, and two rebuilds at once (a
+/// feed fetched as another one is removed) would otherwise hand theirs over in either order, the older state last.
+/// A change of the state waits for the handover, so the rebuild that follows it hands over last.
 pub fn rebuild_rules(app: &App) {
-    let generation = app.rules_generation.fetch_add(1, Ordering::Relaxed) + 1;
     let names: Vec<&str> = app.config.sources.iter().map(|s| s.name.as_str()).collect();
+    let Ok(state) = app.state.read() else { return };
+    let generation = app.rules_generation.fetch_add(1, Ordering::Relaxed) + 1;
     let set = {
-        let Ok(state) = app.state.read() else { return };
         let now = now();
         let mut allowed = state.exempt.clone();
         allowed.extend(
@@ -104,14 +108,17 @@ pub async fn refresh_countries(app: &Arc<App>) {
 }
 
 /// Recomputes the list sets' content (after countries or feeds changed).
+///
+/// Stored while the state is still read, as [`rebuild_rules`] hands its rules over: merging the lists takes a while,
+/// and two refreshes at once (countries computed as a feed is removed) would otherwise store theirs in either order,
+/// and the older content would stay, here and on the edges, until the next change.
 pub fn refresh_lists(app: &App) {
-    let lists = match app.state.read() {
-        Ok(state) => state.lists(),
-        Err(_) => return,
-    };
+    let Ok(state) = app.state.read() else { return };
+    let lists = state.lists();
     if let Ok(mut current) = app.lists.write() {
         *current = lists;
     }
+    drop(state);
     app.firewall_wake.notify_one();
 }
 
@@ -299,5 +306,86 @@ pub async fn run(app: Arc<App>, nft: Option<Nft>) {
         } else {
             idle(&app, nft.as_ref()).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicBool;
+
+    use barbican_common::net::Net;
+
+    use super::*;
+    use crate::db::Db;
+    use crate::feeds::{FeedDef, Loaded};
+    use crate::state::Feed;
+
+    /// A feed that blocks 198.51.100.0/24.
+    fn blocking_feed() -> Feed {
+        let mut feed = Feed::new(FeedDef {
+            id: 1,
+            name: "x".to_owned(),
+            url: "https://example.com/".to_owned(),
+            enabled: true,
+            block: true,
+            allow: false,
+            refresh_secs: 3_600,
+            username: None,
+            password: None,
+            content: Content::Addresses,
+            select: None,
+            catalog: None,
+            networks: Vec::new(),
+        });
+        feed.loaded = Arc::new(Loaded::from_data("198.51.100.0/24\n"));
+        feed.refresh();
+        feed
+    }
+
+    /// Lists refreshed all the time on another thread (countries computed, another feed fetched) never leave an
+    /// older content in place: once a change's own refresh returns, the lists are the state's.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "a stress test: run it locally with `cargo test -- --ignored`"]
+    async fn the_lists_follow_the_last_change() {
+        let app = App::new(
+            toml::from_str("").unwrap(),
+            Db::memory().await,
+            crate::app::http_client(),
+            true,
+        );
+        // Enough prefixes for merging them to take a while: separate /32s, not mergeable.
+        let countries: Vec<Net> = (0..20_000u32)
+            .map(|i| Net::host(std::net::Ipv4Addr::from(0x0b00_0000 + i * 2).into()))
+            .collect();
+        if let Ok(mut state) = app.state.write() {
+            state.countries = Arc::new(countries);
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let background = {
+            let (app, stop) = (Arc::clone(&app), Arc::clone(&stop));
+            std::thread::spawn(move || {
+                // Now and then, as the agent's refreshes come: back to back, they would keep the state read for good.
+                while !stop.load(Ordering::Relaxed) {
+                    refresh_lists(&app);
+                    std::thread::sleep(std::time::Duration::from_micros(500));
+                }
+            })
+        };
+        let listed = |app: &App| app.lists.read().unwrap().nets.len();
+        for round in 0..30 {
+            {
+                let mut state = app.state.write().unwrap();
+                if round % 2 == 0 {
+                    state.feeds.push(blocking_feed());
+                } else {
+                    state.feeds.clear();
+                }
+            }
+            refresh_lists(&app);
+            let expected = 20_000 + usize::from(round % 2 == 0);
+            assert_eq!(listed(&app), expected, "round {round}");
+        }
+        stop.store(true, Ordering::Relaxed);
+        background.join().unwrap();
     }
 }
