@@ -100,6 +100,10 @@ export interface Connection {
   lostAt: number | null
   /** Why it fails, once known. */
   problem: Problem | null
+  /** It has stayed down for a while ({@link GRACE_MS} in front of the user): time to say so. Until then the UI only
+   * shows that it's connecting, as a phone drops the connection of a page in the background and the page reconnects
+   * as soon as it is back in front. */
+  down: boolean
 }
 
 interface Pending {
@@ -116,6 +120,8 @@ interface Subscription {
 }
 
 const MAX_BACKOFF_MS = 10_000
+/** How long the connection may be down, while the page is in front of the user, before the UI says so. */
+export const GRACE_MS = 4_000
 
 declare global {
   interface Window {
@@ -150,8 +156,10 @@ export class RpcClient {
     retryAt: null,
     lostAt: null,
     problem: null,
+    down: false,
   }
   private retryTimer: number | null = null
+  private graceTimer: number | null = null
   private diagnosis = 0
   private readonly listeners = new Set<() => void>()
   private readonly pending = new Map<string, Pending>()
@@ -173,10 +181,20 @@ export class RpcClient {
     this.url = url
     this.diagnose = diagnose
     this.connect(takeEarlySocket(url))
-    // Back online, or back in front of the user: no need to wait out the backoff.
-    window.addEventListener('online', this.retry)
+    // Back online, or back in front of the user: no need to wait out the backoff, and it's a fresh start.
+    window.addEventListener('online', () => {
+      this.attempt = 0
+      this.retry()
+    })
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') this.retry()
+      if (document.visibilityState !== 'visible' || this.connection.state === 'open') return
+      // What failed in the background (a phone drops the connection of a page that isn't shown) gets a grace period
+      // of its own: the reconnection is usually done in a moment.
+      this.attempt = 0
+      this.stopGrace()
+      if (this.connection.down) this.update({ down: false })
+      this.startGrace()
+      this.retry()
     })
     // A reload or leaving the page closes the socket with a proper close, at once: the agent and the proxies in
     // between let go of it now, instead of when they notice that the connection is gone.
@@ -184,6 +202,7 @@ export class RpcClient {
       this.leaving = true
       if (this.retryTimer !== null) window.clearTimeout(this.retryTimer)
       this.retryTimer = null
+      this.stopGrace()
       this.socket?.close(1000)
     })
     // Back from the back-forward cache.
@@ -222,6 +241,22 @@ export class RpcClient {
   private update(change: Partial<Connection>): void {
     this.connection = { ...this.connection, ...change }
     for (const listener of this.listeners) listener()
+  }
+
+  /** Counts the grace period down, unless it is already counting or over. It is over only while the page is in
+   * front of the user: a page in the background is reconnecting as soon as it's back. */
+  private startGrace(): void {
+    if (this.graceTimer !== null || this.connection.down) return
+    this.graceTimer = window.setTimeout(() => {
+      this.graceTimer = null
+      if (this.connection.state === 'open' || document.visibilityState !== 'visible') return
+      this.update({ down: true })
+    }, GRACE_MS)
+  }
+
+  private stopGrace(): void {
+    if (this.graceTimer !== null) window.clearTimeout(this.graceTimer)
+    this.graceTimer = null
   }
 
   /** Reconnects now instead of when the backoff ends, while closed. */
@@ -271,7 +306,8 @@ export class RpcClient {
 
     const opened = () => {
       this.attempt = 0
-      this.update({ state: 'open', failures: 0, lostAt: null, problem: null })
+      this.stopGrace()
+      this.update({ state: 'open', failures: 0, lostAt: null, problem: null, down: false })
       // Resubscribe under the same ids, ahead of anything queued while offline.
       const queued = new Set(this.queue.map((r) => r.id))
       const resubscribe = [...this.subscriptions]
@@ -322,6 +358,7 @@ export class RpcClient {
         retryAt: Date.now() + delay,
         lostAt: state === 'open' ? Date.now() : lostAt,
       })
+      this.startGrace()
       this.diagnosis += 1
       const diagnosis = this.diagnosis
       void this.diagnose().then((problem) => {

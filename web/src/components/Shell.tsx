@@ -46,11 +46,17 @@ export function Shell({ screen, children }: { screen: Screen; children: ReactNod
   const connection = useConnection()
   const meta = useMeta()
   const tabBarHidden = useTabBarAutoHide(screen)
-  // Not connected after at least one attempt failed: say so, and that what's shown isn't live.
-  const offline = connection.state !== 'open' && connection.failures > 0
+  // Not connected for a while: say so, and that what's shown isn't live. Until then it's only connecting (again).
+  const offline = connection.state !== 'open' && connection.down
+  let dot: 'open' | 'connecting' | 'closed' = 'open'
   let label = 'Live'
-  if (offline) label = 'Offline'
-  else if (connection.state !== 'open') label = 'Connecting'
+  if (offline) {
+    dot = 'closed'
+    label = 'Offline'
+  } else if (connection.state !== 'open') {
+    dot = 'connecting'
+    label = 'Connecting…'
+  }
   return (
     <>
       <header className={classes.header}>
@@ -84,7 +90,7 @@ export function Shell({ screen, children }: { screen: Screen; children: ReactNod
             </span>
           )}
           <div className={classes.connection} role="status">
-            <span className={classes.dot} data-state={offline ? 'closed' : connection.state} />
+            <span className={classes.dot} data-state={dot} />
             {label}
           </div>
         </div>
