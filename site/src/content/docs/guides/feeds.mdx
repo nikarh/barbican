@@ -11,7 +11,7 @@ Besides what rules ban one address at a time, Barbican blocks and allows whole r
 
 ## Countries and continents
 
-**Settings → Lengths and countries → Countries blocked as a whole** blocks every address the country database places in a country or a continent (`AF`, `AN`, `AS`, `EU`, `NA`, `OC`, `SA`). As you add them, the UI shows how much that takes: how many prefixes and addresses, IPv4 and IPv6, and which share of the address space they are.
+**Settings → Lengths and countries → Countries blocked as a whole** blocks every address the country database places in a country or a continent (`AF`, `AN`, `AS`, `EU`, `NA`, `OC`, `SA`). As you add them, the UI shows how much that takes: how many prefixes and addresses, IPv4 and IPv6, and which share of the address space they are. IPv6 is counted only when it is blocked somewhere: with `firewall.ipv6 = false` and no edge that loads IPv6 connected, the counts are of IPv4 only, and say so.
 
 Blocking a country drops what its addresses send to the host, its containers and, on an edge, the network behind the router. Replies to connections the host (or a client behind the router) opened are never dropped: blocking a country doesn't stop the host downloading from it.
 

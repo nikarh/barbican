@@ -76,6 +76,8 @@ With `option dry_run '1'` the edge follows its agents, keeps and saves their sta
 
 With `option ipv6 '0'` the edge tells its agents that it doesn't load IPv6, and they send it none: neither bans of IPv6 addresses nor IPv6 list prefixes. On a router without IPv6, the country and blocklist ranges of IPv6 would take about as much kernel memory as IPv4's (about 250 bytes each on a 32-bit router; roughly 14 MB for Africa, Asia and South America), for nothing. See [Resource use](/reference/resources/).
 
+An agent whose own firewall has `ipv6 = false` doesn't compute IPv6 list prefixes until an edge that loads IPv6 connects: that edge gets its lists a moment later than the others after the agent starts, and from then on the agent keeps them up to date.
+
 `barbican-edge` blocks IPv6 unless told not to; `barbican-edge-ipset` only with `option ipv6 '1'` (and `ip6tables`).
 
 ## Saved state

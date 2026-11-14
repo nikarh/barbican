@@ -39,6 +39,8 @@ pub struct App {
     pub firewall_wake: Notify,
     /// Recomputes the prefixes of blocked countries (after the policy or the database changed).
     pub countries_wake: Notify,
+    /// Whether the lists have IPv6: when the host loads it, or since an edge that loads it connected.
+    pub ipv6_lists: std::sync::atomic::AtomicBool,
     pub feeds_wake: Notify,
     pub journal: Mutex<Journal>,
     /// The journal's sequence number, for edge connections waiting for news.
@@ -100,6 +102,7 @@ impl App {
         let (live, _) = broadcast::channel(1_024);
         let (rules, _) = watch::channel(Arc::new(RuleSet::default()));
         let enabled = config.firewall.enabled && !dry_run;
+        let ipv6 = config.firewall.ipv6;
         let (edges, _) = watch::channel(
             config
                 .edge
@@ -126,6 +129,7 @@ impl App {
             lists: RwLock::new(Lists::default()),
             firewall_wake: Notify::new(),
             countries_wake: Notify::new(),
+            ipv6_lists: std::sync::atomic::AtomicBool::new(ipv6),
             feeds_wake: Notify::new(),
             journal: Mutex::new(Journal::new(epoch, 10_000)),
             journal_seq,
@@ -149,6 +153,17 @@ impl App {
 
     pub fn geo(&self) -> Arc<Geo> {
         self.geo.read().map(|g| Arc::clone(&g)).unwrap_or_default()
+    }
+
+    /// An edge that loads IPv6 connected: the lists get IPv6 from now on (computed once, then kept up to date).
+    pub fn want_ipv6_lists(&self) {
+        if !self
+            .ipv6_lists
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            tracing::info!("An edge loads IPv6: adding IPv6 to the lists");
+            self.countries_wake.notify_one();
+        }
     }
 
     /// Every configured edge client, by name.

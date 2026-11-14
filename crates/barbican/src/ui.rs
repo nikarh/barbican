@@ -1,5 +1,6 @@
 //! What the UI's methods do.
 
+use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
 
@@ -152,36 +153,76 @@ fn ban_of_row(row: &sqlx::sqlite::SqliteRow) -> Result<crate::api::Ban, RpcError
 const BAN_COLUMNS: &str = "SELECT ban.id, ban.net, ban.ip, ban.rule, ban.reason, ban.created, ban.until, ban.lifted, \
      ban.lifted_by, ip.addr, ip.country FROM ban LEFT JOIN ip ON ip.id = ban.ip";
 
-/// Events and bans per day of the 30 days from `since`.
-async fn days(pool: &sqlx::SqlitePool, since: i64) -> Result<Vec<DayStat>, RpcError> {
-    let mut days: Vec<DayStat> = (0..30)
-        .map(|i| DayStat {
-            day: since + i * 86_400,
-            events: 0,
-            bans: 0,
-        })
-        .collect();
-    let (events_by_day, bans_by_day) = tokio::try_join!(
-        sqlx::query_as::<_, (i64, i64)>(
-            "SELECT hour / 24 AS day, sum(count) FROM event WHERE hour >= ? GROUP BY day",
-        )
-        .bind(since / 3_600)
-        .fetch_all(pool),
-        sqlx::query_as::<_, (i64, i64)>(
-            "SELECT created / 86400 AS day, count(*) FROM ban WHERE created >= ? GROUP BY day",
-        )
-        .bind(since)
-        .fetch_all(pool),
-    )
-    .map_err(internal)?;
-    for (day, n) in events_by_day {
-        if let Some(d) = days.iter_mut().find(|d| d.day / 86_400 == day) {
-            d.events = n;
+/// The month's events, summed per hour and rule, as the overview shows them.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct EventSums {
+    /// Per day of the 30 days from `since`.
+    days: Vec<i64>,
+    /// Per rule (rule 0, events no rule matched, left out), the most first.
+    rules: Vec<(i64, i64)>,
+    /// From `today` on.
+    today: i64,
+}
+
+impl EventSums {
+    /// From `(hour, rule, count)` rows of `event_hour` (hours from `since` on).
+    fn of(rows: &[(i64, i64, i64)], since: i64, today: i64) -> Self {
+        let mut sums = Self {
+            days: vec![0; 30],
+            ..Self::default()
+        };
+        let mut rules: HashMap<i64, i64> = HashMap::new();
+        for &(hour, rule, count) in rows {
+            let at = hour * 3_600;
+            if let Some(day) = usize::try_from((at - since).div_euclid(86_400))
+                .ok()
+                .and_then(|d| sums.days.get_mut(d))
+            {
+                *day += count;
+            }
+            if rule != 0 {
+                *rules.entry(rule).or_default() += count;
+            }
+            if at >= today {
+                sums.today += count;
+            }
         }
+        sums.rules = rules.into_iter().collect();
+        sums.rules
+            .sort_unstable_by_key(|&(rule, n)| (std::cmp::Reverse(n), rule));
+        sums
     }
-    for (day, n) in bans_by_day {
-        if let Some(d) = days.iter_mut().find(|d| d.day / 86_400 == day) {
-            d.bans = n;
+}
+
+/// The events of the hours from `since` on, summed per hour and rule (the `event_hour` table): a few thousand rows
+/// for a month, read in the order of its key, instead of a month of events summed and sorted.
+async fn event_hours(
+    pool: &sqlx::SqlitePool,
+    since: i64,
+) -> Result<Vec<(i64, i64, i64)>, RpcError> {
+    sqlx::query_as::<_, (i64, i64, i64)>("SELECT hour, rule, count FROM event_hour WHERE hour >= ?")
+        .bind(since.div_euclid(3_600))
+        .fetch_all(pool)
+        .await
+        .map_err(internal)
+}
+
+/// Bans per day of the 30 days from `since`: a count of each day's range of `ban_created`, rather than grouping
+/// (and sorting) the month's bans.
+async fn bans_by_day(pool: &sqlx::SqlitePool, since: i64) -> Result<Vec<i64>, RpcError> {
+    let rows: Vec<(i64, i64)> = sqlx::query_as(
+        "WITH RECURSIVE d(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM d WHERE i < 29)
+         SELECT i, (SELECT count(*) FROM ban WHERE created >= ?1 + i * 86400 AND created < ?1 + (i + 1) * 86400)
+         FROM d",
+    )
+    .bind(since)
+    .fetch_all(pool)
+    .await
+    .map_err(internal)?;
+    let mut days = vec![0; 30];
+    for (i, n) in rows {
+        if let Some(day) = usize::try_from(i).ok().and_then(|i| days.get_mut(i)) {
+            *day = n;
         }
     }
     Ok(days)
@@ -226,22 +267,13 @@ async fn overview(app: &Arc<App>) -> Result<Overview, RpcError> {
             .await
             .map_err(internal)
     };
-    // At once, on the pool's connections: the two scans of the month's events take most of the time.
+    // At once, on the pool's connections.
     let countries = async {
         sqlx::query_as::<_, (Option<String>, i64)>(
             "SELECT ip.country, count(*) AS n FROM ban JOIN ip ON ip.id = ban.ip WHERE ban.created >= ?
              GROUP BY ip.country ORDER BY n DESC LIMIT 12",
         )
         .bind(since)
-        .fetch_all(pool)
-        .await
-        .map_err(internal)
-    };
-    let rules = async {
-        sqlx::query_as::<_, (i64, i64)>(
-            "SELECT rule, sum(count) AS n FROM event WHERE hour >= ? AND rule != 0 GROUP BY rule ORDER BY n DESC",
-        )
-        .bind(since / 3_600)
         .fetch_all(pool)
         .await
         .map_err(internal)
@@ -256,16 +288,24 @@ async fn overview(app: &Arc<App>) -> Result<Overview, RpcError> {
     };
     let counts = async {
         let bans_today = scalar("SELECT count(*) FROM ban WHERE created >= ?", today).await?;
-        let events_today = scalar(
-            "SELECT coalesce(sum(count), 0) FROM event WHERE hour >= ?",
-            today / 3_600,
-        )
-        .await?;
         let ips = scalar("SELECT count(*) FROM ip WHERE last_seen >= ?", 0).await?;
-        Ok::<_, RpcError>((bans_today, events_today, ips))
+        Ok::<_, RpcError>((bans_today, ips))
     };
-    let ((bans_today, events_today, ips), days, countries, rules, recent_rows) =
-        tokio::try_join!(counts, days(pool, since), countries, rules, recent)?;
+    let ((bans_today, ips), hours, bans_by_day, countries, recent_rows) = tokio::try_join!(
+        counts,
+        event_hours(pool, since),
+        bans_by_day(pool, since),
+        countries,
+        recent
+    )?;
+    let events = EventSums::of(&hours, since, today);
+    let days = (0..30u8)
+        .map(|i| DayStat {
+            day: since + i64::from(i) * 86_400,
+            events: events.days.get(usize::from(i)).copied().unwrap_or(0),
+            bans: bans_by_day.get(usize::from(i)).copied().unwrap_or(0),
+        })
+        .collect();
     let recent = recent_rows
         .iter()
         .map(ban_of_row)
@@ -287,7 +327,7 @@ async fn overview(app: &Arc<App>) -> Result<Overview, RpcError> {
     Ok(Overview {
         bans_active,
         bans_today,
-        events_today,
+        events_today: events.today,
         ips,
         trusted,
         firewall: app.firewall.lock().map(|f| f.clone()).unwrap_or_default(),
@@ -300,7 +340,8 @@ async fn overview(app: &Arc<App>) -> Result<Overview, RpcError> {
                 count: n,
             })
             .collect(),
-        rules: rules
+        rules: events
+            .rules
             .into_iter()
             .map(|(id, n)| Count {
                 key: rule_names
@@ -977,13 +1018,18 @@ async fn coverage(app: &App, p: CoverageParams) -> Result<BlockCoverage, RpcErro
     if p.countries.len() + p.continents.len() > 300 {
         return Err(bad("too many countries and continents"));
     }
+    // IPv6 counts only when the host or an edge blocks it.
+    let ipv6 = app.ipv6_lists.load(std::sync::atomic::Ordering::SeqCst);
     let geo = app.geo();
-    let coverage = tokio::task::spawn_blocking(move || geo.coverage(&p.countries, &p.continents))
-        .await
-        .map_err(internal)?;
+    // The first question may make the summary it is answered from (a fifth of a second).
+    let coverage =
+        tokio::task::spawn_blocking(move || geo.coverage(&p.countries, &p.continents, ipv6))
+            .await
+            .map_err(internal)?;
     let Some(c) = coverage else {
         return Ok(BlockCoverage {
             available: false,
+            ipv6,
             countries: Vec::new(),
             continents: Vec::new(),
             total: crate::api::Extent::default(),
@@ -992,6 +1038,7 @@ async fn coverage(app: &App, p: CoverageParams) -> Result<BlockCoverage, RpcErro
     };
     Ok(BlockCoverage {
         available: true,
+        ipv6,
         countries: c
             .countries
             .into_iter()
@@ -1179,6 +1226,28 @@ async fn feed_delete(app: &Arc<App>, id: i64) -> Result<(), RpcError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn event_sums() {
+        let since = 1_000 * 86_400;
+        let today = since + 29 * 86_400;
+        let hour = |day: i64, h: i64| (since + day * 86_400) / 3_600 + h;
+        let rows = [
+            (hour(0, 0), 1, 2),
+            (hour(0, 23), 0, 3),
+            (hour(1, 5), 2, 7),
+            (hour(29, 1), 1, 4),
+            (hour(29, 2), 0, 1),
+            // Past the 30 days: counted in no day, but in its rule.
+            (hour(30, 0), 2, 1),
+        ];
+        let sums = EventSums::of(&rows, since, today);
+        assert_eq!(&sums.days[..2], &[5, 7]);
+        assert_eq!(sums.days[29], 5);
+        assert_eq!(sums.days.iter().sum::<i64>(), 17);
+        assert_eq!(sums.rules, vec![(2, 8), (1, 6)]);
+        assert_eq!(sums.today, 6);
+    }
 
     #[test]
     fn search_ranges() {

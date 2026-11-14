@@ -77,7 +77,7 @@ Each `[[edge.client]]`:
 | `table` | `barbican` | The `inet` table Barbican owns: letters, digits, `_` and `-` |
 | `priority` | `-190` | Of its prerouting chain: after connection tracking (-200), before NAT (-100) |
 | `nft` | `nft` | The nft program, for making the table (elements are changed over netlink) |
-| `ipv6` | `true` | `false`: nothing of IPv6 goes into nftables. Its country and blocklist ranges take about as much kernel memory as IPv4's (roughly 140 bytes each on x86-64, about 8 MB for Africa, Asia and South America), for nothing on a host without IPv6 |
+| `ipv6` | `true` | `false`: nothing of IPv6 goes into nftables. Its country and blocklist ranges take about as much kernel memory as IPv4's (roughly 140 bytes each on x86-64, about 8 MB for Africa, Asia and South America), for nothing on a host without IPv6. The agent then computes IPv6 country and blocklist prefixes only once an edge that loads IPv6 connects |
 | `check_interval` | `60` | Seconds between checks whether another program changed nftables, and readings of the drop counters; at least 1 |
 
 ## geoip
