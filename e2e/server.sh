@@ -61,6 +61,19 @@ rows = [b for b in json.load(sys.stdin)['rows'] if b['net'] == sys.argv[1]]
 print(rows[0]['id'] if rows else '')" "$1"
 }
 banned() { [[ -n $(active_ban_id "$1") ]]; }
+# What blocks an address, for a failure's message: its active bans, whether a list set or the host set holds it,
+# and what the agent logged about it.
+why_blocked() { # <address>
+  local bans
+  bans=$(${RPC} bans.list '{"active": true}' | python3 -c "
+import json, sys
+print('; '.join(f\"{b['net']} ({b['reason']}, since {b['created']})\" for b in json.load(sys.stdin)['rows']
+               if b['net'] == sys.argv[1] or b['net'].startswith(sys.argv[1].rsplit('.', 1)[0] + '.')) or 'none')" "$1")
+  printf 'bans: %s; in list4: %s; in host4: %s; agent: %s' "${bans}" \
+    "$(nft get element inet barbican list4 "{ $1 }" >/dev/null 2>&1 && echo yes || echo no)" \
+    "$(nft get element inet barbican host4 "{ $1 }" >/dev/null 2>&1 && echo yes || echo no)" \
+    "$(journalctl -u barbican --since "${started_at}" --no-pager -o cat | grep -F "$1" | tail -n 5 | tr '\n' '|')"
+}
 # Whether the agent has handled an event of this address: what it did about it is in the database by then.
 seen() { # <ip>
   ${RPC} events.list "{\"ip\": \"$1\", \"offset\": 0}" | python3 -c "import json, sys; sys.exit(not json.load(sys.stdin)['rows'])"
@@ -382,11 +395,13 @@ if wait_until 120 drop_fetched; then pass "Spamhaus DROP is fetched"; else fail 
 mkdir -p /tmp/feed && printf '# e2e\n198.51.100.0/24 ; bystanders\n' >/tmp/feed/list.txt
 setsid -f sh -c 'cd /tmp/feed && exec python3 -m http.server 8099 --bind 127.0.0.1' </dev/null >/dev/null 2>&1
 wait_until 5 curl -fs -o /dev/null http://127.0.0.1:8099/list.txt
+# The bystander first gets through: otherwise the list's block can't be told from what blocked it before.
+if wait_until 10 by; then pass "the bystander gets through before the list"; else fail "the bystander is blocked before the list: $(why_blocked 198.51.100.10)"; fi
 feed=$(${RPC} feed.save '{"id": 0, "name": "e2e", "url": "http://127.0.0.1:8099/list.txt", "enabled": true, "block": true, "refreshSecs": 3600, "username": null, "password": null}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["def"]["id"])')
 if wait_until 30 blocked by 198.51.100.10 198.51.100.1; then pass "a blocking list drops what it lists"; else fail "the blocking list doesn't block"; fi
 if att; then pass "others still get through"; else fail "a blocking list blocked more than it lists"; fi
 ${RPC} feed.delete "{\"id\": ${feed}}" >/dev/null
-if wait_until 10 by; then pass "removing the list unblocks"; else fail "still blocked after removing the list"; fi
+if wait_until 10 by; then pass "removing the list unblocks"; else fail "still blocked after removing the list: $(why_blocked 198.51.100.10)"; fi
 # Lists of one JSON document (fetched together), of networks and of user agents, added at once as the catalog does.
 cat >/tmp/feed/bots.json <<'EOF2'
 {"services": {"A": {"ipv4": ["198.51.100.0/25"], "ipv6": []}, "B (b)": {"ipv4": ["203.0.113.7"], "ipv6": ["2001:db8::/48"]}}}
@@ -452,7 +467,7 @@ pkill -f "edge-wrong.conf" || true
 if wait_until 10 att; then pass "nothing blocked yet"; else fail "blocked before anything was banned"; fi
 ${RPC} ban.create '{"net": "203.0.113.10", "secs": 3600, "reason": "e2e ipset"}' >/dev/null
 if wait_until 10 in_ipset && wait_until 5 att_blocked; then pass "a ban reaches the ipset and iptables drop it"; else fail "the ipset edge doesn't block"; fi
-if by; then pass "others still get through"; else fail "a bystander is blocked by the ipset edge"; fi
+if by; then pass "others still get through"; else fail "a bystander is blocked by the ipset edge: $(why_blocked 198.51.100.10)"; fi
 if curl -s -o /dev/null -m 2 http://203.0.113.10:9000/; then pass "replies to the host's own connections pass"; else fail "outbound to a banned address broke"; fi
 timeout=$(ipset list barbican-host4 | awk '/^203.0.113.10/ {print $3}')
 if ((timeout > 3000 && timeout <= 3600)); then pass "the element times out in the kernel (${timeout} s left)"; else fail "timeout ${timeout}"; fi
