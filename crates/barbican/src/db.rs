@@ -725,6 +725,49 @@ pub async fn drops_save(
 mod tests {
     use super::*;
 
+    /// `event_hour` is `event` summed per hour and rule, whatever adds, counts or deletes events.
+    #[tokio::test]
+    async fn event_hours_follow_events() {
+        let db = Db::memory().await;
+        let mut conn = db.pool.acquire().await.unwrap();
+        let a = ip_seen(&mut conn, &[192, 0, 2, 1], 0, None, None)
+            .await
+            .unwrap();
+        let b = ip_seen(&mut conn, &[192, 0, 2, 2], 0, None, None)
+            .await
+            .unwrap();
+        let source = source_id(&mut conn, "web").await.unwrap();
+        let x = what_id(&mut conn, 1, "/x").await.unwrap();
+        let y = what_id(&mut conn, 1, "/y").await.unwrap();
+        for (ip, hour, rule, what, count) in [
+            (a, 10, 1, x, 2),
+            (a, 10, 1, x, 3),
+            (b, 10, 1, y, 1),
+            (a, 10, 0, y, 4),
+            (b, 11, 2, x, 5),
+            (a, 12, 1, x, 6),
+        ] {
+            event_add(&mut conn, ip, hour, rule, source, what, count)
+                .await
+                .unwrap();
+        }
+        drop(conn);
+        let hours = || async {
+            sqlx::query_as::<_, (i64, i64, i64)>(
+                "SELECT hour, rule, count FROM event_hour ORDER BY hour, rule",
+            )
+            .fetch_all(&db.pool)
+            .await
+            .unwrap()
+        };
+        assert_eq!(
+            hours().await,
+            vec![(10, 0, 4), (10, 1, 6), (11, 2, 5), (12, 1, 6)]
+        );
+        assert_eq!(prune(&db.pool, 11).await.unwrap(), 3);
+        assert_eq!(hours().await, vec![(11, 2, 5), (12, 1, 6)]);
+    }
+
     #[tokio::test]
     async fn temporary_data_is_not_kept_in_memory() {
         let dir = std::env::temp_dir().join(format!("barbican-db-{}", std::process::id()));

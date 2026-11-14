@@ -23,6 +23,7 @@ The kernel's sets don't slow packets down with their size: a lookup costs about 
 - **Country blocks** are what takes the most kernel memory. Settings shows, as you add countries and continents, how many prefixes and addresses they are.
 - **Lists on an edge**: `option lists '0'` gives a router only the bans and the deny list, not the countries and blocking feeds.
 - **Events** are counted per address, rule, source and hour, not stored line by line, and deleted after **Keep events** (a year by default). Addresses are stored as 4 or 16 bytes, and every distinct "what it tried" once.
+- **The overview** reads events summed per hour and rule, a table kept up to date as events are written (a few hundred KB), rather than the month's events, and the lists of events and addresses read indexes in their order: none of them sorts. A page of the overview takes under a millisecond with a million events.
 
 ## Work done
 
