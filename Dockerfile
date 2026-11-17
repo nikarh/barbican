@@ -5,7 +5,7 @@
 # The agent itself runs on the host, not in here.
 
 # The frontend is the same for every architecture: build it once, natively.
-FROM --platform=$BUILDPLATFORM node:26.13.0-alpine AS web
+FROM --platform=$BUILDPLATFORM node:26.13.1-alpine AS web
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
@@ -13,7 +13,7 @@ COPY web/ ./
 RUN npm run build
 
 # A static musl binary, built natively for each target platform.
-FROM rust:1.99.1-alpine AS build
+FROM rust:1.100.0-alpine AS build
 RUN apk add --no-cache musl-dev gcc
 WORKDIR /src
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
