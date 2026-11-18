@@ -18,12 +18,15 @@ export function flag(code: string | null): string {
   return String.fromCodePoint(base + upper.charCodeAt(0), base + upper.charCodeAt(1))
 }
 
+/** Continents, and regions the agent knows the countries of (the databases place them on North America). */
 export const CONTINENTS: { code: string; name: string }[] = [
   { code: 'AF', name: 'Africa' },
   { code: 'AN', name: 'Antarctica' },
   { code: 'AS', name: 'Asia' },
   { code: 'EU', name: 'Europe' },
   { code: 'NA', name: 'North America' },
+  { code: 'CAM', name: 'Central America' },
+  { code: 'CAR', name: 'Caribbean' },
   { code: 'OC', name: 'Oceania' },
   { code: 'SA', name: 'South America' },
 ]
