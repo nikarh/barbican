@@ -1,4 +1,4 @@
-//! How much blocking a choice of countries and continents takes, from a summary of the country database made in
+//! How much blocking a choice of countries, continents and regions takes, from a summary of the country database made in
 //! one pass when it is opened: each country's and continent's extent, and the database as runs of addresses of one
 //! place (a country and its continent) for counting any choice together.
 //!
@@ -12,7 +12,7 @@ use std::sync::{Arc, OnceLock};
 
 use barbican_common::net::{Family, Net, Range};
 
-use crate::geo::{Coverage, Extent};
+use crate::geo::{Coverage, Extent, in_area, region};
 
 /// A country and its continent.
 pub(crate) type Place = (Option<String>, Option<String>);
@@ -348,11 +348,12 @@ impl Summary {
             .places
             .iter()
             .map(|(country, continent)| {
-                let among = |code: &Option<String>, wanted: &[String]| {
-                    code.as_ref()
-                        .is_some_and(|c| wanted.contains(&c.to_ascii_uppercase()))
-                };
-                among(country, &wanted_countries) || among(continent, &wanted_continents)
+                country
+                    .as_ref()
+                    .is_some_and(|c| wanted_countries.contains(&c.to_ascii_uppercase()))
+                    || wanted_continents
+                        .iter()
+                        .any(|w| in_area(w, country.as_deref(), continent.as_deref()))
             })
             .collect();
         let mut tally = Tally::default();
@@ -382,7 +383,24 @@ impl Summary {
                 .iter()
                 .zip(&wanted_continents)
                 .map(|(code, upper)| {
-                    let extent = self.continents.get(upper).copied().unwrap_or_default();
+                    let extent = if region(upper).is_some() {
+                        // A region's countries, counted from the runs.
+                        let chosen: Vec<bool> = self
+                            .places
+                            .iter()
+                            .map(|(country, continent)| {
+                                in_area(upper, country.as_deref(), continent.as_deref())
+                            })
+                            .collect();
+                        let mut tally = Tally::default();
+                        self.v4.count(&chosen, &mut tally);
+                        if let Some(v6) = self.v6.get() {
+                            v6.count(&chosen, &mut tally);
+                        }
+                        tally.finish()
+                    } else {
+                        self.continents.get(upper).copied().unwrap_or_default()
+                    };
                     (code.clone(), family(extent))
                 })
                 .collect(),

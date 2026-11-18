@@ -15,6 +15,59 @@ use crate::coverage::{Place, Summary};
 #[cfg(test)]
 use crate::coverage::{Tally, prefixes_between};
 
+/// The continents of the databases, by code.
+pub const CONTINENTS: [&str; 7] = ["AF", "AN", "AS", "EU", "NA", "OC", "SA"];
+
+/// Regions blocked as a whole like continents, by code: their countries. The databases place their countries only
+/// on a continent (Central America and the Caribbean on North America). Central America is the seven countries of
+/// the isthmus, without Mexico; the Caribbean is the UN's region.
+pub const REGIONS: [(&str, &[&str]); 2] = [
+    ("CAM", &["BZ", "CR", "GT", "HN", "NI", "PA", "SV"]),
+    (
+        "CAR",
+        &[
+            "AG", "AI", "AW", "BB", "BL", "BQ", "BS", "CU", "CW", "DM", "DO", "GD", "GP", "HT",
+            "JM", "KN", "KY", "LC", "MF", "MQ", "MS", "PR", "SX", "TC", "TT", "VC", "VG", "VI",
+        ],
+    ),
+];
+
+/// The countries of a region, by its code.
+#[must_use]
+pub fn region(code: &str) -> Option<&'static [&'static str]> {
+    REGIONS
+        .iter()
+        .find(|(c, _)| c.eq_ignore_ascii_case(code))
+        .map(|(_, countries)| *countries)
+}
+
+/// Whether `code` names a continent or a region.
+#[must_use]
+pub fn is_area(code: &str) -> bool {
+    CONTINENTS.iter().any(|c| c.eq_ignore_ascii_case(code)) || region(code).is_some()
+}
+
+/// Whether a place (a country and its continent) is in the area `code` names: a continent, or a region.
+#[must_use]
+pub fn in_area(code: &str, country: Option<&str>, continent: Option<&str>) -> bool {
+    match region(code) {
+        Some(countries) => {
+            country.is_some_and(|c| countries.iter().any(|r| r.eq_ignore_ascii_case(c)))
+        }
+        None => continent.is_some_and(|c| c.eq_ignore_ascii_case(code)),
+    }
+}
+
+/// The regions a country is in, by code.
+#[must_use]
+pub fn regions_of(country: &str) -> Vec<String> {
+    REGIONS
+        .iter()
+        .filter(|(_, countries)| countries.iter().any(|c| c.eq_ignore_ascii_case(country)))
+        .map(|(code, _)| (*code).to_owned())
+        .collect()
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Info {
     pub country: Option<String>,
@@ -185,8 +238,8 @@ impl Geo {
         info
     }
 
-    /// Every prefix of these countries (ISO codes) and continents (two-letter codes), merged; of IPv6 too only with
-    /// `ipv6`.
+    /// Every prefix of these countries (ISO codes) and continents and regions (their codes), merged; of IPv6 too only
+    /// with `ipv6`.
     #[must_use]
     pub fn networks_of(&self, countries: &[String], continents: &[String], ipv6: bool) -> Vec<Net> {
         let Some(reader) = &self.country else {
@@ -197,7 +250,7 @@ impl Geo {
         }
         let wanted = |country: Option<&str>, continent: Option<&str>| {
             country.is_some_and(|c| countries.iter().any(|w| w.eq_ignore_ascii_case(c)))
-                || continent.is_some_and(|c| continents.iter().any(|w| w.eq_ignore_ascii_case(c)))
+                || continents.iter().any(|w| in_area(w, country, continent))
         };
         // Most networks share a few records: decode each record once.
         let mut decided: HashMap<usize, bool> = HashMap::new();
@@ -371,7 +424,7 @@ fn coverage_by_reading(
             }
         }
         for (code, tally) in continents.iter().zip(&mut continent_tallies) {
-            if is(continent.as_deref(), code) {
+            if in_area(code, country.as_deref(), continent.as_deref()) {
                 tally.add(&net);
                 any = true;
             }
@@ -517,6 +570,68 @@ fn store(url: &str, gz: &[u8], path: &Path) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn regions() {
+        assert!(in_area("CAM", Some("GT"), Some("NA")));
+        assert!(in_area("cam", Some("pa"), None));
+        assert!(!in_area("CAM", Some("MX"), Some("NA")));
+        assert!(!in_area("CAM", None, Some("NA")));
+        assert!(in_area("CAR", Some("JM"), Some("NA")));
+        assert!(in_area("NA", Some("GT"), Some("NA")));
+        assert!(!in_area("EU", Some("GT"), Some("NA")));
+        assert!(is_area("CAR") && is_area("sa") && !is_area("XX") && !is_area("GT"));
+        assert_eq!(regions_of("bz"), ["CAM"]);
+        assert_eq!(regions_of("US"), Vec::<String>::new());
+        // Each country in one region at most, and only countries of North America.
+        let all: Vec<&str> = REGIONS
+            .iter()
+            .flat_map(|(_, c)| c.iter().copied())
+            .collect();
+        let mut unique = all.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(all.len(), unique.len());
+    }
+
+    #[test]
+    fn region_coverage() {
+        let place = |country: &str, continent: &str| {
+            Arc::new((Some(country.to_owned()), Some(continent.to_owned())))
+        };
+        let networks = [
+            ("192.0.2.0/25", place("US", "NA")),
+            ("192.0.2.128/26", place("GT", "NA")),
+            ("192.0.2.192/26", place("BZ", "NA")),
+            ("198.51.100.0/24", place("JM", "NA")),
+            ("203.0.113.0/24", place("DE", "EU")),
+            ("2001:db8::/48", place("PA", "NA")),
+        ]
+        .map(|(net, place)| (net.parse::<Net>().unwrap(), place));
+        let summary = Summary::new(networks.clone(), true);
+        let codes = |s: &str| -> Vec<String> { s.split_whitespace().map(str::to_owned).collect() };
+
+        let c = summary.coverage(&codes("GT"), &codes("CAM"), true);
+        // Guatemala and Belize are next to each other: one prefix; Panama's IPv6 network another.
+        assert_eq!(
+            c.continents[0].1,
+            Extent {
+                prefixes: 2,
+                v6_prefixes: 1,
+                v4_addresses: 128,
+                v6_networks: 1,
+            }
+        );
+        assert_eq!(c.total, c.continents[0].1);
+        assert_eq!(c.countries[0].2.v4_addresses, 64);
+        let c = summary.coverage(&[], &codes("CAM car"), false);
+        assert_eq!(c.continents[0].1.prefixes, 1);
+        assert_eq!(c.continents[1].1.v4_addresses, 256);
+        assert_eq!(c.total.v4_addresses, 384);
+        assert_eq!(c.total.v6_prefixes, 0);
+        let c = summary.coverage(&[], &codes("NA CAM"), true);
+        assert_eq!(c.total.v4_addresses, 512);
+    }
 
     #[test]
     fn months() {
@@ -710,6 +825,8 @@ mod tests {
                 all_countries.iter().step_by(3).cloned().collect(),
                 codes("NA"),
             ),
+            (codes("BZ GT MX"), codes("CAM car")),
+            (codes(""), codes("NA CAM CAR")),
             (codes(""), codes("")),
         ];
         for (countries, continents) in &choices {

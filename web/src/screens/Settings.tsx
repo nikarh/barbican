@@ -359,9 +359,9 @@ function PlaceExtentLine({
   const found = list?.find((x) => x.code === place.code)
   if (coverage === undefined || found === undefined) return <span>Counting…</span>
   const within =
-    found.continent !== null && coverage.continents.some((c) => c.code === found.continent)
-      ? found.continent
-      : null
+    [...(found.continent === null ? [] : [found.continent]), ...found.regions].find((area) =>
+      coverage.continents.some((c) => c.code === area),
+    ) ?? null
   return (
     <>
       {within !== null && (

@@ -162,7 +162,8 @@ pub struct Policy {
     pub trust_secs: u64,
     /// Countries (ISO codes) blocked as a whole.
     pub blocked_countries: Vec<String>,
-    /// Continents blocked as a whole: AF, AN, AS, EU, NA, OC, SA.
+    /// Continents and regions blocked as a whole: AF, AN, AS, EU, NA, OC, SA, and CAM (Central America) and CAR (the
+    /// Caribbean), which the databases place on North America.
     pub blocked_continents: Vec<String>,
     /// Events older than this are deleted; bans and their addresses stay.
     pub retention_days: u32,

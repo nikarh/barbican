@@ -223,7 +223,7 @@ pub struct OrderParams {
 pub struct CoverageParams {
     /// ISO codes.
     pub countries: Vec<String>,
-    /// AF, AN, AS, EU, NA, OC, SA.
+    /// Continents (AF, AN, AS, EU, NA, OC, SA) and regions (CAM, CAR).
     pub continents: Vec<String>,
 }
 
@@ -949,10 +949,12 @@ pub struct PlaceExtent {
     pub code: String,
     /// Of a country: the continent the database places it on.
     pub continent: Option<String>,
+    /// Of a country: the regions (`CAM`, `CAR`) it is in.
+    pub regions: Vec<String>,
     pub extent: Extent,
 }
 
-/// How much blocking some countries and continents takes, by the country database.
+/// How much blocking some countries, continents and regions takes, by the country database.
 #[derive(Debug, Serialize, Clone)]
 #[cfg_attr(test, derive(TS), ts(export, export_to = "model.ts"))]
 #[serde(rename_all = "camelCase")]
