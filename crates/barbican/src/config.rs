@@ -211,7 +211,40 @@ pub enum ParserKind {
     Sshd,
     /// Authelia.
     Authelia,
+    /// Keycloak's login events.
+    Keycloak,
+    /// authentik's login events.
+    Authentik,
+    /// `SuperTokens` sign-ins, as the app logs them.
+    Supertokens,
     Regex,
+}
+
+impl ParserKind {
+    /// The built-in parsers, by name.
+    pub const BUILTIN: [(&str, Self); 6] = [
+        ("traefik", Self::Traefik),
+        ("sshd", Self::Sshd),
+        ("authelia", Self::Authelia),
+        ("keycloak", Self::Keycloak),
+        ("authentik", Self::Authentik),
+        ("supertokens", Self::Supertokens),
+    ];
+
+    /// A built-in parser by name.
+    #[must_use]
+    pub fn builtin(name: &str) -> Option<Self> {
+        Self::BUILTIN
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, kind)| *kind)
+    }
+
+    /// The names of the built-in parsers: `traefik, sshd, ...`.
+    #[must_use]
+    pub fn builtin_names() -> String {
+        Self::BUILTIN.map(|(name, _)| name).join(", ")
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

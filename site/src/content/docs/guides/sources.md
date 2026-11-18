@@ -1,6 +1,6 @@
 ---
 title: Sources and parsers
-description: Where Barbican reads logs from (Docker, files, the journal, VictoriaLogs), the parsers for Traefik, sshd and Authelia, and a regular expression for any other log.
+description: Where Barbican reads logs from (Docker, files, the journal, VictoriaLogs), the parsers for Traefik, sshd, Authelia, Keycloak, authentik and SuperTokens, and a regular expression for any other log.
 sidebar:
   order: 1
 ---
@@ -10,7 +10,7 @@ A source is one log: a name, a parser, and one input. Inputs and parsers are ind
 ```toml title="/etc/barbican/config.toml"
 [[source]]
 name = "traefik"          # shown in the UI; rules can be limited to sources
-parser = "traefik"        # traefik, sshd, authelia, or regex
+parser = "traefik"        # traefik, sshd, authelia, keycloak, authentik, supertokens, or regex
 docker = { container = "traefik" }
 # or: file = { path = "/var/log/nginx/access.log" }
 # or: journald = { unit = "sshd.service" }        (or identifier = "sshd")
@@ -39,9 +39,9 @@ A parser turns a line into an event, or skips it. The kinds of events are:
 | Kind | From | Rules can match |
 | --- | --- | --- |
 | HTTP request | Traefik, regex | method, path, status, host, user agent, whether the proxy had a route |
-| Failed login | sshd, Authelia, regex | user name |
-| Successful login | sshd, Authelia, regex | user name; a trust rule makes the address [trusted](/guides/rules/#trust) |
-| Unknown user | sshd, regex | user name |
+| Failed login | sshd, Authelia, Keycloak, authentik, SuperTokens, regex | user name |
+| Successful login | sshd, Authelia, Keycloak, authentik, SuperTokens, regex | user name; a trust rule makes the address [trusted](/guides/rules/#trust) |
+| Unknown user | sshd, Keycloak, authentik, regex | user name |
 | Protocol probe | sshd, regex | what it was (`invalid banner`, `no matching algorithms`, ...) |
 
 `barbican parse <parser> [<file>]` prints what a parser makes of each line of a file (or of standard input): a quick way to check that a log is understood.
@@ -72,6 +72,65 @@ OpenSSH's messages, as sshd (or `sshd-session`) logs them to the journal or a fi
 ### Authelia
 
 Authelia's log, as text (logfmt) or JSON: failed first and second factor logins, and successful ones. Failed and successful logins are logged at the `info` level. At the `debug` level Authelia also logs every request of a signed-in user (its authorization checks): Barbican reads those as sessions, which keep the user's address trusted while they use your services (with a [trust rule](/guides/rules/#trust)).
+
+### Keycloak
+
+Keycloak's login events, as its `jboss-logging` event listener (on by default in every realm) logs them, in the plain console format or as JSON (`--log-console-output=json`, both the default and the ECS format). Releases before 23.0.5 write the values without quotes; they are read too:
+
+| Event | Becomes |
+| --- | --- |
+| `LOGIN_ERROR` with `error="user_not_found"` | an unknown user |
+| `LOGIN_ERROR` with `error="invalid_user_credentials"` (a wrong password or one-time code) or `user_temporarily_disabled` (locked out by brute force detection) | a failed login |
+| `CLIENT_LOGIN_ERROR` with `error="invalid_client_credentials"` | a failed login, as the client |
+| `LOGIN` | a successful login |
+
+The address is the event's `ipAddress`: behind a reverse proxy, Keycloak must be told to read it from the proxy's headers (`--proxy-headers xforwarded`, or `forwarded`), or every event has the proxy's address. Keycloak logs failed logins at the `WARN` level, but successful ones at `DEBUG`: to trust addresses after a Keycloak login, raise them to `INFO`:
+
+```bash
+kc.sh start --proxy-headers xforwarded --spi-events-listener--jboss-logging--success-level=info
+```
+
+(`--spi-events-listener-jboss-logging-success-level=info` before Keycloak 26.)
+
+### authentik
+
+authentik's server log (JSON, as the `server` container writes it): the events it creates for logins (`login`, `login_failed`) and the user names identification stages don't know (`invalid_login`). A failed login names what was typed. An unknown user name is an unknown user: logged by the identification stage, or, when a separate password stage pretends unknown users exist, a failed login of a user that has no id.
+
+The address is the event's `client_ip`: authentik takes it from `X-Forwarded-For` only from the proxies it trusts (`AUTHENTIK_LISTEN__TRUSTED_PROXY_CIDRS`, private ranges by default).
+
+### SuperTokens
+
+SuperTokens logs nothing about sign-ins with the client's address: its core is called by your backend, not by browsers, and the backend SDKs log neither outcomes nor addresses. The app logs them itself, one JSON line per sign-in, with an override of the sign-in API. With the Node SDK and email and password sign-in:
+
+```ts
+EmailPassword.init({
+  override: {
+    apis: (original) => ({
+      ...original,
+      signInPOST: async (input) => {
+        const response = await original.signInPOST!(input);
+        const user = input.formFields.find((f) => f.id === 'email')?.value;
+        // The client's address as the reverse proxy in front saw it (Traefik sets X-Real-IP; nginx with
+        // `proxy_set_header X-Real-IP $remote_addr`), never the first X-Forwarded-For entry, which the client
+        // chooses.
+        const ip = input.options.req.getHeaderValue('x-real-ip');
+        console.log(JSON.stringify({ event: 'supertokens.signin', status: response.status, user, ip }));
+        return response;
+      },
+    }),
+  },
+});
+```
+
+Each attempt logs:
+
+```json
+{"event":"supertokens.signin","status":"WRONG_CREDENTIALS_ERROR","user":"alice@example.com","ip":"203.0.113.5"}
+```
+
+The `supertokens` parser reads these lines from the app's log, after any prefix the app's logger writes: `OK` is a successful login, `WRONG_CREDENTIALS_ERROR` a failed one (SuperTokens doesn't say whether the user exists, so there are no unknown users), and other statuses are skipped. The SDKs for other languages have the same override; any of them that writes this line works.
+
+Without changing the app, the reverse proxy's log is all there is: the sign-in API answers `200` whether the password was right or not, so a rule can only count requests, for example 20 `POST` requests to `^/auth/signin$` within 10 minutes.
 
 ## A log without a parser
 

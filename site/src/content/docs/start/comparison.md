@@ -26,7 +26,7 @@ The descriptions of other tools come from their own documentation, linked at the
 
 fail2ban is the classic: jails pair a regular expression filter with a log file and an action, usually firewall rules that reject the address for a while. It ships filters for a long list of services and runs almost anywhere Python does. Repeat offenders can get longer bans (`bantime.increment`).
 
-Barbican covers fewer services out of the box (Traefik, OpenSSH, Authelia, plus regular expressions), and in exchange it understands what it reads. A rule says "40 responses 401, 403 or 404 within 10 minutes from one address" or "any request for a path only vulnerability scanners ask for", instead of a regular expression per message. Successful logins make an address trusted, so a user who mistypes their password isn't banned. It also blocks countries and blocklists, shows what every address did, and pushes bans to routers.
+Barbican covers fewer services out of the box (Traefik, OpenSSH, Authelia, Keycloak, authentik, SuperTokens, plus regular expressions), and in exchange it understands what it reads. A rule says "40 responses 401, 403 or 404 within 10 minutes from one address" or "any request for a path only vulnerability scanners ask for", instead of a regular expression per message. Successful logins make an address trusted, so a user who mistypes their password isn't banned. It also blocks countries and blocklists, shows what every address did, and pushes bans to routers.
 
 ## CrowdSec
 
@@ -69,7 +69,7 @@ These are problems every tool in this space runs into, and what Barbican does ab
 ## What Barbican doesn't have
 
 - Shared threat intelligence. You get what your own logs show, plus public feeds.
-- A large library of parsers. Today: Traefik, OpenSSH, Authelia, and regular expressions.
+- A large library of parsers. Today: Traefik, OpenSSH, Authelia, Keycloak, authentik, SuperTokens, and regular expressions.
 - Other operating systems. It needs Linux with nftables, or a router with iptables and ipset.
 - A long track record. It is a new project with one maintainer.
 

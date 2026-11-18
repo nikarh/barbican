@@ -10,8 +10,11 @@ use crate::config::{ParserKind, Source};
 use crate::signal::Event;
 
 mod authelia;
+mod authentik;
+mod keycloak;
 mod pattern;
 mod sshd;
+mod supertokens;
 mod traefik;
 
 pub use pattern::Pattern;
@@ -21,6 +24,9 @@ pub enum Parser {
     Traefik(traefik::Traefik),
     Sshd(sshd::Sshd),
     Authelia(authelia::Authelia),
+    Keycloak(keycloak::Keycloak),
+    Authentik(authentik::Authentik),
+    Supertokens(supertokens::Supertokens),
     Regex(Pattern),
 }
 
@@ -38,6 +44,9 @@ impl Parser {
             ParserKind::Traefik => Some(Self::Traefik(traefik::Traefik::default())),
             ParserKind::Sshd => Some(Self::Sshd(sshd::Sshd::default())),
             ParserKind::Authelia => Some(Self::Authelia(authelia::Authelia::default())),
+            ParserKind::Keycloak => Some(Self::Keycloak(keycloak::Keycloak::default())),
+            ParserKind::Authentik => Some(Self::Authentik(authentik::Authentik::default())),
+            ParserKind::Supertokens => Some(Self::Supertokens(supertokens::Supertokens::default())),
             ParserKind::Regex => None,
         }
     }
@@ -64,6 +73,9 @@ impl Parser {
             Self::Traefik(p) => p.parse(line),
             Self::Sshd(p) => p.parse(line),
             Self::Authelia(p) => p.parse(line),
+            Self::Keycloak(p) => p.parse(line),
+            Self::Authentik(p) => p.parse(line),
+            Self::Supertokens(p) => p.parse(line),
             Self::Regex(p) => p.parse(line),
         }?;
         Some((barbican_common::net::canonical(ip), event))
@@ -155,6 +167,20 @@ mod tests {
         assert_eq!(ip("[2001:db8::1]:22"), "2001:db8::1".parse().ok());
         assert_eq!(ip("2001:db8::1"), "2001:db8::1".parse().ok());
         assert_eq!(ip("example.com"), None);
+    }
+
+    #[test]
+    fn every_builtin_parser_is_built_in() {
+        for (name, kind) in ParserKind::BUILTIN {
+            assert!(Parser::builtin(kind).is_some(), "{name}");
+            assert_eq!(ParserKind::builtin(name), Some(kind));
+            let config: crate::config::Config = toml::from_str(&format!(
+                "[[source]]\nname = \"a\"\nparser = \"{name}\"\nfile = {{ path = \"/dev/null\" }}"
+            ))
+            .unwrap();
+            assert_eq!(config.sources[0].parser, kind);
+        }
+        assert_eq!(ParserKind::builtin("regex"), None);
     }
 
     #[test]
