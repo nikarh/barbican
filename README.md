@@ -27,7 +27,7 @@ Each part is an interface with a few implementations today:
 | Part | Today |
 | --- | --- |
 | Log inputs | Docker API, files (followed across rotation), the systemd journal, VictoriaLogs queries |
-| Parsers | Traefik, OpenSSH, Authelia, regular expressions |
+| Parsers | Traefik, OpenSSH, Authelia, Keycloak, authentik, SuperTokens, regular expressions |
 | Lists | Countries and continents (DB-IP), Spamhaus DROP, FireHOL level 1, blocklist.de, Tor exits, Cloudflare's ranges (to allow), any URL |
 | Firewalls | nftables on the server and on OpenWrt; iptables with ipset on firmware without nftables (Asuswrt-Merlin) |
 | Packages | Debian, Arch, static binaries (x86_64, aarch64); OpenWrt with LuCI pages (armv7, aarch64, x86_64); the UI as a container image |

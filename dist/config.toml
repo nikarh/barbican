@@ -52,7 +52,8 @@ socket = "/run/docker.sock"
 [exempt]
 nets = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7"]
 
-# Logs to read. Each source has a name, a parser (traefik, sshd, authelia or regex) and one input:
+# Logs to read. Each source has a name, a parser (traefik, sshd, authelia, keycloak, authentik, supertokens or
+# regex) and one input:
 # docker = { container = "..." }, file = { path = "..." }, journald = { unit = "..." } or
 # victorialogs = { url = "...", query = "..." }.
 

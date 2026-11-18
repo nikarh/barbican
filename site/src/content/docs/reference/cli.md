@@ -35,7 +35,7 @@ barbican --version
 | `-h`, `--help` | The help |
 
 - **Running**: the agent logs to standard error, at the `info` level unless `RUST_LOG` says otherwise (`RUST_LOG=debug`, or per module). Under systemd (`journalctl -u barbican`) it tells systemd it is ready once its firewall table is in place.
-- **`parse`**: parsers `traefik`, `sshd`, `authelia`. Prints the address, the kind of event and what happened for each line understood, and how many were. See [Checking a parser](/guides/import/#checking-a-parser).
+- **`parse`**: parsers `traefik`, `sshd`, `authelia`, `keycloak`, `authentik`, `supertokens`. Prints the address, the kind of event and what happened for each line understood, and how many were. See [Checking a parser](/guides/import/#checking-a-parser).
 - **`replay`** and **`import`**: see [Importing old logs](/guides/import/).
 - **`edge-fingerprint`**: reads the certificate the agent made on its first start with `[edge]`; it doesn't make one.
 - **`ui-proxy`** and **`healthcheck`**: what the container image runs, and only supported in a container; see [The UI container](/guides/reverse-proxy/#the-ui-container). It refuses to start without `--trusted-proxy`, and warns when it doesn't seem to run in a container. `/healthz` answers anyone (the healthcheck asks it); everything else only the trusted proxy.

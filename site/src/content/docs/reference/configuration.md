@@ -111,7 +111,7 @@ Setting `nets` replaces the default list: keep the private ranges in it.
 | Setting | |
 | --- | --- |
 | `name` | Shown in the UI; rules can be limited to sources. Unique |
-| `parser` | `traefik`, `sshd`, `authelia` or `regex` |
+| `parser` | `traefik`, `sshd`, `authelia`, `keycloak`, `authentik`, `supertokens` or `regex` (see [Sources and parsers](/guides/sources/#parsers)) |
 | `pattern` | With `parser = "regex"` only: the regular expression, with the named group `ip` and others |
 | `kind` | With `parser = "regex"` only: `http`, `auth_failure`, `auth_success`, `invalid_user` or `probe` |
 | one input | `docker = { container = "..." }`, `file = { path = "..." }`, `journald = { unit = "..." }` (or `identifier = "..."`), or `victorialogs = { url = "...", query = "..." }` |

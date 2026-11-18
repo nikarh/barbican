@@ -60,7 +60,7 @@ Options:
       --dry-run        Decide and record, but leave the firewall alone
   -h, --help           This help
 
-Parsers: traefik, sshd, authelia.
+Parsers: traefik, sshd, authelia, keycloak, authentik, supertokens.
 ";
 
 fn main() -> ExitCode {
@@ -105,14 +105,14 @@ fn main() -> ExitCode {
 
 fn parse_command(mut args: pico_args::Arguments) -> ExitCode {
     let mut err = std::io::stderr();
-    let kind = match args.free_from_str::<String>().as_deref() {
-        Ok("traefik") => config::ParserKind::Traefik,
-        Ok("sshd") => config::ParserKind::Sshd,
-        Ok("authelia") => config::ParserKind::Authelia,
-        _ => {
-            let _ = writeln!(err, "parse: name a parser: traefik, sshd or authelia");
-            return ExitCode::FAILURE;
-        }
+    let name = args.free_from_str::<String>().ok();
+    let Some(kind) = name.as_deref().and_then(config::ParserKind::builtin) else {
+        let _ = writeln!(
+            err,
+            "parse: name a parser: {}",
+            config::ParserKind::builtin_names()
+        );
+        return ExitCode::FAILURE;
     };
     let input: Box<dyn BufRead> = match args.opt_free_from_str::<std::path::PathBuf>() {
         Ok(Some(path)) => match std::fs::File::open(&path) {
@@ -154,7 +154,8 @@ fn replay_command(mut args: pico_args::Arguments) -> ExitCode {
         let Some(input) = replay::input(&arg) else {
             let _ = writeln!(
                 err,
-                "replay: {arg:?} isn't <parser>:<file> (parsers: traefik, sshd, authelia)"
+                "replay: {arg:?} isn't <parser>:<file> (parsers: {})",
+                config::ParserKind::builtin_names()
             );
             return ExitCode::FAILURE;
         };
