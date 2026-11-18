@@ -1,6 +1,6 @@
 ---
 title: Rules and policy
-description: How rules match events and ban, the default rules, trusted addresses, and the policy that sets ban lengths.
+description: How rules match events and ban, allow rules, the default rules, trusted addresses, and the policy that sets ban lengths.
 sidebar:
   order: 2
 ---
@@ -15,9 +15,11 @@ Rules decide what counts as abuse; the policy decides for how long. Both are edi
 
 Every event of every source is matched against the rules, in their order on the **Rules** screen:
 
-- An event is **recorded** under the first rule it matches: counted per address, rule, source and hour, and shown on the address's page and in **Events**. Lines that match no rule are not recorded (logins are, for trust).
+- An event is **recorded** under the first rule it matches: counted per address, rule, source and hour, and shown on the address's page and in **Events**. Lines that match no rule are not recorded, except successful logins.
 - Every **banning** rule it matches **counts** it. A rule bans once it counted `threshold` events of one address within its window (a threshold of 1 bans on the first).
 - A rule that **records** only never bans: it makes events visible, for example requests you want to watch before deciding.
+- An **allow** rule exempts what it matches from every other rule: the event is recorded under the allow rule, wherever it is in the order, and no other rule counts it. See [Allow rules](#allow-rules).
+- A **trust** rule trusts the address of a successful login: see [Trust](#trust).
 
 Some addresses are never banned:
 
@@ -35,6 +37,7 @@ A rule looks at one kind of event (HTTP requests, failed logins, successful logi
 | Method | HTTP | the method |
 | Status | HTTP | one of these statuses |
 | Known host | HTTP | whether the proxy had a route for the request (with Traefik: a router) |
+| Host | HTTP | the host the request was for; when the log has no host, the proxy's route (Traefik's router, `app@docker`) |
 | User agent | HTTP | the user agent (Traefik's JSON log, or a regex source with `agent`) |
 | User agent in list | HTTP | the user agent names one in these [lists of user agents](/guides/feeds/#feeds) |
 | User | logins | the user name |
@@ -44,6 +47,8 @@ A rule looks at one kind of event (HTTP requests, failed logins, successful logi
 Patterns are regular expressions that match anywhere in the text unless anchored (`^...$`). One that starts with `!` matches what the rest doesn't: `!^(GET|POST)$` matches every other method.
 
 <Screenshot name="rule" alt="Editing a rule: its name, the kind of event and sources it looks at, conditions on path, method, status, known host and user agent, the threshold and window, and the ban's length and prefix lengths." />
+
+The **action** is what a rule does with what it matches: **Ban**, **Only record**, **Allow** or **Trust** (rules of successful logins only). Threshold, window and the ban's length only apply to banning and recording rules.
 
 A rule that bans has a length: the policy's default, a length of its own, or until lifted by hand. It can ban a prefix instead of the address: an IPv4 prefix length (32: the address only) and an IPv6 one (64 by default, the usual size of one customer's network).
 
@@ -61,12 +66,29 @@ A new database starts with these rules. All of them can be changed, turned off o
 | Root logins | failed logins | at once, for a year: logins as `root`, `admin`, `administrator` |
 | Unknown users | unknown users | 2 within an hour, for a year |
 | Protocol probes | probes | at once, for a year: garbage instead of SSH, ancient algorithms only scanners offer |
+| Trusted logins | successful logins | trusts, doesn't ban: see [Trust](#trust) |
 
 To see what they would make of logs you have, before anything is banned, run [`barbican replay`](/guides/import/#trying-the-rules-on-old-logs).
 
+## Allow rules
+
+Some requests look like abuse but are part of how an app works: a REST API that answers 404 for what doesn't exist, or an app that asks for a file you don't have. Say a mobile app asks every app server it connects to for `/api/config`, which answers 404 where there is no such configuration. Enough of those count towards **Many errors**. An allow rule for them:
+
+| Field | Value |
+| --- | --- |
+| Looks at | HTTP |
+| Path | `^/api/config$` |
+| Status | `404` |
+| Host | `^app@` (Traefik's router; or the host name, `^app\.example\.com$`, where the log has it) |
+| Action | Allow |
+
+Matching requests are then recorded under the allow rule, and no other rule counts them, however many there are. Keep allow rules narrow: an allow rule with no conditions exempts every event of its kind. Allowing is per event: to exempt an address from every rule, put it on the [allow list](/guides/feeds/#allow-and-deny-lists).
+
 ## Trust
 
-An address someone logged in from is **trusted** for a while (30 days by default, **Trust after a login** in the policy): no rule bans it. A successful SSH or Authelia login trusts the address, and so does every request of a signed-in Authelia user (with Authelia logging at the `debug` level), which keeps the address trusted while it is used. So people who mistype a password a few times, or share an address with someone who does, aren't locked out of their own services.
+An address someone logged in from is **trusted** for a while (30 days by default, **Trust after a login** in the policy): no rule bans it. So people who mistype a password a few times, or share an address with someone who does, aren't locked out of their own services.
+
+What trusts an address is a rule: one whose action is **Trust**, of successful logins. The default **Trusted logins** trusts every successful login of every source: SSH, and the identity providers of [sources](/guides/sources/). Limit it to some sources, or to some users (**User**), or turn it off to trust no login. Sources that log the requests of signed-in users (Authelia, at the `debug` level) keep the address trusted while it is used: those requests aren't events, and only trust rules of successful logins match them. Databases created before trust was a rule get **Trusted logins** added when the agent is upgraded.
 
 The Addresses screen lists trusted addresses (**Trusted**), with the user who logged in; **Stop trusting** on an address's page ends it.
 

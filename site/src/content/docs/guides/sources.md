@@ -40,7 +40,7 @@ A parser turns a line into an event, or skips it. The kinds of events are:
 | --- | --- | --- |
 | HTTP request | Traefik, regex | method, path, status, host, user agent, whether the proxy had a route |
 | Failed login | sshd, Authelia, regex | user name |
-| Successful login | sshd, Authelia, regex | user name; makes the address [trusted](/guides/rules/#trust) |
+| Successful login | sshd, Authelia, regex | user name; a trust rule makes the address [trusted](/guides/rules/#trust) |
 | Unknown user | sshd, regex | user name |
 | Protocol probe | sshd, regex | what it was (`invalid banner`, `no matching algorithms`, ...) |
 
@@ -71,7 +71,7 @@ OpenSSH's messages, as sshd (or `sshd-session`) logs them to the journal or a fi
 
 ### Authelia
 
-Authelia's log, as text (logfmt) or JSON: failed first and second factor logins, and successful ones. Failed and successful logins are logged at the `info` level. At the `debug` level Authelia also logs every request of a signed-in user (its authorization checks): Barbican reads those as sessions, which keep the user's address trusted while they use your services.
+Authelia's log, as text (logfmt) or JSON: failed first and second factor logins, and successful ones. Failed and successful logins are logged at the `info` level. At the `debug` level Authelia also logs every request of a signed-in user (its authorization checks): Barbican reads those as sessions, which keep the user's address trusted while they use your services (with a [trust rule](/guides/rules/#trust)).
 
 ## A log without a parser
 

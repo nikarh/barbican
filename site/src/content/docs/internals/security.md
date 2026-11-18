@@ -15,7 +15,7 @@ The UI has no login of its own and full control over Barbican, so it is reachabl
 
 Barbican believes the logs it reads. Whoever can write lines into them can get addresses banned, and only addresses that aren't allowed: no rule bans an allowed or exempt address, and every ban can be lifted in the UI. Read logs that only the services write. A reverse proxy should log the address it received the connection from (or, behind a CDN, an address it trusts the CDN for), not one from a header any client can set.
 
-Trust works the other way: a successful login keeps an address from being banned for a while. Logins come from the services' own logs (sshd, Authelia).
+Trust works the other way: a successful login a trust rule matches keeps an address from being banned for a while. Logins come from the services' own logs (sshd, Authelia).
 
 ## The edge API
 
