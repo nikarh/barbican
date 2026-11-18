@@ -222,7 +222,7 @@ function Editor({ rule, onClose }: { rule: Rule; onClose: () => void }) {
             </SimpleGrid>
             <TextInput
               label="Host"
-              description="The host, or the proxy's route (hass@docker) when the log has no host"
+              description="The host, or the proxy's route (app@docker) when the log has no host"
               value={c.host ?? ''}
               onChange={(e) => {
                 cond({ host: optional(e.currentTarget.value) })

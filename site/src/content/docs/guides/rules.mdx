@@ -37,7 +37,7 @@ A rule looks at one kind of event (HTTP requests, failed logins, successful logi
 | Method | HTTP | the method |
 | Status | HTTP | one of these statuses |
 | Known host | HTTP | whether the proxy had a route for the request (with Traefik: a router) |
-| Host | HTTP | the host the request was for; when the log has no host, the proxy's route (Traefik's router, `hass@docker`) |
+| Host | HTTP | the host the request was for; when the log has no host, the proxy's route (Traefik's router, `app@docker`) |
 | User agent | HTTP | the user agent (Traefik's JSON log, or a regex source with `agent`) |
 | User agent in list | HTTP | the user agent names one in these [lists of user agents](/guides/feeds/#feeds) |
 | User | logins | the user name |
@@ -72,14 +72,14 @@ To see what they would make of logs you have, before anything is banned, run [`b
 
 ## Allow rules
 
-Some requests look like abuse but are part of how an app works: a REST API that answers 404 for what doesn't exist, or an app that asks for a file you don't have. The Home Assistant iOS app, for example, asks for `/api/ios/config`, which answers 404 when there is no such configuration. Enough of those count towards **Many errors**. An allow rule for them:
+Some requests look like abuse but are part of how an app works: a REST API that answers 404 for what doesn't exist, or an app that asks for a file you don't have. Say a mobile app asks every app server it connects to for `/api/config`, which answers 404 where there is no such configuration. Enough of those count towards **Many errors**. An allow rule for them:
 
 | Field | Value |
 | --- | --- |
 | Looks at | HTTP |
-| Path | `^/api/ios/config$` |
+| Path | `^/api/config$` |
 | Status | `404` |
-| Host | `^hass@` (Traefik's router; or the host name, `^ha\.example\.com$`, where the log has it) |
+| Host | `^app@` (Traefik's router; or the host name, `^app\.example\.com$`, where the log has it) |
 | Action | Allow |
 
 Matching requests are then recorded under the allow rule, and no other rule counts them, however many there are. Keep allow rules narrow: an allow rule with no conditions exempts every event of its kind. Allowing is per event: to exempt an address from every rule, put it on the [allow list](/guides/feeds/#allow-and-deny-lists).

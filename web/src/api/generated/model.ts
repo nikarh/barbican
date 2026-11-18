@@ -81,7 +81,7 @@ status: Array<number>,
  */
 routed: boolean | null, 
 /**
- * HTTP: the host the request was for, or, when the log has no host, the proxy's route (`hass@docker`).
+ * HTTP: the host the request was for, or, when the log has no host, the proxy's route (`app@docker`).
  */
 host: string | null, 
 /**

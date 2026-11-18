@@ -156,7 +156,7 @@ mod tests {
         );
         assert_eq!(
             p(
-                r#"time="2026-10-12T21:01:10Z" level=debug msg="Check authorization of subject username=alice groups=admins,media ip=192.0.2.8 and object https://app.example.com/ (method GET)." method=GET path=/api/authz/forward-auth remote_ip=172.20.0.3"#
+                r#"time="2026-10-12T21:01:10Z" level=debug msg="Check authorization of subject username=alice groups=admins,users ip=192.0.2.8 and object https://app.example.com/ (method GET)." method=GET path=/api/authz/forward-auth remote_ip=192.0.2.3"#
             ),
             Some(("192.0.2.8".into(), r#"Session { user: "alice" }"#.into()))
         );

@@ -252,7 +252,7 @@ mod tests {
     #[test]
     fn skips_the_rest() {
         assert_eq!(
-            p("Connection from 203.0.113.1 port 1 on 172.20.0.2 port 22 rdomain \"\""),
+            p("Connection from 203.0.113.1 port 1 on 192.0.2.2 port 22 rdomain \"\""),
             None
         );
         assert_eq!(

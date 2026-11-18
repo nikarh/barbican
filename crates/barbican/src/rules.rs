@@ -62,7 +62,7 @@ pub struct Conditions {
     pub status: Vec<u16>,
     /// HTTP: whether the proxy had a route (a known host) for the request.
     pub routed: Option<bool>,
-    /// HTTP: the host the request was for, or, when the log has no host, the proxy's route (`hass@docker`).
+    /// HTTP: the host the request was for, or, when the log has no host, the proxy's route (`app@docker`).
     pub host: Option<String>,
     /// HTTP: the user agent.
     pub user_agent: Option<String>,
@@ -815,7 +815,7 @@ mod tests {
         for path in [
             "/",
             "/favicon.ico",
-            "/api/v2/torrents/info?category=x",
+            "/api/v2/items/info?category=x",
             "/assets/index-abc.js",
             "/environment",
             "/robots.txt",

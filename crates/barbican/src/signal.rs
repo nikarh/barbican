@@ -45,7 +45,7 @@ pub struct Http<'a> {
     pub host: Option<&'a str>,
     /// Whether the proxy found a route (a known host) for the request; `None` when the log doesn't say.
     pub routed: Option<bool>,
-    /// The proxy's route, when the log has no host: what the request went to (`torrents@docker`).
+    /// The proxy's route, when the log has no host: what the request went to (`app@docker`).
     pub router: Option<&'a str>,
     pub user_agent: Option<&'a str>,
 }
@@ -221,10 +221,10 @@ mod tests {
             status: 404,
             host: None,
             routed: Some(true),
-            router: Some("torrents@docker"),
+            router: Some("app@docker"),
             user_agent: None,
         });
-        assert_eq!(routed.what(), "GET /wp-login.php → 404 @torrents");
+        assert_eq!(routed.what(), "GET /wp-login.php → 404 @app");
         let long = "é".repeat(400);
         let mut buf = String::from("old");
         Event::Probe { what: &long }.write_what(&mut buf);

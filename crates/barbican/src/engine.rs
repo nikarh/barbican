@@ -838,20 +838,20 @@ mod tests {
     async fn allow_rules_exempt_what_they_match() {
         let mut t = setup_with(|rules| {
             rules.push(Rule {
-                name: "Home Assistant app config".into(),
+                name: "App config".into(),
                 kind: Kind::Http,
                 action: Action::Allow,
                 conditions: crate::rules::Conditions {
-                    path: Some("^/api/ios/config$".into()),
+                    path: Some("^/api/config$".into()),
                     status: vec![404],
-                    host: Some("^hass@".into()),
+                    host: Some("^app@".into()),
                     ..crate::rules::Conditions::default()
                 },
                 ..crate::rules::trusted_logins()
             });
         })
         .await;
-        let allowed = access("198.51.100.4", "/api/ios/config", 404, "hass@docker");
+        let allowed = access("198.51.100.4", "/api/config", 404, "app@docker");
         let lines = vec![allowed.as_str(); 60];
         // 60 404s, more than "many errors" bans for: none counts.
         assert_eq!(t.feed(WEB, &lines).await, Vec::new());
@@ -865,12 +865,12 @@ mod tests {
         assert_eq!(t.events().await, 60);
         // The same path of another service, and other paths, still count.
         assert_eq!(
-            t.feed(WEB, &[&access("198.51.100.4", "/.env", 404, "hass@docker")])
+            t.feed(WEB, &[&access("198.51.100.4", "/.env", 404, "app@docker")])
                 .await
                 .len(),
             1
         );
-        let other = access("198.51.100.5", "/api/ios/config", 404, "app@docker");
+        let other = access("198.51.100.5", "/api/config", 404, "other@docker");
         assert_eq!(t.feed(WEB, &vec![other.as_str(); 40]).await.len(), 1);
     }
 

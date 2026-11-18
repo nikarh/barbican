@@ -356,20 +356,20 @@ mod tests {
         assert!(Gate::new(Vec::new(), Some("Remote-User")).is_err());
         assert!(Gate::new(Vec::new(), None).is_err());
         // A trusted proxy without a user header: its addresses only.
-        let addresses = Gate::new(vec!["172.20.0.248/29".parse().unwrap()], None).unwrap();
+        let addresses = Gate::new(vec!["198.51.100.248/29".parse().unwrap()], None).unwrap();
         assert!(addresses.admits(
             "/api/ws",
-            "172.20.0.249".parse().unwrap(),
+            "198.51.100.249".parse().unwrap(),
             &HeaderMap::new()
         ));
         assert!(!addresses.admits("/api/ws", any, &HeaderMap::new()));
 
         let gate = Gate::new(
-            vec!["172.20.0.248/29".parse().unwrap()],
+            vec!["198.51.100.248/29".parse().unwrap()],
             Some("Remote-User"),
         )
         .unwrap();
-        let traefik: IpAddr = "172.20.0.249".parse().unwrap();
+        let traefik: IpAddr = "198.51.100.249".parse().unwrap();
         let mut user = HeaderMap::new();
         user.insert("remote-user", HeaderValue::from_static("alice"));
         let mut blank = HeaderMap::new();
@@ -377,7 +377,11 @@ mod tests {
         assert!(gate.admits("/api/ws", traefik, &user));
         assert!(gate.admits("/", traefik, &user));
         // Mapped IPv4 of a dual-stack socket.
-        assert!(gate.admits("/api/proxy", "::ffff:172.20.0.249".parse().unwrap(), &user));
+        assert!(gate.admits(
+            "/api/proxy",
+            "::ffff:198.51.100.249".parse().unwrap(),
+            &user
+        ));
         assert!(!gate.admits("/api/ws", traefik, &HeaderMap::new()));
         assert!(!gate.admits("/api/ws", traefik, &blank));
         assert!(!gate.admits("/api/ws", any, &user));

@@ -184,15 +184,11 @@ mod tests {
 
         let f = http(
             &mut p,
-            r#"198.51.100.4 - - [02/Nov/2026:16:07:32 +0000] "GET /api/v2/sync/maindata?rid=602 HTTP/1.1" 200 100 "-" "Mozilla/5.0 (X11)" 123719 "torrents@docker" "http://172.20.0.163:8080" 1ms"#,
+            r#"198.51.100.4 - - [02/Nov/2026:16:07:32 +0000] "GET /api/items?page=2 HTTP/1.1" 200 100 "-" "Mozilla/5.0 (X11)" 123719 "app@docker" "http://app:8080" 1ms"#,
         );
         assert_eq!(
             (f.2.as_str(), f.4, f.5.as_deref()),
-            (
-                "/api/v2/sync/maindata?rid=602",
-                Some(true),
-                Some("Mozilla/5.0 (X11)")
-            )
+            ("/api/items?page=2", Some(true), Some("Mozilla/5.0 (X11)"))
         );
 
         // A request line without a protocol, as scanners send, and an aborted request.
@@ -216,7 +212,7 @@ mod tests {
     #[test]
     fn a_forwarded_chain_blames_the_last_hop() {
         let mut p = Traefik::default();
-        let line = r#"203.0.113.9, 198.51.100.254 - - [11/Nov/2026:16:58:36 +0000] "GET /.env HTTP/1.1" 404 19 "-" "curl/8" 778 "hass@docker" "http://172.20.0.3:8080" 3ms"#;
+        let line = r#"203.0.113.9, 198.51.100.254 - - [11/Nov/2026:16:58:36 +0000] "GET /.env HTTP/1.1" 404 19 "-" "curl/8" 778 "app@docker" "http://app:8080" 3ms"#;
         let f = http(&mut p, line);
         assert_eq!(f.0, "198.51.100.254");
         assert_eq!((f.1.as_str(), f.2.as_str(), f.3), ("GET", "/.env", 404));
