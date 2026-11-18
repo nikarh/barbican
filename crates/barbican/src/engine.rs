@@ -76,7 +76,8 @@ impl Prefilter {
         let matched = self
             .current
             .matches(self.source, ip, &event, &mut self.what);
-        let login = matches!(event, Event::AuthSuccess { .. } | Event::Session { .. });
+        // Successful logins are recorded whether a rule matched or not; sessions only matter to trust rules.
+        let login = matches!(event, Event::AuthSuccess { .. });
         if matched == 0 && !login {
             return None;
         }
@@ -290,9 +291,7 @@ impl Engine {
             db::asn_name(tx, asn, name).await?;
         }
 
-        if let Some(user) = &hit.user
-            && matches!(hit.kind, None | Some(Kind::AuthSuccess))
-        {
+        if let Some(user) = hit.user.as_ref().filter(|_| set.trusts(hit.matched)) {
             let until = now.saturating_add(i64::try_from(trust_secs).unwrap_or(i64::MAX / 2));
             let saved = self.trust_saved.get(&hit.ip).copied().unwrap_or(i64::MIN);
             if now.saturating_sub(saved) >= SESSION_EVERY {
@@ -305,7 +304,8 @@ impl Engine {
             return Ok(());
         };
 
-        // Recorded under the first rule that matched (0 for logins no rule counts).
+        // Recorded under the first rule that matched (0 for logins no rule counts; the allow rule for what one
+        // allowed).
         let first = (hit.matched != 0)
             .then(|| set.rules.get(hit.matched.trailing_zeros() as usize))
             .flatten();
@@ -495,9 +495,15 @@ mod tests {
     }
 
     async fn setup() -> Test {
+        setup_with(|_| {}).await
+    }
+
+    /// With the default rules as `change` leaves them.
+    async fn setup_with(change: impl FnOnce(&mut Vec<Rule>)) -> Test {
         let config: Config = toml::from_str(CONFIG).unwrap();
         let app = App::new(config, Db::memory().await, crate::app::http_client(), true);
         let mut rules = crate::rules::defaults();
+        change(&mut rules);
         for (i, rule) in rules.iter_mut().enumerate() {
             rule.id = i64::try_from(i).unwrap() + 1;
         }
@@ -553,6 +559,15 @@ mod tests {
                 .read()
                 .unwrap()
                 .ban_of(ip.parse().unwrap(), now())
+                .is_some()
+        }
+
+        fn trusted(&self, ip: &str) -> bool {
+            self.app
+                .state
+                .read()
+                .unwrap()
+                .trusted(ip.parse().unwrap(), now())
                 .is_some()
         }
 
@@ -749,5 +764,95 @@ mod tests {
             bans.iter().map(|b| b.reason.as_str()).collect::<Vec<_>>(),
             vec!["Failed logins"]
         );
+    }
+
+    fn rule_named<'a>(rules: &'a mut [Rule], name: &str) -> &'a mut Rule {
+        rules.iter_mut().find(|r| r.name == name).unwrap()
+    }
+
+    const SESSION: &str = r#"level=debug msg="Check authorization of subject username=alice groups=a ip=192.0.2.8 and object https://x.example.com/ (method GET).""#;
+
+    #[tokio::test]
+    async fn without_the_trust_rule_logins_trust_nothing() {
+        let mut t = setup_with(|rules| rule_named(rules, "Trusted logins").enabled = false).await;
+        t.feed(AUTH, &[SESSION]).await;
+        assert!(!t.trusted("192.0.2.8"));
+        // Sessions aren't recorded; successful logins are, but trust nothing.
+        assert_eq!(t.events().await, 0);
+        let fail = r#"level=error msg="Unsuccessful 1FA authentication attempt by user 'bob'" remote_ip=198.51.100.20"#;
+        let ok = r#"level=debug msg="Successful 1FA authentication attempt made by user 'bob'" remote_ip=198.51.100.20"#;
+        let bans = t.feed(AUTH, &[fail, fail, fail, ok, fail, fail]).await;
+        assert_eq!(bans.len(), 1);
+        assert!(!t.trusted("198.51.100.20"));
+        assert_eq!(t.events().await, 6);
+    }
+
+    #[tokio::test]
+    async fn the_trust_rule_trusts_logins_of_its_sources() {
+        let mut t = setup_with(|rules| {
+            rule_named(rules, "Trusted logins").sources = vec!["ssh".into()];
+        })
+        .await;
+        t.feed(AUTH, &[SESSION]).await;
+        assert!(!t.trusted("192.0.2.8"));
+        t.feed(
+            SSH,
+            &["Accepted publickey for alice from 192.0.2.9 port 4242 ssh2"],
+        )
+        .await;
+        assert!(t.trusted("192.0.2.9"));
+        // And only the users it names.
+        let mut t = setup_with(|rules| {
+            rule_named(rules, "Trusted logins").conditions.user = Some("^bob$".into());
+        })
+        .await;
+        t.feed(AUTH, &[SESSION]).await;
+        assert!(!t.trusted("192.0.2.8"));
+        t.feed(
+            SSH,
+            &["Accepted password for bob from 192.0.2.9 port 4242 ssh2"],
+        )
+        .await;
+        assert!(t.trusted("192.0.2.9"));
+    }
+
+    #[tokio::test]
+    async fn allow_rules_exempt_what_they_match() {
+        let mut t = setup_with(|rules| {
+            rules.push(Rule {
+                name: "Home Assistant app config".into(),
+                kind: Kind::Http,
+                action: Action::Allow,
+                conditions: crate::rules::Conditions {
+                    path: Some("^/api/ios/config$".into()),
+                    status: vec![404],
+                    host: Some("^hass@".into()),
+                    ..crate::rules::Conditions::default()
+                },
+                ..crate::rules::trusted_logins()
+            });
+        })
+        .await;
+        let allowed = access("198.51.100.4", "/api/ios/config", 404, "hass@docker");
+        let lines = vec![allowed.as_str(); 60];
+        // 60 404s, more than "many errors" bans for: none counts.
+        assert_eq!(t.feed(WEB, &lines).await, Vec::new());
+        assert!(!t.banned("198.51.100.4"));
+        // Recorded, under the allow rule.
+        let rule: i64 = sqlx::query_scalar("SELECT rule FROM event")
+            .fetch_one(&t.app.db.pool)
+            .await
+            .unwrap();
+        assert_eq!(rule, 10);
+        assert_eq!(t.events().await, 60);
+        // The same path of another service, and other paths, still count.
+        assert_eq!(
+            t.feed(WEB, &[&access("198.51.100.4", "/.env", 404, "hass@docker")])
+                .await
+                .len(),
+            1
+        );
+        let other = access("198.51.100.5", "/api/ios/config", 404, "app@docker");
+        assert_eq!(t.feed(WEB, &vec![other.as_str(); 40]).await.len(), 1);
     }
 }

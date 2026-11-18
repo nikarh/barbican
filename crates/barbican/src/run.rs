@@ -20,26 +20,42 @@ use crate::{engine, firewall, geo, source};
 pub const POLICY: &str = "policy";
 const SEEDED: &str = "seeded";
 
-/// Puts the default rules and policy into a new database.
+/// What the database was last seeded with: 1, the first defaults; 2, the rule that trusts logins (before it, the
+/// engine trusted them by itself).
+const SEED_VERSION: u32 = 2;
+
+/// Puts the default rules and policy into a new database, and into an older one what defaults it doesn't have yet
+/// and needs to keep working as it did.
 pub async fn seed(db: &Db) -> Result<(), String> {
-    if db::setting(&db.pool, SEEDED)
+    let seeded = db::setting(&db.pool, SEEDED)
         .await
         .map_err(|e| e.to_string())?
-        .is_some()
-    {
-        return Ok(());
-    }
-    for rule in crate::rules::defaults() {
-        let json = serde_json::to_string(&rule).map_err(|e| e.to_string())?;
+        .map(|v| v.parse::<u32>().unwrap_or(1));
+    let insert = async |rule: &Rule| {
+        let json = serde_json::to_string(rule).map_err(|e| e.to_string())?;
         db::rule_insert(&db.pool, &json)
             .await
-            .map_err(|e| e.to_string())?;
+            .map(drop)
+            .map_err(|e| e.to_string())
+    };
+    match seeded {
+        Some(version) if version >= SEED_VERSION => return Ok(()),
+        Some(version) => {
+            if version < 2 {
+                insert(&crate::rules::trusted_logins()).await?;
+            }
+        }
+        None => {
+            for rule in crate::rules::defaults() {
+                insert(&rule).await?;
+            }
+            let policy = serde_json::to_string(&Policy::default()).map_err(|e| e.to_string())?;
+            db::set_setting(&db.pool, POLICY, &policy)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
     }
-    let policy = serde_json::to_string(&Policy::default()).map_err(|e| e.to_string())?;
-    db::set_setting(&db.pool, POLICY, &policy)
-        .await
-        .map_err(|e| e.to_string())?;
-    db::set_setting(&db.pool, SEEDED, "1")
+    db::set_setting(&db.pool, SEEDED, &SEED_VERSION.to_string())
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -648,6 +664,31 @@ pub async fn run(config: Config, dry_run: bool) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn seeding_adds_the_trust_rule_to_older_databases() {
+        let names = async |db: &Db| -> Vec<String> {
+            load_rules(db)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|r| r.name)
+                .collect()
+        };
+        // A new database gets every default, once.
+        let db = Db::memory().await;
+        seed(&db).await.unwrap();
+        seed(&db).await.unwrap();
+        assert_eq!(names(&db).await.len(), crate::rules::defaults().len());
+        // One seeded before trust was a rule keeps its rules and gains it, once, even if the rule was edited since.
+        let db = Db::memory().await;
+        let first = serde_json::to_string(&crate::rules::defaults()[0]).unwrap();
+        db::rule_insert(&db.pool, &first).await.unwrap();
+        db::set_setting(&db.pool, SEEDED, "1").await.unwrap();
+        seed(&db).await.unwrap();
+        seed(&db).await.unwrap();
+        assert_eq!(names(&db).await, ["Exploit probes", "Trusted logins"]);
+    }
 
     #[test]
     fn failed_fetches_are_tried_again_sooner() {

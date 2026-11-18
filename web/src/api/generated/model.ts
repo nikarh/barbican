@@ -3,7 +3,7 @@
 /**
  * What a rule does when it fires.
  */
-export type Action = "ban" | "record";
+export type Action = "ban" | "record" | "allow" | "trust";
 
 export type Activity = { kind: Kind, what: string, source: string, rule: number, count: number, first: number, last: number, };
 
@@ -80,6 +80,10 @@ status: Array<number>,
  * HTTP: whether the proxy had a route (a known host) for the request.
  */
 routed: boolean | null, 
+/**
+ * HTTP: the host the request was for, or, when the log has no host, the proxy's route (`hass@docker`).
+ */
+host: string | null, 
 /**
  * HTTP: the user agent.
  */
