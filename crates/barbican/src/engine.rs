@@ -470,7 +470,7 @@ fn app_names(app: &App) -> Arc<[String]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, ParserKind};
+    use crate::config::Config;
     use crate::db::Db;
 
     const CONFIG: &str = r#"
@@ -485,6 +485,18 @@ mod tests {
         [[source]]
         name = "auth"
         parser = "authelia"
+        file = { path = "/dev/null" }
+        [[source]]
+        name = "keycloak"
+        parser = "keycloak"
+        file = { path = "/dev/null" }
+        [[source]]
+        name = "authentik"
+        parser = "authentik"
+        file = { path = "/dev/null" }
+        [[source]]
+        name = "supertokens"
+        parser = "supertokens"
         file = { path = "/dev/null" }
     "#;
 
@@ -512,15 +524,18 @@ mod tests {
             state.exempt.clone_from(&app.config.exempt.nets);
             state.rules.clone_from(&rules);
         }
-        let set = RuleSet::new(1, rules, &["web", "ssh", "auth"], &[], &[], allowed).unwrap();
+        let names: Vec<&str> = app.config.sources.iter().map(|s| s.name.as_str()).collect();
+        let set = RuleSet::new(1, rules, &names, &[], &[], allowed).unwrap();
         let (tx, rx) = watch::channel(Arc::new(set));
-        let prefilters = [ParserKind::Traefik, ParserKind::Sshd, ParserKind::Authelia]
-            .into_iter()
+        let prefilters = app
+            .config
+            .sources
+            .iter()
             .enumerate()
-            .map(|(i, kind)| {
+            .map(|(i, source)| {
                 Prefilter::new(
                     u16::try_from(i).unwrap(),
-                    Parser::builtin(kind).unwrap(),
+                    Parser::for_source(source).unwrap(),
                     rx.clone(),
                 )
             })
@@ -582,6 +597,9 @@ mod tests {
     const WEB: usize = 0;
     const SSH: usize = 1;
     const AUTH: usize = 2;
+    const KEYCLOAK: usize = 3;
+    const AUTHENTIK: usize = 4;
+    const SUPERTOKENS: usize = 5;
 
     fn access(ip: &str, path: &str, status: u16, router: &str) -> String {
         format!(
@@ -854,5 +872,74 @@ mod tests {
         );
         let other = access("198.51.100.5", "/api/config", 404, "app@docker");
         assert_eq!(t.feed(WEB, &vec![other.as_str(); 40]).await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn identity_providers() {
+        let keycloak = |ip: &str, kind: &str, error: &str, user: &str| {
+            format!(
+                r#"2026-11-18 16:02:11,123 WARN  [org.keycloak.events] (executor-thread-3) type="{kind}", realmId="r", realmName="demo", clientId="app", userId="null", ipAddress="{ip}"{error}, auth_method="openid-connect", username="{user}""#
+            )
+        };
+        let authentik = |ip: &str, action: &str, user: &str| {
+            format!(
+                r#"{{"action": "{action}", "client_ip": "{ip}", "context": {{"username": "{user}"}}, "event": "Created Event", "logger": "authentik.events.models", "user": {{"pk": 5, "username": "{user}"}}}}"#
+            )
+        };
+        let supertokens = |ip: &str, status: &str| {
+            format!(
+                r#"{{"event":"supertokens.signin","status":"{status}","user":"alice@example.com","ip":"{ip}"}}"#
+            )
+        };
+        for (source, fail, ok, ip) in [
+            (
+                KEYCLOAK,
+                keycloak(
+                    "203.0.113.1",
+                    "LOGIN_ERROR",
+                    r#", error="invalid_user_credentials""#,
+                    "alice",
+                ),
+                keycloak("198.51.100.1", "LOGIN", "", "alice"),
+                "203.0.113.1",
+            ),
+            (
+                AUTHENTIK,
+                authentik("203.0.113.2", "login_failed", "alice"),
+                authentik("198.51.100.2", "login", "alice"),
+                "203.0.113.2",
+            ),
+            (
+                SUPERTOKENS,
+                supertokens("203.0.113.3", "WRONG_CREDENTIALS_ERROR"),
+                supertokens("198.51.100.3", "OK"),
+                "203.0.113.3",
+            ),
+        ] {
+            let mut t = setup().await;
+            // Five failed logins: "Failed logins" bans.
+            let bans = t.feed(source, &[fail.as_str(); 5]).await;
+            assert_eq!(bans.len(), 1, "{fail}");
+            assert_eq!(bans[0].net.to_string(), ip);
+            assert_eq!(bans[0].reason, "Failed logins");
+            // A successful login: the trust rule trusts the address.
+            t.feed(source, &[ok.as_str()]).await;
+            let ok_ip = ok
+                .split(['"', ' '])
+                .find(|s| s.starts_with("198.51.100."))
+                .unwrap();
+            assert!(t.trusted(ok_ip), "{ok}");
+        }
+        // Unknown users: two make "Unknown users" ban.
+        let mut t = setup().await;
+        let unknown = keycloak(
+            "203.0.113.9",
+            "LOGIN_ERROR",
+            r#", error="user_not_found""#,
+            "oracle",
+        );
+        assert_eq!(t.feed(KEYCLOAK, &[unknown.as_str(); 2]).await.len(), 1);
+        let unknown = r#"{"action": "invalid_identifier", "client_ip": "203.0.113.10", "event": "invalid_login", "identifier": "oracle", "logger": "authentik.flows.stage"}"#;
+        assert_eq!(t.feed(AUTHENTIK, &[unknown; 2]).await.len(), 1);
     }
 }

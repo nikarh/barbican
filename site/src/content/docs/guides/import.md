@@ -25,7 +25,7 @@ Lines without a time are counted and skipped.
 barbican parse traefik access.log     # or: ... | barbican parse sshd
 ```
 
-prints, for each line the parser understood, the address, the kind of event and what happened (tab-separated), and at the end how many lines it understood. Parsers: `traefik`, `sshd`, `authelia`.
+prints, for each line the parser understood, the address, the kind of event and what happened (tab-separated), and at the end how many lines it understood. Parsers: `traefik`, `sshd`, `authelia`, `keycloak`, `authentik`, `supertokens`.
 
 ## Trying the rules on old logs
 

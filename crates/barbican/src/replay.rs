@@ -33,12 +33,7 @@ pub struct Summary {
 /// Parses `traefik:/path/to/log`.
 pub fn input(arg: &str) -> Option<ReplayInput> {
     let (parser, path) = arg.split_once(':')?;
-    let parser = match parser {
-        "traefik" => ParserKind::Traefik,
-        "sshd" => ParserKind::Sshd,
-        "authelia" => ParserKind::Authelia,
-        _ => return None,
-    };
+    let parser = ParserKind::builtin(parser)?;
     Some(ReplayInput {
         parser,
         path: PathBuf::from(path),
