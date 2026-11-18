@@ -32,7 +32,7 @@ until: number | null, lifted: number | null, liftedBy: string | null, };
 export type BanLength = { "type": "default" } | { "type": "secs", secs: number, } | { "type": "forever" };
 
 /**
- * How much blocking some countries and continents takes, by the country database.
+ * How much blocking some countries, continents and regions takes, by the country database.
  */
 export type BlockCoverage = { 
 /**
@@ -543,7 +543,11 @@ export type PlaceExtent = { code: string,
 /**
  * Of a country: the continent the database places it on.
  */
-continent: string | null, extent: Extent, };
+continent: string | null, 
+/**
+ * Of a country: the regions (`CAM`, `CAR`) it is in.
+ */
+regions: Array<string>, extent: Extent, };
 
 export type Policy = { 
 /**
@@ -579,7 +583,8 @@ trustSecs: number,
  */
 blockedCountries: Array<string>, 
 /**
- * Continents blocked as a whole: AF, AN, AS, EU, NA, OC, SA.
+ * Continents and regions blocked as a whole: AF, AN, AS, EU, NA, OC, SA, and CAM (Central America) and CAR (the
+ * Caribbean), which the databases place on North America.
  */
 blockedContinents: Array<string>, 
 /**

@@ -37,7 +37,7 @@ export type CoverageParams = {
  */
 countries: Array<string>, 
 /**
- * AF, AN, AS, EU, NA, OC, SA.
+ * Continents (AF, AN, AS, EU, NA, OC, SA) and regions (CAM, CAR).
  */
 continents: Array<string>, };
 

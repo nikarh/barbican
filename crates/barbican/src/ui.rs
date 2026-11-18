@@ -527,13 +527,11 @@ async fn ip(app: &Arc<App>, text: &str) -> Result<IpDetail, RpcError> {
             .blocked_countries
             .iter()
             .any(|b| b.eq_ignore_ascii_case(c))
-    }) || info.continent.as_ref().is_some_and(|c| {
-        state
-            .policy
-            .blocked_continents
-            .iter()
-            .any(|b| b.eq_ignore_ascii_case(c))
-    });
+    }) || state
+        .policy
+        .blocked_continents
+        .iter()
+        .any(|b| crate::geo::in_area(b, info.country.as_deref(), info.continent.as_deref()));
     Ok(IpDetail {
         ip: ip.to_string(),
         country: info.country.clone(),
@@ -961,8 +959,6 @@ async fn rules_order(app: &Arc<App>, ids: &[i64]) -> Result<(), RpcError> {
     Ok(())
 }
 
-const CONTINENTS: [&str; 7] = ["AF", "AN", "AS", "EU", "NA", "OC", "SA"];
-
 async fn policy_update(app: &Arc<App>, mut policy: Policy) -> Result<Policy, RpcError> {
     let code = |c: &mut String| {
         *c = c.trim().to_ascii_uppercase();
@@ -974,10 +970,15 @@ async fn policy_update(app: &Arc<App>, mut policy: Policy) -> Result<Policy, Rpc
         }
     }
     for c in &mut policy.blocked_continents {
-        if !code(c) || !CONTINENTS.contains(&c.as_str()) {
+        *c = c.trim().to_ascii_uppercase();
+        if !crate::geo::is_area(c) {
+            let codes: Vec<&str> = crate::geo::CONTINENTS
+                .into_iter()
+                .chain(crate::geo::REGIONS.iter().map(|(code, _)| *code))
+                .collect();
             return Err(bad(format!(
-                "{c:?} is not a continent code ({})",
-                CONTINENTS.join(", ")
+                "{c:?} is not a continent or region code ({})",
+                codes.join(", ")
             )));
         }
     }
@@ -1047,6 +1048,7 @@ async fn coverage(app: &App, p: CoverageParams) -> Result<BlockCoverage, RpcErro
             .countries
             .into_iter()
             .map(|(code, continent, extent)| PlaceExtent {
+                regions: crate::geo::regions_of(&code),
                 code,
                 continent,
                 extent: extent.into(),
@@ -1058,6 +1060,7 @@ async fn coverage(app: &App, p: CoverageParams) -> Result<BlockCoverage, RpcErro
             .map(|(code, extent)| PlaceExtent {
                 code,
                 continent: None,
+                regions: Vec::new(),
                 extent: extent.into(),
             })
             .collect(),
