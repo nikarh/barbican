@@ -25,6 +25,11 @@ pub enum Action {
     Ban,
     /// Only record what matched, for the UI and for other rules' `listed` conditions.
     Record,
+    /// Exempt what matches from every other rule: it is recorded under this rule, and no rule counts it. For
+    /// requests that look like abuse but aren't, e.g. a 404 an app asks for by design.
+    Allow,
+    /// Trust the address for the policy's trust length: no rule bans it meanwhile. For successful logins only.
+    Trust,
 }
 
 /// How long a rule's ban lasts.
@@ -57,6 +62,8 @@ pub struct Conditions {
     pub status: Vec<u16>,
     /// HTTP: whether the proxy had a route (a known host) for the request.
     pub routed: Option<bool>,
+    /// HTTP: the host the request was for, or, when the log has no host, the proxy's route (`hass@docker`).
+    pub host: Option<String>,
     /// HTTP: the user agent.
     pub user_agent: Option<String>,
     /// Logins: the user name.
@@ -339,7 +346,23 @@ pub fn defaults() -> Vec<Rule> {
                 Kind::Probe,
             )
         },
+        trusted_logins(),
     ]
+}
+
+/// The default rule that trusts addresses people logged in from (and, with sources that log them, sessions of
+/// signed-in users).
+#[must_use]
+pub fn trusted_logins() -> Rule {
+    Rule {
+        action: Action::Trust,
+        ..rule(
+            "Trusted logins",
+            "Successful logins, and requests of signed-in users where the source logs them: the address is \
+             trusted for the policy's trust length, and no rule bans it meanwhile.",
+            Kind::AuthSuccess,
+        )
+    }
 }
 
 /// A list of user agents: its name and its matcher.
@@ -378,6 +401,7 @@ pub struct Compiled {
     pub rule: Rule,
     path: Option<Matcher>,
     method: Option<Matcher>,
+    host: Option<Matcher>,
     user_agent: Option<Matcher>,
     user: Option<Matcher>,
     what: Option<Matcher>,
@@ -423,6 +447,7 @@ impl Compiled {
         }
         let http_only = c.path.is_some()
             || c.method.is_some()
+            || c.host.is_some()
             || c.user_agent.is_some()
             || !c.status.is_empty()
             || c.routed.is_some()
@@ -430,7 +455,13 @@ impl Compiled {
         if http_only && rule.kind != Kind::Http {
             return Err(invalid(
                 "conditions",
-                "path, method, status, route and user agents are for HTTP rules".to_owned(),
+                "path, method, status, host, route and user agents are for HTTP rules".to_owned(),
+            ));
+        }
+        if rule.action == Action::Trust && rule.kind != Kind::AuthSuccess {
+            return Err(invalid(
+                "action",
+                "only rules of successful logins trust addresses".to_owned(),
             ));
         }
         // A feed that doesn't exist (any more) matches nothing; the rule then never fires.
@@ -450,6 +481,7 @@ impl Compiled {
             agents,
             path: compile("path", &c.path)?,
             method: compile("method", &c.method)?,
+            host: compile("host", &c.host)?,
             user_agent: compile("userAgent", &c.user_agent)?,
             user: compile("user", &c.user)?,
             what: compile("what", &c.what)?,
@@ -478,6 +510,7 @@ impl Compiled {
             }
             if !test(&self.path, Some(h.path))
                 || !test(&self.method, Some(h.method))
+                || !test(&self.host, h.host.or(h.router))
                 || !test(&self.user_agent, h.user_agent)
             {
                 return false;
@@ -514,6 +547,10 @@ pub struct RuleSet {
     by_source: Vec<u64>,
     /// Per kind (by `Kind::code`): the bits of the enabled rules of that kind.
     by_kind: [u64; 6],
+    /// The bits of the enabled allow rules.
+    allow: u64,
+    /// The bits of the enabled trust rules.
+    trust: u64,
     /// Exempt addresses and the allow list.
     allowed: barbican_common::net::NetSet,
     /// Feeds, in bit order, for `listed` conditions.
@@ -541,11 +578,17 @@ impl RuleSet {
             .collect::<Result<Vec<_>, _>>()?;
         let mut by_source = vec![0u64; sources.len()];
         let mut by_kind = [0u64; 6];
+        let (mut allow, mut trust) = (0, 0);
         for (i, c) in compiled.iter().enumerate() {
             if !c.rule.enabled {
                 continue;
             }
             let bit = 1u64 << i;
+            match c.rule.action {
+                Action::Allow => allow |= bit,
+                Action::Trust => trust |= bit,
+                Action::Ban | Action::Record => {}
+            }
             if let Some(k) = usize::try_from(c.rule.kind.code())
                 .ok()
                 .and_then(|k| by_kind.get_mut(k))
@@ -566,6 +609,8 @@ impl RuleSet {
             rules: compiled,
             by_source,
             by_kind,
+            allow,
+            trust,
             allowed,
             feeds: feeds
                 .iter()
@@ -581,8 +626,16 @@ impl RuleSet {
         self.allowed.contains(ip)
     }
 
-    /// The bits of the rules that count this event from source `source`. `what` is a buffer for the event's
-    /// description, reused across lines; it is cleared first, and holds the description if a rule needed it.
+    /// Whether any of these rules (bits) trusts the address.
+    #[must_use]
+    pub fn trusts(&self, matched: u64) -> bool {
+        matched & self.trust != 0
+    }
+
+    /// The bits of the rules that count this event from source `source`. When an allow rule matches, only the allow
+    /// rules that match: no other rule counts the event. A session (a request of someone signed in) is matched
+    /// against the trust rules of successful logins only. `what` is a buffer for the event's description, reused
+    /// across lines; it is cleared first, and holds the description if a rule needed it.
     #[must_use]
     pub fn matches(
         &self,
@@ -592,12 +645,16 @@ impl RuleSet {
         what: &mut String,
     ) -> u64 {
         what.clear();
-        let Some(kind) = event.kind() else { return 0 };
+        let (kind, only) = match event.kind() {
+            Some(kind) => (kind, u64::MAX),
+            None => (Kind::AuthSuccess, self.trust),
+        };
         let by_kind = usize::try_from(kind.code())
             .ok()
             .and_then(|k| self.by_kind.get(k))
             .copied()
-            .unwrap_or(0);
+            .unwrap_or(0)
+            & only;
         let mut candidates = by_kind
             & self
                 .by_source
@@ -625,6 +682,9 @@ impl RuleSet {
             {
                 matched |= 1u64 << i;
             }
+        }
+        if matched & self.allow != 0 {
+            matched &= self.allow;
         }
         matched
     }
@@ -881,9 +941,10 @@ mod tests {
         assert_eq!(set.matches(WEB, ip, &event, &mut what), 0b1001);
         assert_eq!(set.matches(SSH, ip, &event, &mut what), 0b1011);
         assert_eq!(set.matches(7, ip, &event, &mut what), 0);
+        // Sessions only match the trust rule ("Trusted logins", bit 8).
         assert_eq!(
             set.matches(WEB, ip, &Event::Session { user: "a" }, &mut what),
-            0
+            1 << 8
         );
     }
 

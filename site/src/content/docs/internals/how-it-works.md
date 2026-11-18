@@ -24,7 +24,7 @@ The engine handles those events in order of their time, in batches written to th
 
 1. If the address is allowed (allow list, allowing feed, exempt networks), it stops here.
 2. The address is recorded with its country and network, and the event is counted under the first rule it matched, per address, rule, source and hour. What it tried (`GET example.com/x → 404`, a user name, a probe's description) is stored once and referred to after that.
-3. A successful login, or a request of a signed-in Authelia user, makes the address trusted for the policy's trust time.
+3. An event an allow rule matched counts towards no other rule. A successful login, or a request of a signed-in Authelia user, that a trust rule matched makes the address trusted for the policy's trust time.
 4. Unless the address is trusted or already banned, every banning rule it matched counts the event in that rule's time window for the address. A rule that reaches its threshold bans.
 
 A ban's length is decided when it starts: the rule's length or the default, then the shortest length that applies for the address's country, network or the feeds that list it, multiplied for each earlier ban of the address (repeat offenders), up to the policy's maximum. Lifting a ban by hand or letting it expire keeps it in the history, where it counts as an earlier ban next time.

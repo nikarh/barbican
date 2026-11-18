@@ -21,7 +21,7 @@ import { IconArrowDown, IconArrowUp, IconPencil, IconPlus, IconTrash } from '@ta
 import { useState } from 'react'
 
 import { useAction, useFeeds, useMeta, useRules, useRulesDefaults } from '../api/hooks'
-import type { BanLength, Kind, Rule } from '../api/generated/model'
+import type { Action, BanLength, Kind, Rule } from '../api/generated/model'
 import { ActionCard } from '../components/ActionCard'
 import { LengthInput } from '../components/ui'
 import { formatLength, KIND_LABELS } from '../lib/format'
@@ -38,6 +38,7 @@ const NEW_RULE: Rule = {
     method: null,
     status: [],
     routed: null,
+    host: null,
     userAgent: null,
     user: null,
     what: null,
@@ -66,6 +67,8 @@ function lengthLabel(ban: BanLength): string {
 function summary(r: Rule): string {
   const when =
     r.threshold <= 1 ? 'at once' : `${String(r.threshold)} times in ${formatLength(r.windowSecs)}`
+  if (r.action === 'allow') return 'Allows: no other rule counts what it matches'
+  if (r.action === 'trust') return 'Trusts the address after a login'
   if (r.action === 'record') return `Records, ${when === 'at once' ? 'every match' : when}`
   const scope =
     r.prefixV4 < 32 || r.prefixV6 < 128 ? ` (/${String(r.prefixV4)}, /${String(r.prefixV6)})` : ''
@@ -111,6 +114,7 @@ function Editor({ rule, onClose }: { rule: Rule; onClose: () => void }) {
                 method: null,
                 status: [],
                 routed: null,
+                host: null,
                 userAgent: null,
                 agents: [],
               },
@@ -133,7 +137,14 @@ function Editor({ rule, onClose }: { rule: Rule; onClose: () => void }) {
             data={Object.entries(KIND_LABELS).map(([value, label]) => ({ value, label }))}
             value={r.kind}
             onChange={(v) => {
-              if (v !== null) set({ kind: v as Kind })
+              if (v === null) return
+              const kind = v as Kind
+              // Only rules of successful logins trust.
+              set(
+                kind !== 'auth_success' && r.action === 'trust'
+                  ? { kind, action: 'ban' }
+                  : { kind },
+              )
             }}
             allowDeselect={false}
           />
@@ -210,6 +221,15 @@ function Editor({ rule, onClose }: { rule: Rule; onClose: () => void }) {
               />
             </SimpleGrid>
             <TextInput
+              label="Host"
+              description="The host, or the proxy's route (hass@docker) when the log has no host"
+              value={c.host ?? ''}
+              onChange={(e) => {
+                cond({ host: optional(e.currentTarget.value) })
+              }}
+              classNames={{ input: 'mono' }}
+            />
+            <TextInput
               label="User agent"
               value={c.userAgent ?? ''}
               onChange={(e) => {
@@ -263,36 +283,52 @@ function Editor({ rule, onClose }: { rule: Rule; onClose: () => void }) {
         <Text fz={13} fw={650} mt={4}>
           Then
         </Text>
-        <Group align="flex-end" wrap="wrap">
-          <NumberInput
-            label="Times"
-            min={1}
-            value={r.threshold}
-            onChange={(v) => {
-              set({ threshold: Math.max(1, Number(v) || 1) })
-            }}
-            w={{ base: '100%', sm: 90 }}
-          />
-          <LengthInput
-            label="Within"
-            value={r.windowSecs}
-            onChange={(windowSecs) => {
-              set({ windowSecs })
-            }}
-          />
-          <SegmentedControl
-            data={[
-              { value: 'ban', label: 'Ban' },
-              { value: 'record', label: 'Only record' },
-            ]}
-            value={r.action}
-            fullWidth
-            w={{ base: '100%', sm: 'auto' }}
-            onChange={(v) => {
-              set({ action: v })
-            }}
-          />
-        </Group>
+        <SegmentedControl
+          data={[
+            { value: 'ban', label: 'Ban' },
+            { value: 'record', label: 'Record' },
+            { value: 'allow', label: 'Allow' },
+            ...(r.kind === 'auth_success' ? [{ value: 'trust', label: 'Trust' }] : []),
+          ]}
+          value={r.action}
+          fullWidth
+          w={{ base: '100%', sm: 'auto' }}
+          style={{ alignSelf: 'flex-start' }}
+          onChange={(v) => {
+            set({ action: v as Action })
+          }}
+        />
+        {r.action === 'allow' && (
+          <Text fz={12} c="var(--ink-dim)">
+            What this rule matches is recorded under it, and no other rule counts it.
+          </Text>
+        )}
+        {r.action === 'trust' && (
+          <Text fz={12} c="var(--ink-dim)">
+            The address is trusted for the policy’s trust length (Settings): no rule bans it
+            meanwhile.
+          </Text>
+        )}
+        {(r.action === 'ban' || r.action === 'record') && (
+          <Group align="flex-end" wrap="wrap">
+            <NumberInput
+              label="Times"
+              min={1}
+              value={r.threshold}
+              onChange={(v) => {
+                set({ threshold: Math.max(1, Number(v) || 1) })
+              }}
+              w={{ base: '100%', sm: 90 }}
+            />
+            <LengthInput
+              label="Within"
+              value={r.windowSecs}
+              onChange={(windowSecs) => {
+                set({ windowSecs })
+              }}
+            />
+          </Group>
+        )}
         {r.action === 'ban' && (
           <Group align="flex-end" wrap="wrap">
             <Select
@@ -345,10 +381,12 @@ function Editor({ rule, onClose }: { rule: Rule; onClose: () => void }) {
             />
           </Group>
         )}
-        <Text fz={12} c="var(--ink-dim)">
-          Lengths are the policy’s for countries with a length of their own, and grow for repeat
-          offenders (Settings).
-        </Text>
+        {r.action === 'ban' && (
+          <Text fz={12} c="var(--ink-dim)">
+            Lengths are the policy’s for countries with a length of their own, and grow for repeat
+            offenders (Settings).
+          </Text>
+        )}
         <Group justify="flex-end" mt="sm">
           <Button variant="default" onClick={onClose}>
             Cancel
@@ -384,8 +422,9 @@ export function RulesScreen() {
       <Group justify="space-between">
         <Text c="var(--ink-dim)" fz={13} maw={640}>
           Every line of every source is matched against these, in this order. An event is recorded
-          under the first rule it matches; every banning rule it matches counts it. Addresses on the
-          allow list, and ones someone logged in from, are never banned.
+          under the first rule it matches; every banning rule it matches counts it, unless an allow
+          rule matches it too. Addresses on the allow list, and ones a trust rule trusts after a
+          login, are never banned.
         </Text>
         <Group gap="xs">
           {missingDefaults.length > 0 && (
