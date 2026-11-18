@@ -870,7 +870,7 @@ mod tests {
                 .len(),
             1
         );
-        let other = access("198.51.100.5", "/api/config", 404, "app@docker");
+        let other = access("198.51.100.5", "/api/config", 404, "other@docker");
         assert_eq!(t.feed(WEB, &vec![other.as_str(); 40]).await.len(), 1);
     }
 

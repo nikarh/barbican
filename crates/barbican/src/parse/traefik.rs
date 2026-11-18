@@ -188,11 +188,7 @@ mod tests {
         );
         assert_eq!(
             (f.2.as_str(), f.4, f.5.as_deref()),
-            (
-                "/api/items?page=2",
-                Some(true),
-                Some("Mozilla/5.0 (X11)")
-            )
+            ("/api/items?page=2", Some(true), Some("Mozilla/5.0 (X11)"))
         );
 
         // A request line without a protocol, as scanners send, and an aborted request.

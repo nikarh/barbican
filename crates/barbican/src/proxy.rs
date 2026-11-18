@@ -377,7 +377,11 @@ mod tests {
         assert!(gate.admits("/api/ws", traefik, &user));
         assert!(gate.admits("/", traefik, &user));
         // Mapped IPv4 of a dual-stack socket.
-        assert!(gate.admits("/api/proxy", "::ffff:198.51.100.249".parse().unwrap(), &user));
+        assert!(gate.admits(
+            "/api/proxy",
+            "::ffff:198.51.100.249".parse().unwrap(),
+            &user
+        ));
         assert!(!gate.admits("/api/ws", traefik, &HeaderMap::new()));
         assert!(!gate.admits("/api/ws", traefik, &blank));
         assert!(!gate.admits("/api/ws", any, &user));
