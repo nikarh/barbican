@@ -82,6 +82,8 @@ function optional(value: string): string | null {
 
 function Editor({ rule, onClose }: { rule: Rule; onClose: () => void }) {
   const [r, setR] = useState<Rule>(rule)
+  // The statuses as typed: parsing them on every key would eat a trailing comma or space.
+  const [statusText, setStatusText] = useState(rule.conditions.status.join(', '))
   const meta = useMeta()
   const feeds = useFeeds()
   const save = useAction('rule.save', 'Rule saved')
@@ -196,8 +198,9 @@ function Editor({ rule, onClose }: { rule: Rule; onClose: () => void }) {
               <TextInput
                 label="Status"
                 placeholder="401, 404"
-                value={c.status.join(', ')}
+                value={statusText}
                 onChange={(e) => {
+                  setStatusText(e.currentTarget.value)
                   cond({
                     status: e.currentTarget.value
                       .split(/[\s,]+/)
