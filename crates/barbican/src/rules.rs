@@ -11,7 +11,7 @@ use crate::feeds::Agents;
 #[cfg(test)]
 use ts_rs::TS;
 
-use crate::signal::{Event, Kind};
+use crate::signal::{Event, Http, Kind};
 
 pub const HOUR: u64 = 3_600;
 pub const DAY: u64 = 24 * HOUR;
@@ -28,7 +28,9 @@ pub enum Action {
     /// Exempt what matches from every other rule: it is recorded under this rule, and no rule counts it. For
     /// requests that look like abuse but aren't, e.g. a 404 an app asks for by design.
     Allow,
-    /// Trust the address for the policy's trust length: no rule bans it meanwhile. For successful logins only.
+    /// Trust the address for the policy's trust length: no rule bans it meanwhile. For successful logins, and for
+    /// HTTP requests with a user to a host whose route enforces authentication (the rule names the host; requests
+    /// answered 401 never trust).
     Trust,
 }
 
@@ -66,7 +68,7 @@ pub struct Conditions {
     pub host: Option<String>,
     /// HTTP: the user agent.
     pub user_agent: Option<String>,
-    /// Logins: the user name.
+    /// Logins: the user name. HTTP: the user name the proxy logged (Traefik: basic authentication's).
     pub user: Option<String>,
     /// The event as the UI shows it (`GET example.com/x → 404`, a user name, a probe's description).
     pub what: Option<String>,
@@ -458,10 +460,19 @@ impl Compiled {
                 "path, method, status, host, route and user agents are for HTTP rules".to_owned(),
             ));
         }
-        if rule.action == Action::Trust && rule.kind != Kind::AuthSuccess {
+        if rule.action == Action::Trust && !matches!(rule.kind, Kind::AuthSuccess | Kind::Http) {
             return Err(invalid(
                 "action",
-                "only rules of successful logins trust addresses".to_owned(),
+                "only rules of successful logins and HTTP requests trust addresses".to_owned(),
+            ));
+        }
+        // Where the route doesn't enforce authentication, the client writes the user name: only the hosts the rule
+        // names vouch for it.
+        if rule.action == Action::Trust && rule.kind == Kind::Http && c.host.is_none() {
+            return Err(invalid(
+                "host",
+                "rules that trust HTTP requests name the host whose route enforces authentication"
+                    .to_owned(),
             ));
         }
         // A feed that doesn't exist (any more) matches nothing; the rule then never fires.
@@ -632,6 +643,12 @@ impl RuleSet {
         matched & self.trust != 0
     }
 
+    /// Whether these rules (bits) are trust rules only: what matched only trusts, nothing counts it.
+    #[must_use]
+    pub fn trusts_only(&self, matched: u64) -> bool {
+        matched != 0 && matched & !self.trust == 0
+    }
+
     /// The bits of the rules that count this event from source `source`. When an allow rule matches, only the allow
     /// rules that match: no other rule counts the event. A session (a request of someone signed in) is matched
     /// against the trust rules of successful logins only. `what` is a buffer for the event's description, reused
@@ -683,6 +700,10 @@ impl RuleSet {
                 matched |= 1u64 << i;
             }
         }
+        // A request answered 401 had no user, or the wrong password.
+        if let Event::Http(Http { status: 401, .. }) = event {
+            matched &= !self.trust;
+        }
         if matched & self.allow != 0 {
             matched &= self.allow;
         }
@@ -697,7 +718,6 @@ mod tests {
     use barbican_common::net::NetSet;
 
     use super::*;
-    use crate::signal::Http;
 
     fn http<'a>(method: &'a str, path: &'a str, status: u16, routed: Option<bool>) -> Event<'a> {
         Event::Http(Http {
@@ -963,6 +983,16 @@ mod tests {
         let mut rule = default_rule("Failed logins");
         rule.conditions.path = Some("x".into());
         assert_eq!(compile(rule).unwrap_err().field, "conditions");
+        // Trust rules: of successful logins, or of HTTP requests to a host they name.
+        let mut rule = default_rule("Failed logins");
+        rule.action = Action::Trust;
+        assert_eq!(compile(rule).unwrap_err().field, "action");
+        let mut rule = default_rule("Many errors");
+        rule.action = Action::Trust;
+        rule.conditions.status = vec![200];
+        assert_eq!(compile(rule.clone()).unwrap_err().field, "host");
+        rule.conditions.host = Some("^downloads@".into());
+        assert!(compile(rule).is_ok());
     }
 
     fn country(code: &str) -> Who<'_> {

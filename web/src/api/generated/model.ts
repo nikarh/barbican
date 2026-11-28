@@ -89,7 +89,7 @@ host: string | null,
  */
 userAgent: string | null, 
 /**
- * Logins: the user name.
+ * Logins: the user name. HTTP: the user name the proxy logged (Traefik: basic authentication's).
  */
 user: string | null, 
 /**

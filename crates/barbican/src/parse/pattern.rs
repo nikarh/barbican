@@ -1,6 +1,6 @@
 //! A parser from a regular expression, for logs barbican has no parser for. The group `ip` is the address; the
-//! others depend on the kind: `method`, `path`, `status`, `host`, `agent` for HTTP requests, `user` for logins,
-//! `what` for probes.
+//! others depend on the kind: `method`, `path`, `status`, `host`, `agent` (and `user`, the logged user) for HTTP
+//! requests, `user` for logins, `what` for probes.
 
 use std::net::IpAddr;
 
@@ -54,6 +54,7 @@ impl Pattern {
                 routed: None,
                 router: None,
                 user_agent: agent,
+                user,
             }),
             RegexKind::AuthFailure => Event::AuthFailure { user },
             RegexKind::AuthSuccess => Event::AuthSuccess {
