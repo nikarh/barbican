@@ -48,6 +48,10 @@ pub struct Http<'a> {
     /// The proxy's route, when the log has no host: what the request went to (`app@docker`).
     pub router: Option<&'a str>,
     pub user_agent: Option<&'a str>,
+    /// The user name the proxy logged: with Traefik, the one the client sent for basic auth, whether or not it was
+    /// right. Only a route that enforces authentication vouches for it (and only when it didn't answer 401):
+    /// elsewhere the client writes it.
+    pub user: Option<&'a str>,
 }
 
 /// The kinds of events, as rules and the UI name them.
@@ -117,15 +121,15 @@ impl<'a> Event<'a> {
         }
     }
 
-    /// The user name a login event names.
+    /// The user name a login event names, or the one the proxy logged for a request.
     #[must_use]
     pub fn user(&self) -> Option<&'a str> {
         match *self {
-            Self::AuthFailure { user } => user,
+            Self::AuthFailure { user } | Self::Http(Http { user, .. }) => user,
             Self::AuthSuccess { user } | Self::Session { user } | Self::InvalidUser { user } => {
                 Some(user)
             }
-            Self::Http(_) | Self::Probe { .. } => None,
+            Self::Probe { .. } => None,
         }
     }
 
@@ -189,10 +193,10 @@ pub struct Hit {
     pub ip: IpAddr,
     /// The source's index in the configuration.
     pub source: u16,
-    /// `None` for a session (it only keeps an address trusted).
+    /// `None` for a session, or a request only a trust rule matched (they only keep an address trusted).
     pub kind: Option<Kind>,
     pub what: Box<str>,
-    /// For logins and sessions: the user.
+    /// For logins and sessions: the user; for HTTP requests the one the proxy logged, if any.
     pub user: Option<Box<str>>,
     /// Bit `i`: rule `i` of the rule set with this generation matched.
     pub matched: u64,
@@ -213,6 +217,7 @@ mod tests {
             routed: Some(false),
             router: None,
             user_agent: None,
+            user: None,
         });
         assert_eq!(http.what(), "GET example.com/.env → 404 (no route)");
         let routed = Event::Http(Http {
@@ -223,6 +228,7 @@ mod tests {
             routed: Some(true),
             router: Some("app@docker"),
             user_agent: None,
+            user: None,
         });
         assert_eq!(routed.what(), "GET /wp-login.php → 404 @app");
         let long = "é".repeat(400);

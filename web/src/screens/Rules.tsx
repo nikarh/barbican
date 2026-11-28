@@ -68,7 +68,10 @@ function summary(r: Rule): string {
   const when =
     r.threshold <= 1 ? 'at once' : `${String(r.threshold)} times in ${formatLength(r.windowSecs)}`
   if (r.action === 'allow') return 'Allows: no other rule counts what it matches'
-  if (r.action === 'trust') return 'Trusts the address after a login'
+  if (r.action === 'trust')
+    return r.kind === 'http'
+      ? 'Trusts the address of an authenticated request'
+      : 'Trusts the address after a login'
   if (r.action === 'record') return `Records, ${when === 'at once' ? 'every match' : when}`
   const scope =
     r.prefixV4 < 32 || r.prefixV6 < 128 ? ` (/${String(r.prefixV4)}, /${String(r.prefixV6)})` : ''
@@ -139,9 +142,9 @@ function Editor({ rule, onClose }: { rule: Rule; onClose: () => void }) {
             onChange={(v) => {
               if (v === null) return
               const kind = v as Kind
-              // Only rules of successful logins trust.
+              // Only rules of successful logins and HTTP requests trust.
               set(
-                kind !== 'auth_success' && r.action === 'trust'
+                kind !== 'auth_success' && kind !== 'http' && r.action === 'trust'
                   ? { kind, action: 'ban' }
                   : { kind },
               )
@@ -252,9 +255,12 @@ function Editor({ rule, onClose }: { rule: Rule; onClose: () => void }) {
             />
           </>
         )}
-        {login && (
+        {(login || http) && (
           <TextInput
             label="User"
+            description={
+              http ? 'The user name the proxy logged (Traefik: basic authentication’s)' : undefined
+            }
             value={c.user ?? ''}
             onChange={(e) => {
               cond({ user: optional(e.currentTarget.value) })
@@ -288,7 +294,7 @@ function Editor({ rule, onClose }: { rule: Rule; onClose: () => void }) {
             { value: 'ban', label: 'Ban' },
             { value: 'record', label: 'Record' },
             { value: 'allow', label: 'Allow' },
-            ...(r.kind === 'auth_success' ? [{ value: 'trust', label: 'Trust' }] : []),
+            ...(r.kind === 'auth_success' || http ? [{ value: 'trust', label: 'Trust' }] : []),
           ]}
           value={r.action}
           fullWidth
@@ -307,6 +313,8 @@ function Editor({ rule, onClose }: { rule: Rule; onClose: () => void }) {
           <Text fz={12} c="var(--ink-dim)">
             The address is trusted for the policy’s trust length (Settings): no rule bans it
             meanwhile.
+            {http &&
+              ' Only for requests with a user to a host whose route enforces authentication (Host is required): elsewhere the client writes the user name. Requests answered 401 never trust.'}
           </Text>
         )}
         {(r.action === 'ban' || r.action === 'record') && (

@@ -1,6 +1,10 @@
 //! Traefik's access log, in either of its formats: the common log format (Traefik's default, with its own extra
 //! fields) or JSON (`accessLog.format: json`). Only JSON has the request's host, and the user agent only when
 //! Traefik is told to keep the header.
+//!
+//! Both have the user name of basic (and digest) authentication: the one the client sent, logged before Traefik
+//! checks the password, so a request that got 401 had it wrong. On a route without authentication the name is the
+//! one in the request's URL (`GET http://name@host/`): anyone can write it.
 
 use std::borrow::Cow;
 use std::net::IpAddr;
@@ -16,7 +20,7 @@ use crate::signal::{Event, Http};
 /// client is a list (`a, b`) when Traefik trusts a proxy's `X-Forwarded-For` (see [`last_hop`]).
 static CLF: LazyLock<Option<Regex>> = LazyLock::new(|| {
     Regex::new(
-        r#"^(\S+(?:, \S+)*) \S+ \S+ \[[^\]]*\] "(\S+) (\S+)(?: [^"]*)?" (\d{1,3}) \S+ "[^"]*" "([^"]*)" \d+ "([^"]*)""#,
+        r#"^(\S+(?:, \S+)*) \S+ (\S+) \[[^\]]*\] "(\S+) (\S+)(?: [^"]*)?" (\d{1,3}) \S+ "[^"]*" "([^"]*)" \d+ "([^"]*)""#,
     )
     .ok()
 });
@@ -32,8 +36,8 @@ fn last_hop(client: &str) -> &str {
 #[derive(Debug, Default)]
 pub struct Traefik {
     locations: Option<CaptureLocations>,
-    /// Unescaped JSON fields: path, host, agent, method.
-    buffers: [String; 4],
+    /// Unescaped JSON fields: path, host, agent, method, user.
+    buffers: [String; 5],
 }
 
 /// A JSON line; the fields borrow from the line unless they had escapes.
@@ -44,6 +48,8 @@ struct Line<'a> {
     ClientHost: Option<super::Text<'a>>,
     #[serde(borrow, default)]
     ClientAddr: Option<super::Text<'a>>,
+    #[serde(borrow, default)]
+    ClientUsername: Option<super::Text<'a>>,
     #[serde(borrow, default)]
     RequestMethod: Option<super::Text<'a>>,
     #[serde(borrow, default)]
@@ -95,13 +101,14 @@ impl Traefik {
         Some((
             ip,
             Event::Http(Http {
-                method: g(2)?,
-                path: g(3)?,
-                status: g(4)?.parse().ok()?,
+                method: g(3)?,
+                path: g(4)?,
+                status: g(5)?.parse().ok()?,
                 host: None,
-                routed: Some(dash(g(6)?).is_some()),
-                router: dash(g(6)?),
-                user_agent: dash(g(5)?),
+                routed: Some(dash(g(7)?).is_some()),
+                router: dash(g(7)?),
+                user_agent: dash(g(6)?),
+                user: dash(g(2)?),
             }),
         ))
     }
@@ -116,7 +123,7 @@ impl Traefik {
         ))?;
         let status = parsed.DownstreamStatus.or(parsed.OriginStatus)?;
         let routed = parsed.RouterName.as_ref().is_some_and(|r| !r.0.is_empty());
-        let [path, host, agent, method] = &mut self.buffers;
+        let [path, host, agent, method, user] = &mut self.buffers;
         Some((
             ip,
             Event::Http(Http {
@@ -128,6 +135,7 @@ impl Traefik {
                 // The host says it.
                 router: None,
                 user_agent: text(parsed.user_agent, agent).and_then(dash),
+                user: text(parsed.ClientUsername, user).and_then(dash),
             }),
         ))
     }
@@ -221,6 +229,46 @@ mod tests {
         assert_eq!(http(&mut p, forged).0, "203.0.113.50");
         let json = r#"{"ClientHost":"192.0.2.44, 198.51.100.7","RequestMethod":"GET","RequestPath":"/","DownstreamStatus":200}"#;
         assert_eq!(http(&mut p, json).0, "198.51.100.7");
+    }
+
+    fn user<'s>(parser: &'s mut Traefik, line: &'s str) -> Option<&'s str> {
+        match parser.parse(line) {
+            Some((_, Event::Http(h))) => h.user,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn basic_auth_users() {
+        let mut p = Traefik::default();
+        let clf = |user: &str, status: u16| {
+            format!(
+                r#"192.0.2.7 - {user} [10/Nov/2026:12:00:00 +0000] "GET /downloads/ HTTP/1.1" {status} 1 "-" "-" 1 "downloads@docker" "http://downloads:8080" 1ms"#
+            )
+        };
+        assert_eq!(user(&mut p, &clf("alice", 200)), Some("alice"));
+        assert_eq!(user(&mut p, &clf("-", 401)), None);
+        let f = http(&mut p, &clf("alice", 206));
+        assert_eq!(
+            (f.0.as_str(), f.2.as_str(), f.3),
+            ("192.0.2.7", "/downloads/", 206)
+        );
+        // The user of a forwarded chain.
+        assert_eq!(
+            user(
+                &mut p,
+                r#"203.0.113.9, 198.51.100.254 - bob [11/Nov/2026:16:58:36 +0000] "GET / HTTP/1.1" 200 19 "-" "-" 778 "app@docker" "http://app:8080" 3ms"#
+            ),
+            Some("bob")
+        );
+        let json = |user: &str| {
+            format!(
+                r#"{{"ClientHost":"192.0.2.44","ClientUsername":"{user}","RequestMethod":"GET","RequestPath":"/","DownstreamStatus":200,"RouterName":"downloads@docker"}}"#
+            )
+        };
+        assert_eq!(user(&mut p, &json("alice")), Some("alice"));
+        assert_eq!(user(&mut p, &json("-")), None);
+        assert_eq!(user(&mut p, &json(r"alice")), Some("alice"));
     }
 
     #[test]

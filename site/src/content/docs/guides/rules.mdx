@@ -19,7 +19,7 @@ Every event of every source is matched against the rules, in their order on the 
 - Every **banning** rule it matches **counts** it. A rule bans once it counted `threshold` events of one address within its window (a threshold of 1 bans on the first).
 - A rule that **records** only never bans: it makes events visible, for example requests you want to watch before deciding.
 - An **allow** rule exempts what it matches from every other rule: the event is recorded under the allow rule, wherever it is in the order, and no other rule counts it. See [Allow rules](#allow-rules).
-- A **trust** rule trusts the address of a successful login: see [Trust](#trust).
+- A **trust** rule trusts the address of a successful login, or of a request that passed the proxy's authentication: see [Trust](#trust).
 
 Some addresses are never banned:
 
@@ -40,7 +40,7 @@ A rule looks at one kind of event (HTTP requests, failed logins, successful logi
 | Host | HTTP | the host the request was for; when the log has no host, the proxy's route (Traefik's router, `app@docker`) |
 | User agent | HTTP | the user agent (Traefik's JSON log, or a regex source with `agent`) |
 | User agent in list | HTTP | the user agent names one in these [lists of user agents](/guides/feeds/#feeds) |
-| User | logins | the user name |
+| User | logins, HTTP | the user name; of a request, the one the proxy logged (Traefik: basic authentication's) |
 | What happened | any | the event as the UI shows it: `GET example.com/x → 404`, a user name, a probe's description |
 | Listed in | any | the address is in one of these [feeds](/guides/feeds/#feeds) (of addresses or networks) |
 
@@ -48,7 +48,7 @@ Patterns are regular expressions that match anywhere in the text unless anchored
 
 <Screenshot name="rule" alt="Editing a rule: its name, the kind of event and sources it looks at, conditions on path, method, status, known host and user agent, the threshold and window, and the ban's length and prefix lengths." />
 
-The **action** is what a rule does with what it matches: **Ban**, **Only record**, **Allow** or **Trust** (rules of successful logins only). Threshold, window and the ban's length only apply to banning and recording rules.
+The **action** is what a rule does with what it matches: **Ban**, **Only record**, **Allow** or **Trust** (rules of successful logins and of HTTP requests only). Threshold, window and the ban's length only apply to banning and recording rules.
 
 A rule that bans has a length: the policy's default, a length of its own, or until lifted by hand. It can ban a prefix instead of the address: an IPv4 prefix length (32: the address only) and an IPv6 one (64 by default, the usual size of one customer's network).
 
@@ -91,6 +91,19 @@ An address someone logged in from is **trusted** for a while (30 days by default
 What trusts an address is a rule: one whose action is **Trust**, of successful logins. The default **Trusted logins** trusts every successful login of every source: SSH, and the identity providers of [sources](/guides/sources/). Limit it to some sources, or to some users (**User**), or turn it off to trust no login. Sources that log the requests of signed-in users (Authelia, at the `debug` level) keep the address trusted while it is used: those requests aren't events, and only trust rules of successful logins match them. Databases created before trust was a rule get **Trusted logins** added when the agent is upgraded.
 
 The Addresses screen lists trusted addresses (**Trusted**), with the user who logged in; **Stop trusting** on an address's page ends it.
+
+### Trusting basic authentication
+
+A service behind the proxy's basic authentication logs no logins of its own; the proxy logs the user name with each request (Traefik: see [sources](/guides/sources/#traefik)). Many clients ask without credentials first and send them only after the 401, for every request: a download in chunks or a long directory listing makes as many 401s, and enough of them make **Many errors** ban. A trust rule of HTTP requests trusts the address of a request that passed instead:
+
+| Field | Value |
+| --- | --- |
+| Looks at | HTTP |
+| Host | `^downloads@` (Traefik's router of the service; or the host name, `^downloads\.example\.com$`, where the log has it) |
+| User | `.` (any user; or `^alice$`) |
+| Action | Trust |
+
+The rule must name the host: the user name only means something where the route enforces authentication. Elsewhere the client writes it (Traefik logs the name in the request's URL, `GET http://name@host/`), and a rule without a host would let anyone trust their own address. Requests answered 401 never trust: they had no user name, or the wrong password. Requests that only trust rules match are handled like the requests of signed-in users: they keep the address trusted, and aren't recorded as events.
 
 ## The policy
 

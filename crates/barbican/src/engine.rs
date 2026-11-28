@@ -84,7 +84,12 @@ impl Prefilter {
         if login && self.current.allowed(ip) {
             return None;
         }
-        if let Event::Session { .. } = event {
+        // A request that only a trust rule matched is as good as a session: it trusts, and isn't recorded.
+        let trusts_only = matches!(event, Event::Http(_)) && self.current.trusts_only(matched);
+        if trusts_only && event.user().is_none() {
+            return None;
+        }
+        if trusts_only || matches!(event, Event::Session { .. }) {
             let last = self.sessions.entry(ip).or_insert(i64::MIN);
             if at.saturating_sub(*last) < SESSION_EVERY {
                 return None;
@@ -101,7 +106,7 @@ impl Prefilter {
             at,
             ip,
             source: self.source,
-            kind: event.kind(),
+            kind: if trusts_only { None } else { event.kind() },
             what: self.what.as_str().into(),
             user: event.user().map(Into::into),
             matched,
@@ -872,6 +877,54 @@ mod tests {
         );
         let other = access("198.51.100.5", "/api/config", 404, "other@docker");
         assert_eq!(t.feed(WEB, &vec![other.as_str(); 40]).await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn trust_rules_of_http_requests_trust_basic_auth_users() {
+        let mut t = setup_with(|rules| {
+            rules.push(Rule {
+                name: "Basic auth".into(),
+                kind: Kind::Http,
+                action: Action::Trust,
+                conditions: crate::rules::Conditions {
+                    host: Some("^downloads@".into()),
+                    user: Some(".".into()),
+                    ..crate::rules::Conditions::default()
+                },
+                ..crate::rules::trusted_logins()
+            });
+        })
+        .await;
+        let request = |ip: &str, user: &str, status: u16, router: &str| {
+            format!(
+                r#"{ip} - {user} [10/Nov/2026:12:00:00 +0000] "GET /a.bin HTTP/1.1" {status} 1 "-" "-" 1 "{router}" "-" 0ms"#
+            )
+        };
+        // A client that asks without credentials first, every time: a challenge (401), then the request with them.
+        let challenge = request("198.51.100.4", "-", 401, "downloads@docker");
+        let ok = request("198.51.100.4", "alice", 206, "downloads@docker");
+        let mut lines = vec![challenge.as_str()];
+        for _ in 0..60 {
+            lines.extend([ok.as_str(), challenge.as_str()]);
+        }
+        assert_eq!(t.feed(WEB, &lines).await, Vec::new());
+        assert!(t.trusted("198.51.100.4"));
+        // The challenges are recorded; the requests that only trusted aren't.
+        assert_eq!(t.events().await, 61);
+
+        // Without the trust, the challenges ban.
+        let challenge = request("198.51.100.5", "-", 401, "downloads@docker");
+        assert_eq!(t.feed(WEB, &vec![challenge.as_str(); 40]).await.len(), 1);
+        // A wrong password (401 with the user) trusts nothing, nor does a user name of another host: there the
+        // client writes it.
+        for (user, status, router) in [
+            ("alice", 401, "downloads@docker"),
+            ("x", 200, "blog@docker"),
+        ] {
+            t.feed(WEB, &[&request("198.51.100.6", user, status, router)])
+                .await;
+            assert!(!t.trusted("198.51.100.6"), "{user} {status} {router}");
+        }
     }
 
     #[tokio::test]

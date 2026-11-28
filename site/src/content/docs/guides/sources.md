@@ -38,7 +38,7 @@ A parser turns a line into an event, or skips it. The kinds of events are:
 
 | Kind | From | Rules can match |
 | --- | --- | --- |
-| HTTP request | Traefik, regex | method, path, status, host, user agent, whether the proxy had a route |
+| HTTP request | Traefik, regex | method, path, status, host, user agent, whether the proxy had a route, the user name the proxy logged |
 | Failed login | sshd, Authelia, Keycloak, authentik, SuperTokens, regex | user name |
 | Successful login | sshd, Authelia, Keycloak, authentik, SuperTokens, regex | user name; a trust rule makes the address [trusted](/guides/rules/#trust) |
 | Unknown user | sshd, Keycloak, authentik, regex | user name |
@@ -64,6 +64,8 @@ accessLog:
 ```
 
 Requests without a route (`RouterName` empty, or `-` in the common log format) were for the server's bare address or for hosts it doesn't serve: only scanners of the whole internet send them. The default rule **No known host** bans them.
+
+Both formats have the user name of basic authentication (`ClientUsername`, the third field of the common format): the one the client sent, which Traefik logs before it checks the password. A request answered 401 had none, or a wrong password. Many clients ask without credentials first and send them only after the 401, for every request: those 401s count towards **Many errors** like any other. A [trust rule of HTTP requests](/guides/rules/#trusting-basic-authentication) trusts the address of a request that passed. On a route without authentication the name is whatever the request's URL says (`GET http://name@host/`), so only a rule that names the host vouches for it.
 
 ### sshd
 
@@ -138,7 +140,7 @@ Any other log takes a regular expression. The group `ip` is the address, and the
 
 | `kind` | Groups |
 | --- | --- |
-| `http` | `method`, `path`, `status`, `host`, `agent` |
+| `http` | `method`, `path`, `status`, `host`, `agent`, `user` |
 | `auth_failure`, `auth_success`, `invalid_user` | `user` |
 | `probe` | `what` |
 
